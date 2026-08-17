@@ -1,0 +1,5 @@
+# Same two-diode circuit hand-verified in dae-runtime's own tests
+# (crates/dae-runtime/tests/two_diode_via_netlist.rs): both diodes forward-conducting,
+# expected V(e2) = 7/3.
+D1 kind=diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1 g_on=1
+D2 kind=diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=2 g_on=1

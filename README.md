@@ -43,11 +43,25 @@ Path deps, read-only, same convention `elspice-mna` already uses for `spice-core
 
 ## Status
 
-Milestone 1 in progress: `crates/lcp-solver` implements Lemke's algorithm standalone, verified
-against hand-solved textbook LCP fixtures (`crates/lcp-solver/tests/fixtures.rs`) — no circuit
-code depends on it yet, by design (see `docs/architecture.md` for the milestone sequencing
-rationale: the LCP solver is the highest-risk, most unfamiliar piece and is built and trusted
-in isolation first).
+All six original milestones are implemented, each verified against independently hand-derived
+results before anything built on top of it (see `docs/journal/` for the full account of each,
+including bugs caught and fixed along the way):
+
+- `crates/lcp-solver` — Lemke's algorithm, verified against hand-solved textbook LCP fixtures.
+- `crates/pwl-devices` — a 3-segment PWL diode and a MOSFET (gated-on switch / gated-off body
+  diode), verified against hand-derived circuit operating points.
+- `crates/dae-runtime` — folds any netlist's linear part plus PWL diodes/MOSFETs into one LCP,
+  with a full transient timestep loop (trapezoidal, backward Euler on the first step and any
+  LCP-resolved mode change), MOSFET/PWM support, and closed-loop wiring for a
+  `continuous-blocks` controller (e.g. a PID) driving a switching gate.
+- `crates/continuous-blocks` — transfer function / state-space / PID / integrator / math-op
+  compilation into the same descriptor-DAE shape circuits use, standalone and verified.
+- `crates/elspice-pwl-cli` (binary `elspice-pwl`) — netlist-in/CSV-waveform-out runner.
+
+Open: validation against the Xyce/ngspice baselines already captured in the sibling
+`internal-archive` repo's `experiments/` folder, full converter benchmarks, and the
+smaller scope notes recorded in each milestone's own journal entry (per-instance MOSFET `Ron`,
+non-diode-only transient variants, etc.).
 
 ## Development
 

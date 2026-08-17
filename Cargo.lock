@@ -25,6 +25,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "elspice-pwl-cli"
+version = "0.1.0"
+dependencies = [
+ "dae-runtime",
+ "pwl-devices",
+ "spice-core",
+]
+
+[[package]]
 name = "lcp-solver"
 version = "0.1.0"
 

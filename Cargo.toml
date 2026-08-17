@@ -5,6 +5,7 @@ members = [
     "crates/pwl-devices",
     "crates/dae-runtime",
     "crates/continuous-blocks",
+    "crates/elspice-pwl-cli",
 ]
 
 [workspace.package]

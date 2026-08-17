@@ -102,8 +102,18 @@ this step's gate states via a caller-supplied PWM comparator) rather than a full
 unified system — deliberately: this is how a real digital PID+PWM controller actually works,
 not an approximation. Verified via the standard "integral control zeroes steady-state error"
 property on a chopper-fed RC regulator, not by hand-deriving the exact switching transient
-(not analytically tractable for any real switching converter). `elspice-pwl-cli` doesn't
-exist yet.
+(not analytically tractable for any real switching converter).
+
+`crates/elspice-pwl-cli` (binary `elspice-pwl`) is a thin netlist-in/CSV-waveform-out runner
+over `dae-runtime`'s public API, with a small hand-rolled device-params file format (no
+serde/TOML dependency for something this simple). Tested by spawning the actual built binary
+against fixture netlists that are the exact circuits already hand-verified elsewhere in this
+workspace — a cross-check, not a fresh derivation.
+
+All six original milestones, plus everything explicitly deferred from them, are now
+implemented. See the journal for what remains genuinely open (validation against Xyce/ngspice
+baselines, full converter benchmarks, per-instance MOSFET `Ron`, and the smaller scope notes
+scattered through each milestone's own entry).
 
 ## Numeric stack
 

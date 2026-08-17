@@ -1,0 +1,4 @@
+V1 e1 0 5
+D1 e1 e2 dmodel
+D2 e1 e2 dmodel
+R1 e2 0 1
