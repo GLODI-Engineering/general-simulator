@@ -120,23 +120,35 @@ regulation on the identical circuit spec — see `crates/dae-runtime/tests/close
 
 `simulate_closed_loop` bakes in one fixed topology (a single `Pid` feeding a duty-modulated PWM
 comparator) — the right shape for the common buck/boost case, but not general. `dae_runtime::
-block_graph::simulate_closed_loop_blocks` generalizes this: a closed loop is a graph of named,
-independently reusable `continuous-blocks` blocks (`Const`, `Pwl`, `Sum`, `Gain`, `Pid`, `Vco`)
-wired together by the caller, evaluated once per circuit step in declaration order — the same
-discipline a real block-diagram tool (a reference tool, a reference tool) uses. An error signal is a `Sum` block's
-own output (explicit `+`/`-` signs), not something a controller computes internally; a
-frequency-modulated PWM carrier (needed for LLC-family converters, which regulate by switching
-*frequency* rather than duty, unlike buck/boost) is `Sum -> Pid -> Sum -> Vco`, four separately
-testable blocks, not one fused function. `Vco` (`continuous-blocks`) is deliberately not a
-`StateSpace`: its `[0,1)` wraparound is a genuine discontinuity a linear system can't express,
-the same reason `math_ops::saturation` is evaluated directly rather than folded into one; a
-separate stateless `math_ops::pwm_from_ramp` compares a shared oscillator's ramp against a
-per-gate phase/duty, so one `Vco` can drive several independently-phased gates (a half-bridge's
-two complementary switches) without needing one oscillator instance per gate. `elspice-pwl-cli`
-exposes this as `--mode closed-loop`'s device-file block syntax (`kind=const/pwl/sum/gain/
-pid/vco`, `gate=vco`) — see that crate's own module doc comment for the full grammar and an
-LLC-converter example, and `internal-archive/experiments/
-elspice-pwl-llc-closed-loop-vs-xyce-ngspice/` for the worked comparison this was built for.
+block_graph::simulate_transient_with_blocks` generalizes this: gates are resolved from a graph
+of named, independently reusable `continuous-blocks` blocks (`Const`, `Pwl`, `Sum`, `Gain`,
+`Pid`, `StateSpace`, `TransferFunction`, `Vco`) wired together by the caller, evaluated once
+per circuit step in declaration order — the same discipline a real block-diagram tool
+(a reference tool, a reference tool) uses. An error signal is a `Sum` block's own output (explicit `+`/`-` signs),
+not something a controller computes internally; a frequency-modulated PWM carrier (needed for
+LLC-family converters, which regulate by switching *frequency* rather than duty, unlike
+buck/boost) is `Sum -> Pid -> Sum -> Vco`, four separately testable blocks, not one fused
+function; a PID with a filtered derivative can be given directly as a `TransferFunction`'s own
+`N(s)/D(s)` coefficients instead of `Pid`'s `Kp`/`Ki`/`Kd` convenience constructor, and an
+arbitrary compensator/filter as a `StateSpace`'s own `(A, B, C, D)` matrices. `Vco` is
+deliberately not a `StateSpace` itself: its `[0,1)` wraparound is a genuine discontinuity a
+linear system can't express, the same reason `math_ops::saturation` is evaluated directly
+rather than folded into one; a separate stateless `math_ops::pwm_from_ramp` compares a shared
+oscillator's ramp against a per-gate phase/duty, so one `Vco` can drive several independently-
+phased gates (a half-bridge's two complementary switches) without needing one oscillator
+instance per gate.
+
+Crucially, `GateBinding` covers *every* gate kind — `Fixed`, `PwmFixed` (fixed-frequency/fixed-
+duty, no block graph needed), `Vco`, and `Pwm` (block-driven duty) — resolved by exactly the
+same per-step loop. There is deliberately no separate "closed-loop" function or CLI mode: a
+real circuit simulator has no such mode either (a transient analysis is a transient analysis;
+whether a gate's block chain happens to read the circuit's own state back via
+`Signal::Measure` is a property of how the netlist is wired, not something the tool needs
+telling in advance) — `elspice-pwl-cli`'s ordinary `--mode transient` resolves both the
+historically "open-loop" and "closed-loop" cases through this one function. See that crate's
+own module doc comment for the full device-file grammar and an LLC-converter example, and
+`internal-archive/experiments/elspice-pwl-llc-closed-loop-vs-xyce-ngspice/` for the
+worked comparison this was built for.
 
 `crates/elspice-pwl-cli` (binary `elspice-pwl`) is a thin netlist-in/CSV-waveform-out runner
 over `dae-runtime`'s public API, with a small hand-rolled device-params file format (no

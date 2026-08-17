@@ -1,26 +1,40 @@
-//! A closed loop assembled from named, independently reusable `continuous-blocks` blocks
-//! (`Const`, `Pwl`, `Sum`, `Gain`, `Pid`, `Vco`) wired together by the caller — the same
-//! discipline a real block-diagram tool (a reference tool, a reference tool) uses: an error signal is a `Sum`
-//! block's output, a frequency-modulated PWM carrier is `Pid -> Gain -> Vco`, not a single
-//! function that bakes a specific topology together. [`crate::simulate_closed_loop`] (a
-//! single fixed `Sum`-then-`Pid`-then-duty-comparator topology) remains for the common
-//! duty-modulated case; this module is for anything else, including frequency modulation,
-//! without needing a new `dae-runtime` function for every new topology.
+//! Resolves every MOSFET's gate state, each transient step, from a graph of named,
+//! independently reusable `continuous-blocks` blocks (`Const`, `Pwl`, `Sum`, `Gain`, `Pid`,
+//! `StateSpace`, `TransferFunction`, `Vco`) wired together by the caller — the same discipline
+//! a real block-diagram tool (a reference tool, a reference tool) uses: an error signal is a `Sum` block's
+//! output, a filtered-derivative PID compensator is a `TransferFunction` given its own
+//! `N(s)/D(s)` coefficients, and a frequency-modulated PWM carrier is `Pid -> Gain -> Vco`, not
+//! a single function that bakes a specific topology together.
 //!
-//! Same sampled-data co-simulation model as [`crate::simulate_closed_loop`]: every block
-//! reads the *previous* circuit step's measurement, the whole graph is evaluated once per
-//! circuit step (in declaration order — see [`BlockInstance`]), and the result decides gate
-//! states before the circuit step itself is solved.
+//! **There is no separate "closed-loop mode."** A [`GateBinding`] can be a plain fixed state or
+//! fixed-frequency/fixed-duty PWM (no block involved at all — the historically "open-loop"
+//! case) just as easily as a block whose input chain happens to trace back to a
+//! [`Signal::Measure`] of the circuit's own state (the historically "closed-loop" case) — both
+//! are resolved by exactly the same code, every step, because from the solver's point of view
+//! they're the same kind of question: "what's this device's terminal condition right now,"
+//! answered from whatever the netlist and device file actually say. Real circuit simulators
+//! (SPICE, a reference tool) don't have a closed-loop *mode* either — closed-loop is a property of how a
+//! circuit happens to be wired, not an analysis type the tool needs to be told about upfront;
+//! `.op` and `.tran` are genuinely distinct analyses (different equations solved), but nothing
+//! about *this* function is analysis-specific.
+//!
+//! Sampled-data co-simulation: every block reads the *previous* circuit step's measurement,
+//! the whole graph is evaluated once per circuit step (in declaration order — see
+//! [`BlockInstance`]), and the result decides gate states before the circuit step itself is
+//! solved. [`crate::simulate_closed_loop`] (a single fixed `Sum`-then-`Pid`-then-duty-
+//! comparator topology, named for the one case it was first built for) remains as a lighter
+//! Rust-level convenience for simple direct callers; this module is the general one, used by
+//! `elspice-pwl-cli` unconditionally for every MOSFET-containing transient run.
 
 use std::collections::BTreeMap;
 
-use continuous_blocks::{math_ops, Pid, Vco};
+use continuous_blocks::{math_ops, Pid, StateSpace, TransferFunction, Vco};
 use pwl_devices::{Diode, Mosfet};
 use spice_core::Dialect;
 
 use crate::{
-    classify_segments, step_with_fallback, DaeError, GateState, OperatingPoint, Segment,
-    RINGING_COOLDOWN_STEPS,
+    classify_segments, sawtooth_carrier, step_with_fallback, DaeError, GateState, OperatingPoint,
+    Segment, RINGING_COOLDOWN_STEPS,
 };
 
 /// Where a block's input value comes from: another block's output this same step, or the
@@ -33,8 +47,8 @@ pub enum Signal {
 }
 
 /// One block's behavior. `Const`/`Pwl` are sources (zero inputs); `Sum`/`Gain` are stateless
-/// (recomputed fresh from their inputs every step); `Pid`/`Vco` carry their own state forward
-/// across steps (a compiled [`Pid`]'s `StateSpace`, and a [`Vco`]'s phase, respectively).
+/// (recomputed fresh from their inputs every step); `Pid`/`StateSpace`/`TransferFunction`/`Vco`
+/// carry their own state forward across steps.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BlockKind {
     /// A fixed value, ignoring time — e.g. a nominal frequency or a fixed setpoint.
@@ -50,19 +64,35 @@ pub enum BlockKind {
     /// A compiled PID with two-sided conditional-integration anti-windup against
     /// `clamp = (lo, hi)` — see [`crate::simulate_closed_loop`]'s doc comment for why
     /// two-sided anti-windup matters; the mechanism here is identical, just attached to this
-    /// block instead of baked into the whole closed-loop function. `clamp` is this PID's own
+    /// block instead of baked into a whole controller function. `clamp` is this PID's own
     /// notion of "my output is saturated," independent of whatever downstream `Gain`/`Vco`
     /// blocks do to it after — same as a real PID block's own configured output limits.
     Pid { pid: Pid, clamp: (f64, f64) },
+    /// An arbitrary single-input single-output continuous-time block given directly as its own
+    /// `(A, B, C, D)` matrices — a compensator/filter that doesn't already have a named
+    /// convenience constructor, e.g. a low-pass filter placed ahead of a `Pid` to damp a
+    /// resonant plant. No anti-windup (that's specifically a `Pid` output's own concern, not
+    /// every dynamic block's); stepped forward unconditionally every timestep via
+    /// `StateSpace::rk4_step`.
+    StateSpace(StateSpace),
+    /// A single-input single-output block given as a rational `N(s)/D(s)` (numerator/
+    /// denominator coefficients, highest-degree first) rather than a `Pid`'s `Kp`/`Ki`/`Kd`
+    /// convenience parameterization — e.g. a hand-derived PID-with-filtered-derivative
+    /// compensator (`C(s) = Kp + Ki/s + Kd*N*s/(s+N)`, put over one denominator first: a pure
+    /// derivative term alone is non-causal/unrealizable, so every real PID, textbook or
+    /// otherwise, filters it — see [`Pid::to_transfer_function`]'s own doc comment for the
+    /// derivation). Compiled once via [`TransferFunction::to_state_space`]; no anti-windup, for
+    /// the same reason `StateSpace` above has none.
+    TransferFunction(TransferFunction),
     /// A voltage-controlled oscillator (see [`Vco`]).
     Vco(Vco),
 }
 
 /// One named block instance and where its inputs (if any) come from. `Const`/`Pwl` blocks
-/// must have zero inputs; `Sum` needs one input per sign; `Gain`/`Pid`/`Vco` each need exactly
-/// one. Evaluated in the order given in the slice passed to [`simulate_closed_loop_blocks`] —
-/// every input must reference a `Measure` or a block *earlier* in that same slice (source
-/// blocks, naturally, need none).
+/// must have zero inputs; `Sum` needs one input per sign; `Gain`/`Pid`/`StateSpace`/
+/// `TransferFunction`/`Vco` each need exactly one. Evaluated in the order given in the slice
+/// passed to [`simulate_transient_with_blocks`] — every input must reference a `Measure` or a
+/// block *earlier* in that same slice (source blocks, naturally, need none).
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlockInstance {
     pub name: String,
@@ -70,21 +100,67 @@ pub struct BlockInstance {
     pub inputs: Vec<Signal>,
 }
 
-/// How one MOSFET's gate state is derived from a named [`BlockKind::Vco`] block's current
-/// output (a ramp in `[0, 1)`): on while `(ramp + phase).rem_euclid(1.0) < duty` — see
-/// [`math_ops::pwm_from_ramp`]. Several `GateBinding`s naming the same `vco` share one
-/// oscillator with different phase offsets (a half-bridge's two complementary switches, for
-/// instance), rather than needing one `Vco` block per gate.
+/// How one MOSFET's gate state is resolved, every step. The first two variants need no block
+/// graph at all (the historically "open-loop" cases); the last two read a named block's
+/// current output (which may or may not itself depend on a circuit measurement somewhere
+/// upstream — this type doesn't need to know or care which).
 #[derive(Debug, Clone, PartialEq)]
-pub struct GateBinding {
-    pub vco: String,
-    pub phase: f64,
-    pub duty: f64,
+pub enum GateBinding {
+    /// Always the same state.
+    Fixed(GateState),
+    /// Fixed-frequency, fixed-duty PWM: on while [`sawtooth_carrier`]`(t, freq_hz) < duty`.
+    PwmFixed { freq_hz: f64, duty: f64 },
+    /// Frequency modulation: on while `(ramp + phase).rem_euclid(1.0) < duty`, where `ramp`
+    /// is a named [`BlockKind::Vco`] block's current `[0, 1)` output — see
+    /// [`math_ops::pwm_from_ramp`]. Several `GateBinding::Vco`s naming the same block share one
+    /// oscillator with different phase offsets (a half-bridge's two complementary switches),
+    /// rather than needing one `Vco` block per gate.
+    Vco { vco: String, phase: f64, duty: f64 },
+    /// Duty modulation at a fixed carrier frequency: on while
+    /// [`sawtooth_carrier`]`(t, freq_hz)` is below a named block's current output (clamped to
+    /// `[0, 1]`) — the standard buck/boost-style comparator, with the duty *command* coming
+    /// from anywhere in the graph (a `Pid`, a filtered `TransferFunction`, ...) instead of
+    /// being a fixed value.
+    Pwm { duty: String, freq_hz: f64 },
+}
+
+impl GateBinding {
+    /// The block this binding reads from, if any (`Fixed`/`PwmFixed` need none).
+    fn source_block(&self) -> Option<&str> {
+        match self {
+            GateBinding::Fixed(_) | GateBinding::PwmFixed { .. } => None,
+            GateBinding::Vco { vco, .. } => Some(vco),
+            GateBinding::Pwm { duty, .. } => Some(duty),
+        }
+    }
+
+    fn resolve(&self, t: f64, outputs: &BTreeMap<String, f64>) -> GateState {
+        let on = match self {
+            GateBinding::Fixed(state) => return *state,
+            GateBinding::PwmFixed { freq_hz, duty } => sawtooth_carrier(t, *freq_hz) < *duty,
+            GateBinding::Vco { vco, phase, duty } => {
+                let ramp = outputs[vco.as_str()];
+                math_ops::pwm_from_ramp(ramp, *phase, *duty)
+            }
+            GateBinding::Pwm { duty, freq_hz } => {
+                let source = outputs[duty.as_str()];
+                sawtooth_carrier(t, *freq_hz) < source.clamp(0.0, 1.0)
+            }
+        };
+        if on {
+            GateState::On
+        } else {
+            GateState::Off
+        }
+    }
 }
 
 enum BlockState {
     Stateless,
-    Pid {
+    /// Shared by `Pid`, `StateSpace`, and `TransferFunction` — all three are, underneath,
+    /// "step this compiled `StateSpace` forward" with only `Pid` additionally applying
+    /// anti-windup (see the match arm in the step loop below).
+    Dynamic {
         state_space: continuous_blocks::StateSpace,
         x: Vec<f64>,
     },
@@ -96,13 +172,17 @@ enum BlockState {
 
 /// One step's result: `(t, OperatingPoint, block_outputs)`, where `block_outputs` is every
 /// block's value that step (by name) — useful for plotting a controller's internal signals
-/// (e.g. a `Vco`'s commanded frequency) without needing to separately re-derive them.
-pub type ClosedLoopBlocksStep = (f64, OperatingPoint, BTreeMap<String, f64>);
+/// (e.g. a `Vco`'s commanded frequency) without needing to separately re-derive them. Empty if
+/// the run used no blocks at all (every gate `Fixed`/`PwmFixed`).
+pub type TransientWithBlocksStep = (f64, OperatingPoint, BTreeMap<String, f64>);
 
-/// Runs a closed-loop transient driven by a graph of [`BlockInstance`]s instead of a single
-/// fixed controller — see this module's doc comment.
+/// Runs a transient with every MOSFET's gate resolved from a [`GateBinding`] each step — see
+/// this module's doc comment for why there's no separate "closed-loop" entry point: a
+/// `GateBinding::Fixed`/`PwmFixed` device and a `GateBinding::Vco`/`Pwm` device driven by a
+/// `Sum`-`Pid`-`Vco` chain that happens to read [`Signal::Measure`] are resolved by exactly the
+/// same loop below. `blocks` may be empty if every gate is `Fixed`/`PwmFixed`.
 #[allow(clippy::too_many_arguments)]
-pub fn simulate_closed_loop_blocks(
+pub fn simulate_transient_with_blocks(
     source: &str,
     dialect: Dialect,
     diodes: &BTreeMap<String, Diode>,
@@ -113,53 +193,59 @@ pub fn simulate_closed_loop_blocks(
     x_initial: Option<&[f64]>,
     t_final: f64,
     dt: f64,
-) -> Result<Vec<ClosedLoopBlocksStep>, DaeError> {
+) -> Result<Vec<TransientWithBlocksStep>, DaeError> {
     let block_names: std::collections::BTreeSet<&str> =
         blocks.iter().map(|b| b.name.as_str()).collect();
     for binding in gates.values() {
-        if !block_names.contains(binding.vco.as_str()) {
-            return Err(DaeError::UnknownBlockInput(binding.vco.clone()));
+        if let Some(needed) = binding.source_block() {
+            if !block_names.contains(needed) {
+                return Err(DaeError::UnknownBlockInput(needed.to_string()));
+            }
         }
     }
 
+    // Only used to learn the system's `unknowns` ordering/count for the pre-first-step
+    // `point_prev` below and the default `x_initial` — no step is solved with it. Solving one
+    // would perturb `x_prev` away from `x_initial` before the real first step even runs, a
+    // real behavioral difference from `simulate_transient_with_mosfets` for the plain
+    // fixed/PWM case (caught by exactly that mismatch: this function must reduce to identical
+    // numbers as that one whenever no block reads a `Signal::Measure`).
     let initial_states: BTreeMap<String, (Mosfet, GateState)> = mosfets
         .iter()
         .map(|(name, m)| (name.clone(), (*m, GateState::Off)))
         .collect();
-    let (system0, all_diodes0) =
+    let (system0, _) =
         crate::build_with_mosfets(source, dialect, diodes, &initial_states, shared_r_on)?;
     let mut x_prev = match x_initial {
         Some(x) => x.to_vec(),
         None => vec![0.0; system0.order()],
     };
-    let (mut point_prev, _) = step_with_fallback(
-        &system0,
-        source,
-        dialect,
-        &all_diodes0,
-        None,
-        &x_prev,
-        dt,
-        &BTreeMap::new(),
-        &None,
-        true,
-    )?;
-    let mut x_prev_prev: Option<Vec<f64>> =
-        Some(std::mem::replace(&mut x_prev, point_prev.x.clone()));
+    let mut point_prev = OperatingPoint {
+        unknowns: system0.unknowns.clone(),
+        x: x_prev.clone(),
+        diode_names: Vec::new(),
+        diode_z: Vec::new(),
+        diode_raw_ioff: Vec::new(),
+    };
+    let mut x_prev_prev: Option<Vec<f64>> = None;
 
     let mut block_states: Vec<BlockState> = blocks
         .iter()
-        .map(|b| match &b.kind {
-            BlockKind::Pid { pid, .. } => {
-                let state_space = pid.to_state_space();
+        .map(|b| {
+            let dynamic = |state_space: StateSpace| {
                 let x = vec![0.0; state_space.states()];
-                BlockState::Pid { state_space, x }
+                BlockState::Dynamic { state_space, x }
+            };
+            match &b.kind {
+                BlockKind::Pid { pid, .. } => dynamic(pid.to_state_space()),
+                BlockKind::StateSpace(ss) => dynamic(ss.clone()),
+                BlockKind::TransferFunction(tf) => dynamic(tf.to_state_space()),
+                BlockKind::Vco(vco) => BlockState::Vco {
+                    vco: *vco,
+                    phase: 0.0,
+                },
+                _ => BlockState::Stateless,
             }
-            BlockKind::Vco(vco) => BlockState::Vco {
-                vco: *vco,
-                phase: 0.0,
-            },
-            _ => BlockState::Stateless,
         })
         .collect();
 
@@ -209,7 +295,7 @@ pub fn simulate_closed_loop_blocks(
                 }
                 (BlockKind::Sum(signs), _) => math_ops::sum(&input_vals, signs),
                 (BlockKind::Gain(k), _) => math_ops::gain(*k, input_vals[0]),
-                (BlockKind::Pid { clamp, .. }, BlockState::Pid { state_space, x }) => {
+                (BlockKind::Pid { clamp, .. }, BlockState::Dynamic { state_space, x }) => {
                     let (lo, hi) = *clamp;
                     let error = [input_vals[0]];
                     let tentative_x = state_space.rk4_step(x, &error, dt);
@@ -223,6 +309,14 @@ pub fn simulate_closed_loop_blocks(
                         tentative_output
                     }
                 }
+                (
+                    BlockKind::StateSpace(_) | BlockKind::TransferFunction(_),
+                    BlockState::Dynamic { state_space, x },
+                ) => {
+                    let u = [input_vals[0]];
+                    *x = state_space.rk4_step(x, &u, dt);
+                    state_space.output(x, &u)[0]
+                }
                 (BlockKind::Vco(_), BlockState::Vco { vco, phase }) => {
                     *phase = vco.step(*phase, input_vals[0], dt);
                     *phase
@@ -234,18 +328,7 @@ pub fn simulate_closed_loop_blocks(
 
         let gate_states: BTreeMap<String, GateState> = gates
             .iter()
-            .map(|(mosfet_name, binding)| {
-                let ramp = outputs
-                    .get(&binding.vco)
-                    .copied()
-                    .expect("validated at function entry");
-                let state = if math_ops::pwm_from_ramp(ramp, binding.phase, binding.duty) {
-                    GateState::On
-                } else {
-                    GateState::Off
-                };
-                (mosfet_name.clone(), state)
-            })
+            .map(|(mosfet_name, binding)| (mosfet_name.clone(), binding.resolve(t, &outputs)))
             .collect();
         let states: BTreeMap<String, (Mosfet, GateState)> = mosfets
             .iter()

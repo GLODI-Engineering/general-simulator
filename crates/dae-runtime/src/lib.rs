@@ -30,8 +30,8 @@ mod linsolve;
 mod topology;
 
 pub use block_graph::{
-    simulate_closed_loop_blocks, BlockInstance, BlockKind, ClosedLoopBlocksStep, GateBinding,
-    Signal,
+    simulate_transient_with_blocks, BlockInstance, BlockKind, GateBinding, Signal,
+    TransientWithBlocksStep,
 };
 pub use closed_loop::{sawtooth_carrier, simulate_closed_loop};
 
@@ -76,7 +76,7 @@ pub enum DaeError {
     Linear(SingularMatrix),
     Lcp(LcpError),
     UnknownDiodeInput(String),
-    /// A [`closed_loop::BlockInstance`]'s input, or a [`closed_loop::GateBinding`], refers to
+    /// A [`block_graph::BlockInstance`]'s input, or a [`block_graph::GateBinding`], refers to
     /// a block name that either doesn't exist or hasn't been declared yet (block graph
     /// evaluation is a single forward pass in declaration order, so every input must name an
     /// earlier block, a circuit measurement, or itself be a source block with no inputs).
