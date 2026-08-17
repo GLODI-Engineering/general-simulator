@@ -151,10 +151,18 @@ own module doc comment for the full device-file grammar and an LLC-converter exa
 worked comparison this was built for.
 
 `crates/elspice-pwl-cli` (binary `elspice-pwl`) is a thin netlist-in/CSV-waveform-out runner
-over `dae-runtime`'s public API, with a small hand-rolled device-params file format (no
-serde/TOML dependency for something this simple). Tested by spawning the actual built binary
-against fixture netlists that are the exact circuits already hand-verified elsewhere in this
-workspace — a cross-check, not a fresh derivation.
+over `dae-runtime`'s public API, with a small hand-rolled device-params/block-graph format (no
+serde/TOML dependency for something this simple). **The netlist is the one file**: PWL device
+parameters and any controller block graph are written directly inside it, as ordinary SPICE
+comment lines (`*`-prefixed — `spice-core` enforces real SPICE grammar with no syntax for
+`kind=mosfet`/`kind=tf`/etc., so these can't be bare netlist lines) that only `elspice-pwl-cli`
+additionally reads as device/block declarations; any other tool sees just comments. `--devices
+<file>` remains available for sharing one controller file across several netlists, but is the
+exception, not the default — splitting the controller into a second file by convention alone,
+when nothing about the circuit requires it, was a real mistake caught and corrected during this
+project's own closed-loop experiments (see the journal). Tested by spawning the actual built
+binary against fixture netlists that are the exact circuits already hand-verified elsewhere in
+this workspace — a cross-check, not a fresh derivation.
 
 All six original milestones, plus everything explicitly deferred from them, are now
 implemented. See the journal for what remains genuinely open (validation against Xyce/ngspice

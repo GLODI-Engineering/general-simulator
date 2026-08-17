@@ -1,17 +1,33 @@
-//! Thin runner for `elspice-pwl`: `elspice-pwl <netlist> --devices <devices-file> --mode
+//! Thin runner for `elspice-pwl`: `elspice-pwl <netlist> [--devices <file>] --mode
 //! {dc|transient} [--tfinal T --dt DT]` prints a CSV waveform (`t,V(node1),V(node2),...`) to
 //! stdout, one row per resolved timestep (a single row for `--mode dc`).
 //!
-//! The devices file is a small hand-rolled `key=value` format (no serde/TOML dependency needed
-//! for something this simple), one line per PWL device, first token the element name:
+//! **The netlist is the one file** — PWL device parameters and any controller block graph
+//! live directly inside it, the same way a real SPICE deck is self-contained, not split across
+//! files by convention. `spice-core` enforces real SPICE grammar (see its own docs), which has
+//! no syntax for `kind=mosfet r_on=...` or a block graph, so those lines are written as
+//! ordinary SPICE comments — anything starting with `*` — with a leading `kind=...` key/value
+//! declaration (a small hand-rolled format, no serde/TOML dependency needed for something this
+//! simple):
 //!
 //! ```text
-//! D1 kind=diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1
-//! D2 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=on
-//! D3 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=pwm freq=10000 duty=0.6
+//! * D1 kind=diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1
+//! * D2 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=on
+//! * D3 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=pwm freq=10000 duty=0.6
 //! ```
 //!
-//! `#` or `;` starts a comment; blank lines are skipped. Every MOSFET must declare the same
+//! Any other tool — a real SPICE simulator, a text editor, a diff — sees exactly what a `*`
+//! line always means: an ordinary comment, safely ignored. `elspice-pwl-cli` is the only thing
+//! that additionally reads these lines as device/block declarations (stripping the leading `*`;
+//! a line without `kind=` — including a genuine comment that happens to start with `*` — is
+//! left alone). This is the whole netlist: run `elspice-pwl-cli some.cir --mode transient` with
+//! no `--devices` at all and it looks for these lines in `some.cir` itself. `--devices <file>`
+//! remains available for the rarer case of sharing one controller/PWL-parameter file across
+//! several netlists, but is not the default or the expected common case.
+//!
+//! `#`/`;`-prefixed lines (not `*`) and blank lines in either file are plain devices-file
+//! comments, invisible to `elspice-pwl-cli` itself, not SPICE comments — use `*` for anything
+//! meant to also survive being read by a real SPICE tool. Every MOSFET must declare the same
 //! `r_on` — `dae-runtime`'s switch mechanism uses one shared on-resistance per call (see
 //! `dae_runtime::solve_dc_with_mosfets`'s doc comment).
 //!
@@ -58,19 +74,25 @@
 //!   being a fixed value.
 //!
 //! Example — a frequency-modulated half-bridge PID (LLC-family converters regulate by
-//! switching frequency, not PWM duty, unlike buck/boost) with a reference step test:
+//! switching frequency, not PWM duty, unlike buck/boost) with a reference step test, as it
+//! would appear inside the `.cir` file alongside the actual circuit elements (`V1`, `Lr`, ...):
 //!
 //! ```text
-//! REF    kind=pwl points=0:20,0.014:17
-//! ERR    kind=sum inputs=REF,meas:vout signs=1,-1
-//! PID1   kind=pid kp=800 ki=4e6 kd=0 n=1000 clamp_lo=-15000 clamp_hi=15000 in=ERR
-//! FNOM   kind=const value=115000
-//! FREQ   kind=sum inputs=FNOM,PID1 signs=1,-1
-//! VCO1   kind=vco f_min=100000 f_max=130000 in=FREQ
-//!
-//! D1 kind=mosfet r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=vco ctrl=VCO1 phase=0 duty=0.48
-//! D2 kind=mosfet r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=vco ctrl=VCO1 phase=0.5 duty=0.48
+//! V1 vin 0 400
+//! * D1 kind=mosfet r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=vco ctrl=VCO1 phase=0 duty=0.48
+//! * D2 kind=mosfet r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=vco ctrl=VCO1 phase=0.5 duty=0.48
+//! ... (Lr, Cr, transformer, rectifier, Cout, Rout -- ordinary SPICE elements)
+//! * REF    kind=pwl points=0:20,0.014:17
+//! * ERR    kind=sum inputs=REF,meas:vout signs=1,-1
+//! * PID1   kind=pid kp=800 ki=4e6 kd=0 n=1000 clamp_lo=-15000 clamp_hi=15000 in=ERR
+//! * FNOM   kind=const value=115000
+//! * FREQ   kind=sum inputs=FNOM,PID1 signs=1,-1
+//! * VCO1   kind=vco f_min=100000 f_max=130000 in=FREQ
 //! ```
+//!
+//! A real SPICE tool opening this file sees seven ordinary comment lines and an otherwise
+//! unremarkable LLC deck. `elspice-pwl-cli some.cir --mode transient` (no `--devices`) sees the
+//! complete closed loop.
 //!
 //! `--mode dc` cannot resolve a block-driven gate (`gate=vco`/`gate=dutyctrl`): a DC operating
 //! point has no notion of the time-stepped state a `Pid`/`Vco` block carries, so those gate
@@ -186,12 +208,18 @@ fn run() -> Result<(), String> {
 
     let netlist =
         fs::read_to_string(netlist_path).map_err(|e| format!("reading {netlist_path}: {e}"))?;
+    // No `--devices` given: look for device/block lines (marked `*...kind=...`, a plain SPICE
+    // comment to every other tool) directly in the netlist file itself, so one `.cir` file can
+    // be the complete, self-contained circuit — the same discipline a real SPICE deck already
+    // has, rather than device/block declarations living in a second file split out by
+    // convention alone. `--devices <file>` remains available for the (rarer) case of sharing
+    // one controller/PWL-parameter file across several netlists.
     let devices = match &devices_path {
         Some(path) => {
             let text = fs::read_to_string(path).map_err(|e| format!("reading {path}: {e}"))?;
             parse_devices(&text)?
         }
-        None => Vec::new(),
+        None => parse_devices(&netlist)?,
     };
 
     let mut diodes = BTreeMap::new();
@@ -408,8 +436,21 @@ fn parse_matrix_rows(
 fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
     let mut result = Vec::new();
     for (line_number, raw_line) in text.lines().enumerate() {
-        let line = raw_line.trim();
+        let mut line = raw_line.trim();
         if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        // A device/block line embedded directly in a `.cir` file (so the same file is both
+        // the netlist and the device/block source -- see this file's module doc comment)
+        // needs a leading `*`, a plain SPICE comment marker, so spice-core's own parser skips
+        // it as an ordinary comment. Strip that marker here before parsing.
+        if let Some(rest) = line.strip_prefix('*') {
+            line = rest.trim_start();
+        }
+        // Anything without `kind=` isn't a device/block declaration -- most likely a real
+        // SPICE element line (when this same file is also the netlist) or a plain comment
+        // that happens to start with `*`. Either way, not ours to parse.
+        if !line.contains("kind=") {
             continue;
         }
         let mut tokens = line.split_whitespace();
