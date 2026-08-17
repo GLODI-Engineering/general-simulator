@@ -171,53 +171,17 @@ pub fn simulate_transient(
     let mut t = 0.0;
     for step_index in 0..steps {
         t += dt;
-
-        let segments_before = prev_segments.clone();
-
-        // A mode change can only be detected by comparing *this* step's resolved segments
-        // against the previous step's — but the scheme has to be chosen before solving. So:
-        // try trapezoidal first (unless it's the very first step); if the result's segments
-        // differ from the previous step's, the trapezoidal consistency assumption was
-        // violated for this step, and it's redone with backward Euler instead.
-        let point = if step_index == 0 {
-            fold_and_solve(
-                &system,
-                source,
-                dialect,
-                diodes,
-                &Scheme::BackwardEuler {
-                    x_prev: &x_prev,
-                    dt,
-                },
-            )?
-        } else {
-            let trial = fold_and_solve(
-                &system,
-                source,
-                dialect,
-                diodes,
-                &Scheme::Trapezoidal {
-                    x_prev: &x_prev,
-                    dt,
-                    prev_diode_raw_ioff: &prev_diode_raw_ioff,
-                },
-            )?;
-            let trial_segments = classify_segments(&trial);
-            if Some(&trial_segments) == segments_before.as_ref() {
-                trial
-            } else {
-                fold_and_solve(
-                    &system,
-                    source,
-                    dialect,
-                    diodes,
-                    &Scheme::BackwardEuler {
-                        x_prev: &x_prev,
-                        dt,
-                    },
-                )?
-            }
-        };
+        let point = step_with_fallback(
+            &system,
+            source,
+            dialect,
+            diodes,
+            &x_prev,
+            dt,
+            &prev_diode_raw_ioff,
+            &prev_segments,
+            step_index == 0,
+        )?;
 
         prev_segments = Some(classify_segments(&point));
         prev_diode_raw_ioff = point
@@ -255,6 +219,57 @@ fn classify_segments(point: &OperatingPoint) -> Vec<Segment> {
         .collect()
 }
 
+/// Solves one timestep, choosing between [`Scheme::Trapezoidal`] and [`Scheme::BackwardEuler`]
+/// the same lagging way [`simulate_transient`] and [`simulate_transient_with_mosfets`] both
+/// need: `force_backward_euler` covers reasons known *before* solving (the very first step, or
+/// — for the MOSFET variant — a gate state that just changed); a diode segment change is only
+/// detectable *after* trying trapezoidal, so that case redoes the step with backward Euler.
+#[allow(clippy::too_many_arguments)]
+fn step_with_fallback(
+    system: &MnaSystem,
+    source: &str,
+    dialect: Dialect,
+    diodes: &BTreeMap<String, Diode>,
+    x_prev: &[f64],
+    dt: f64,
+    prev_diode_raw_ioff: &BTreeMap<String, f64>,
+    prev_segments: &Option<Vec<Segment>>,
+    force_backward_euler: bool,
+) -> Result<OperatingPoint, DaeError> {
+    if force_backward_euler {
+        return fold_and_solve(
+            system,
+            source,
+            dialect,
+            diodes,
+            &Scheme::BackwardEuler { x_prev, dt },
+        );
+    }
+    let trial = fold_and_solve(
+        system,
+        source,
+        dialect,
+        diodes,
+        &Scheme::Trapezoidal {
+            x_prev,
+            dt,
+            prev_diode_raw_ioff,
+        },
+    )?;
+    let trial_segments = classify_segments(&trial);
+    if Some(&trial_segments) == prev_segments.as_ref() {
+        Ok(trial)
+    } else {
+        fold_and_solve(
+            system,
+            source,
+            dialect,
+            diodes,
+            &Scheme::BackwardEuler { x_prev, dt },
+        )
+    }
+}
+
 /// Solves the DC operating point of a netlist containing linear devices, ordinary `D` diodes
 /// (`diodes`), and any number of `Mosfet` instances (`mosfets`), each with its own known gate
 /// state (see [`GateState`], a re-export of `elspice_mna::SwitchState` — the same concept: an
@@ -275,6 +290,104 @@ pub fn solve_dc_with_mosfets(
     mosfets: &BTreeMap<String, (Mosfet, GateState)>,
     shared_r_on: f64,
 ) -> Result<OperatingPoint, DaeError> {
+    let (system, all_diodes) = build_with_mosfets(source, dialect, diodes, mosfets, shared_r_on)?;
+    fold_and_solve(&system, source, dialect, &all_diodes, &Scheme::Dc)
+}
+
+/// Runs a transient simulation of a netlist containing linear devices, ordinary `D` diodes,
+/// and any number of `Mosfet` instances whose gate state can vary over time — a PWM driver,
+/// unlike [`solve_dc_with_mosfets`]'s fixed per-call state. `gate_signal(name, t)` is called
+/// once per MOSFET per timestep to get that instance's [`GateState`] at time `t`; the caller
+/// owns the PWM logic entirely (duty cycle, frequency, phase — this crate has no opinion).
+///
+/// Because a gate state change means the *symbolic* `elspice-mna` system itself must be
+/// rebuilt (a switch and a `'D'`-stamped diode are structurally different stamps, not just
+/// different numeric values — see `docs/architecture.md`), this rebuilds the system every
+/// timestep, unlike [`simulate_transient`]'s single build reused throughout. A documented
+/// scope choice, not an oversight: fine for the small circuits this crate targets so far: see
+/// this crate's journal for the reasoning and what a future optimization would look like.
+///
+/// Uses the same trapezoidal-with-backward-Euler-fallback policy as [`simulate_transient`],
+/// extended to also force backward Euler on any step where *any* MOSFET's gate state just
+/// changed from the previous step — a gate transition is exactly the kind of topology change
+/// the architecture's "backward Euler after a mode change" policy exists for, arguably more so
+/// than a diode's segment change, since it's a real switching event a PWM converter circuit
+/// will trigger constantly.
+#[allow(clippy::too_many_arguments)]
+pub fn simulate_transient_with_mosfets(
+    source: &str,
+    dialect: Dialect,
+    diodes: &BTreeMap<String, Diode>,
+    mosfets: &BTreeMap<String, Mosfet>,
+    gate_signal: impl Fn(&str, f64) -> GateState,
+    shared_r_on: f64,
+    x_initial: Option<&[f64]>,
+    t_final: f64,
+    dt: f64,
+) -> Result<Vec<(f64, OperatingPoint)>, DaeError> {
+    let states_at = |t: f64| -> BTreeMap<String, (Mosfet, GateState)> {
+        mosfets
+            .iter()
+            .map(|(name, m)| (name.clone(), (*m, gate_signal(name, t))))
+            .collect()
+    };
+
+    let (system0, _) = build_with_mosfets(source, dialect, diodes, &states_at(0.0), shared_r_on)?;
+    let mut x_prev = match x_initial {
+        Some(x) => x.to_vec(),
+        None => vec![0.0; system0.order()],
+    };
+    let mut prev_diode_raw_ioff: BTreeMap<String, f64> = BTreeMap::new();
+    let mut prev_segments: Option<Vec<Segment>> = None;
+    let mut prev_gate_states: Option<BTreeMap<String, GateState>> = None;
+
+    let steps = (t_final / dt).round() as usize;
+    let mut trace = Vec::with_capacity(steps);
+    let mut t = 0.0;
+    for step_index in 0..steps {
+        t += dt;
+        let states = states_at(t);
+        let gate_states: BTreeMap<String, GateState> = states
+            .iter()
+            .map(|(name, (_, state))| (name.clone(), *state))
+            .collect();
+        let gate_changed = prev_gate_states.as_ref() != Some(&gate_states);
+
+        let (system, all_diodes) =
+            build_with_mosfets(source, dialect, diodes, &states, shared_r_on)?;
+        let point = step_with_fallback(
+            &system,
+            source,
+            dialect,
+            &all_diodes,
+            &x_prev,
+            dt,
+            &prev_diode_raw_ioff,
+            &prev_segments,
+            step_index == 0 || gate_changed,
+        )?;
+
+        prev_segments = Some(classify_segments(&point));
+        prev_gate_states = Some(gate_states);
+        prev_diode_raw_ioff = point
+            .diode_names
+            .iter()
+            .cloned()
+            .zip(point.diode_raw_ioff.iter().copied())
+            .collect();
+        x_prev = point.x.clone();
+        trace.push((t, point));
+    }
+    Ok(trace)
+}
+
+fn build_with_mosfets(
+    source: &str,
+    dialect: Dialect,
+    diodes: &BTreeMap<String, Diode>,
+    mosfets: &BTreeMap<String, (Mosfet, GateState)>,
+    shared_r_on: f64,
+) -> Result<(MnaSystem, BTreeMap<String, Diode>), DaeError> {
     let mut options = BuildOptions {
         on_resistance: Expression::Constant(shared_r_on),
         ..BuildOptions::default()
@@ -293,7 +406,7 @@ pub fn solve_dc_with_mosfets(
     let system = MnaBuilder::with_options(dialect, options)
         .build_fragment(source)
         .map_err(DaeError::Build)?;
-    fold_and_solve(&system, source, dialect, &all_diodes, &Scheme::Dc)
+    Ok((system, all_diodes))
 }
 
 fn fold_and_solve(

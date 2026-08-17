@@ -91,9 +91,12 @@ diode segments differ from the previous step's (trapezoidal's derivation needs `
 satisfy the circuit's algebraic constraints exactly — the DAE analog of "needs consistent
 initial conditions" — which only a just-completed backward-Euler-or-DC step guarantees),
 trapezoidal otherwise. Verified by convergence order (halving `dt`, not comparing one-`dt`
-error magnitudes): backward Euler roughly halves error, trapezoidal roughly quarters it. Not
-yet in this loop: MOSFETs (no time-varying gate/PWM support yet), `continuous-blocks` (no wiring
-into the global system yet), and `elspice-pwl-cli` doesn't exist yet.
+error magnitudes): backward Euler roughly halves error, trapezoidal roughly quarters it. `simulate_transient_with_mosfets` extends this to MOSFETs with a caller-supplied time-varying
+gate signal (PWM), rebuilding the symbolic `elspice-mna` system every step (a gate transition
+is a structural stamp change, not just a numeric one) and forcing backward Euler on any step
+whose gate states differ from the previous step's, on top of the existing diode-segment-change
+fallback. Not yet in this loop: `continuous-blocks` (no wiring into the global system yet), and
+`elspice-pwl-cli` doesn't exist yet.
 
 ## Numeric stack
 
