@@ -84,10 +84,16 @@ participate in the complementarity problem.
    given solve — not on what they are), solve it (`lcp-solver`), recover `x(t+h)`.
 3. Advance time; repeat.
 
-No Newton loop, no voltage limiting, anywhere in this sequence. Not yet in this loop: MOSFETs
-(no time-varying gate/PWM support yet), `continuous-blocks` (no wiring into the global system
-yet), and full trapezoidal integration (backward Euler only, a documented scope choice — see
-`simulate_transient`'s own doc comment for why, and `elspice-pwl-cli` doesn't exist yet either).
+No Newton loop, no voltage limiting, anywhere in this sequence. Full trapezoidal integration
+(second-order, matching Xyce/SPICE's own default) is now implemented alongside backward Euler,
+selected automatically: backward Euler for the mandatory first step and any step whose resolved
+diode segments differ from the previous step's (trapezoidal's derivation needs `x_n` to already
+satisfy the circuit's algebraic constraints exactly — the DAE analog of "needs consistent
+initial conditions" — which only a just-completed backward-Euler-or-DC step guarantees),
+trapezoidal otherwise. Verified by convergence order (halving `dt`, not comparing one-`dt`
+error magnitudes): backward Euler roughly halves error, trapezoidal roughly quarters it. Not
+yet in this loop: MOSFETs (no time-varying gate/PWM support yet), `continuous-blocks` (no wiring
+into the global system yet), and `elspice-pwl-cli` doesn't exist yet.
 
 ## Numeric stack
 
@@ -143,10 +149,12 @@ numerator zero, so its full (non-minimal) 2-state realization's step response eq
 into `dae-runtime`'s global system is still open — meaningful only once transient integration
 (Milestone 6) exists, since a controller has nothing to do at a single DC operating point.
 
-`dae_runtime::simulate_transient` (Milestone 6) closes the DC-only gap for diode circuits:
-backward-Euler timestepping, verified against an algebraic circuit's exact DC answer at every
-step, a plain RC charge curve, and an RC-through-a-diode circuit against a hand-derived
-closed-form solution combining both mechanisms. Still backward-Euler only (not trapezoidal),
-diode-only (no MOSFET/PWM transient variant), and `continuous-blocks` isn't wired into the
-global system yet — see the journal for the reasoning behind each of those scope choices. No
-`elspice-pwl-cli` yet.
+`dae_runtime::simulate_transient` (Milestone 6) closes the DC-only gap for diode circuits, with
+both backward Euler and full trapezoidal timestepping (trapezoidal by default, falling back to
+backward Euler after the mandatory first step and after any LCP-resolved mode change) —
+verified against an algebraic circuit's exact DC answer at every step, a plain RC charge curve,
+an RC-through-a-diode circuit against a hand-derived closed-form solution combining both
+mechanisms, and directly by convergence order (backward Euler ~halves error as `dt` halves,
+trapezoidal ~quarters it). Still diode-only (no MOSFET/PWM transient variant), and
+`continuous-blocks` isn't wired into the global system yet — see the journal for the reasoning
+behind each of those scope choices. No `elspice-pwl-cli` yet.

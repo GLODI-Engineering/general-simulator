@@ -38,8 +38,10 @@ fn algebraic_circuit_matches_dc_solve_at_every_step() {
 
 /// V1 (5V step) -> R1 (1 ohm) -> C1 (1F) -> ground. Standard RC charging:
 /// dVc/dt = (5 - Vc) / (R*C) = (5 - Vc) / 1, so Vc(t) = 5*(1 - e^(-t)).
-/// Backward Euler is only first-order accurate, so this checks against the analytic curve with
-/// a tolerance sized for the chosen dt (1e-3), not machine precision.
+/// `simulate_transient` uses trapezoidal (second-order) for essentially the whole run here (a
+/// linear circuit never triggers the backward-Euler mode-change fallback beyond the mandatory
+/// first step), so the tolerance is tight — see `src/lib.rs`'s `scheme_tests` module for the
+/// dedicated convergence-order proof this relies on.
 #[test]
 fn rc_charging_matches_closed_form_exponential() {
     let netlist = "V1 a 0 5\nR1 a b 1\nC1 b 0 1";
@@ -54,7 +56,7 @@ fn rc_charging_matches_closed_form_exponential() {
         let vc = point.value("V(b)").unwrap();
         let expected = 5.0 * (1.0 - (-t).exp());
         assert!(
-            (vc - expected).abs() < 5e-3,
+            (vc - expected).abs() < 1e-5,
             "at t={t}: Vc={vc}, expected {expected} (5*(1-e^-t))"
         );
     }
@@ -87,7 +89,7 @@ fn rc_charging_through_a_forward_biased_diode_matches_hand_derived_solution() {
         let vc = point.value("V(c)").unwrap();
         let expected = 4.3 * (1.0 - (-t / 2.0).exp());
         assert!(
-            (vc - expected).abs() < 5e-3,
+            (vc - expected).abs() < 1e-5,
             "at t={t}: Vc={vc}, expected {expected} (4.3*(1-e^(-t/2)))"
         );
 

@@ -46,6 +46,10 @@ pub struct OperatingPoint {
     /// which segment each diode ended up in.
     pub diode_names: Vec<String>,
     pub diode_z: Vec<(f64, f64)>,
+    /// Each diode's true (unscaled) resolved current `delta_on*z2 - delta_br*z1`, same order
+    /// as `diode_names`/`diode_z`. Needed as history by [`simulate_transient`]'s trapezoidal
+    /// step (see its doc comment); exposed here rather than recomputed by every caller.
+    pub diode_raw_ioff: Vec<f64>,
 }
 
 impl OperatingPoint {
@@ -78,35 +82,71 @@ pub fn solve_dc(
     let system = MnaBuilder::new(dialect)
         .build_fragment(source)
         .map_err(DaeError::Build)?;
-    fold_and_solve(&system, source, dialect, diodes, None)
+    fold_and_solve(&system, source, dialect, diodes, &Scheme::Dc)
 }
 
-/// Runs a backward-Euler transient simulation of a netlist containing linear devices
-/// (including storage — `C`, `L`) plus any number of `D` diodes, from `t = 0` to `t_final` in
-/// fixed steps of `dt`, starting from `x_initial` (all zero if `None` — the usual "circuit at
-/// rest, then a step/DC source turns on at `t = 0`" case used by this crate's own tests).
+/// Which implicit integration formula a given step of [`simulate_transient`] uses. Both
+/// reduce a descriptor DAE `A x + K dx/dt = B u` to the same linear-solve shape [`solve_dc`]
+/// already uses (an effective matrix/RHS folded into the diode LCP unchanged) — see
+/// `docs/architecture.md` and each variant's own derivation below.
+enum Scheme<'a> {
+    /// `A x = B u` directly (no time derivative at all) — an ordinary DC operating point.
+    Dc,
+    /// `dx/dt ~= (x_{n+1} - x_n) / dt`, giving `(A + K/dt) x_{n+1} = B u_{n+1} + (K/dt) x_n`.
+    /// First-order accurate, but tolerant of an inconsistent `x_prev` (doesn't need `x_prev`
+    /// to already satisfy the circuit's algebraic constraints exactly) — this is what makes
+    /// it the right choice for the very first transient step, and immediately after a
+    /// LCP-resolved mode change (see `Trapezoidal`'s doc comment for why trapezoidal is *not*
+    /// safe in either of those cases).
+    BackwardEuler { x_prev: &'a [f64], dt: f64 },
+    /// Second-order accurate. Derived by summing the DAE at both `t_n` and `t_{n+1}` and using
+    /// the trapezoidal relation `x'_n + x'_{n+1} = (2/dt)(x_{n+1} - x_n)` to eliminate the
+    /// derivatives entirely:
+    ///
+    /// ```text
+    /// (A/2)(x_n + x_{n+1}) + (K/dt)(x_{n+1} - x_n) = (B/2)(u_n + u_{n+1})
+    /// => (A/2 + K/dt) x_{n+1} = (B/2)(u_n + u_{n+1}) + (K/dt - A/2) x_n
+    /// ```
+    ///
+    /// Crucially, `B u` includes each diode's *nonlinear* current, not just the netlist's own
+    /// (constant, in this crate's scope) sources — true trapezoidal accuracy requires
+    /// averaging that too, not just the linear part. Since the new step's diode current
+    /// contributes `(B/2) * raw_Ioff_{n+1}` rather than the full `B * raw_Ioff_{n+1}`, the
+    /// LCP fold's per-diode coupling coefficients are scaled by `0.5` for this scheme (see
+    /// `fold_and_solve`'s `coupling_scale`) — while the *previous* step's already-known
+    /// current contributes its own `(B/2) * raw_Ioff_n` term directly to the effective RHS,
+    /// via `prev_diode_raw_ioff`.
+    ///
+    /// This derivation assumes `x_n` already satisfies the circuit's algebraic constraints
+    /// exactly (so that summing the DAE at `t_n` contributes nothing extra beyond
+    /// `B u_n - A x_n = 0`) — true right after a [`Scheme::BackwardEuler`] or [`Scheme::Dc`]
+    /// step, not true in general starting from an arbitrary `x_initial`. This is the DAE
+    /// analog of "trapezoidal needs consistent initial conditions," and is why
+    /// [`simulate_transient`] always starts with backward Euler and falls back to it whenever
+    /// a diode's resolved segment changes between consecutive steps.
+    Trapezoidal {
+        x_prev: &'a [f64],
+        dt: f64,
+        prev_diode_raw_ioff: &'a BTreeMap<String, f64>,
+    },
+}
+
+/// Runs a transient simulation of a netlist containing linear devices (including storage —
+/// `C`, `L`) plus any number of `D` diodes, from `t = 0` to `t_final` in fixed steps of `dt`,
+/// starting from `x_initial` (all zero if `None` — the usual "circuit at rest, then a step/DC
+/// source turns on at `t = 0`" case used by this crate's own tests).
 ///
-/// Backward Euler, not trapezoidal: on a descriptor DAE `A x + K dx/dt = B u`, approximating
-/// `dx/dt ~= (x_{n+1} - x_n) / dt` and solving for `x_{n+1}` gives
+/// Uses [`Scheme::Trapezoidal`] (second-order accurate, matching Xyce/SPICE's own default) for
+/// most steps, but falls back to [`Scheme::BackwardEuler`] for the very first step (an
+/// arbitrary `x_initial` is not guaranteed to satisfy the circuit's algebraic constraints —
+/// trapezoidal needs that) and for any step where a diode's resolved segment (breakdown /
+/// leakage / forward) differs from the *previous* step's — the architecture's own sanctioned
+/// policy for staying robust across an LCP-resolved mode change (see `docs/architecture.md`).
+/// This is a lagging, not predictive, policy: it reacts to the mode change already observed in
+/// the previous step's result, rather than trying to foresee this step's mode before solving
+/// it — simpler, and sufficient for the well-behaved circuits this crate targets so far.
 ///
-/// ```text
-/// (A + K/dt) x_{n+1} = B u_{n+1} + (K/dt) x_n
-/// ```
-///
-/// which is *exactly* the same linear-solve shape [`solve_dc`] already uses — `K/dt` folds
-/// into the effective matrix, `(K/dt) x_n` folds into the effective RHS, and the entire
-/// diode/LCP fold is unchanged, since it only ever depended on "the effective matrix" and
-/// "the effective baseline RHS" being fixed for a given solve, not on what they actually are.
-/// A row with no storage element has a zero `K` row, so this reduces to the ordinary algebraic
-/// equation there automatically — no special-casing dynamic vs. algebraic rows is needed.
-///
-/// This is a deliberate, documented scope choice: full trapezoidal integration (second-order
-/// accurate, matching Xyce/SPICE's own default) is **not implemented yet** — it needs each
-/// step to also carry forward the previous step's `dx/dt`, more bookkeeping than backward
-/// Euler needs, and backward Euler is already the architecture's own sanctioned choice
-/// immediately after every LCP-resolved mode change (see `docs/architecture.md`) — which, for
-/// a circuit whose PWL devices switch segments often, may be most of the time anyway. Revisit
-/// if/when a circuit's simulated waveform needs the extra accuracy.
+/// No MOSFET/PWM support yet in the transient loop — see this crate's journal for why.
 pub fn simulate_transient(
     source: &str,
     dialect: Dialect,
@@ -123,17 +163,96 @@ pub fn simulate_transient(
         Some(x) => x.to_vec(),
         None => vec![0.0; system.order()],
     };
+    let mut prev_diode_raw_ioff: BTreeMap<String, f64> = BTreeMap::new();
+    let mut prev_segments: Option<Vec<Segment>> = None;
 
     let steps = (t_final / dt).round() as usize;
     let mut trace = Vec::with_capacity(steps);
     let mut t = 0.0;
-    for _ in 0..steps {
+    for step_index in 0..steps {
         t += dt;
-        let point = fold_and_solve(&system, source, dialect, diodes, Some((&x_prev, dt)))?;
+
+        let segments_before = prev_segments.clone();
+
+        // A mode change can only be detected by comparing *this* step's resolved segments
+        // against the previous step's — but the scheme has to be chosen before solving. So:
+        // try trapezoidal first (unless it's the very first step); if the result's segments
+        // differ from the previous step's, the trapezoidal consistency assumption was
+        // violated for this step, and it's redone with backward Euler instead.
+        let point = if step_index == 0 {
+            fold_and_solve(
+                &system,
+                source,
+                dialect,
+                diodes,
+                &Scheme::BackwardEuler {
+                    x_prev: &x_prev,
+                    dt,
+                },
+            )?
+        } else {
+            let trial = fold_and_solve(
+                &system,
+                source,
+                dialect,
+                diodes,
+                &Scheme::Trapezoidal {
+                    x_prev: &x_prev,
+                    dt,
+                    prev_diode_raw_ioff: &prev_diode_raw_ioff,
+                },
+            )?;
+            let trial_segments = classify_segments(&trial);
+            if Some(&trial_segments) == segments_before.as_ref() {
+                trial
+            } else {
+                fold_and_solve(
+                    &system,
+                    source,
+                    dialect,
+                    diodes,
+                    &Scheme::BackwardEuler {
+                        x_prev: &x_prev,
+                        dt,
+                    },
+                )?
+            }
+        };
+
+        prev_segments = Some(classify_segments(&point));
+        prev_diode_raw_ioff = point
+            .diode_names
+            .iter()
+            .cloned()
+            .zip(point.diode_raw_ioff.iter().copied())
+            .collect();
         x_prev = point.x.clone();
         trace.push((t, point));
     }
     Ok(trace)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Segment {
+    Breakdown,
+    Leakage,
+    Forward,
+}
+
+fn classify_segments(point: &OperatingPoint) -> Vec<Segment> {
+    point
+        .diode_z
+        .iter()
+        .map(|&(z1, z2)| {
+            if z1 > 1e-9 {
+                Segment::Breakdown
+            } else if z2 > 1e-9 {
+                Segment::Forward
+            } else {
+                Segment::Leakage
+            }
+        })
+        .collect()
 }
 
 /// Solves the DC operating point of a netlist containing linear devices, ordinary `D` diodes
@@ -174,7 +293,7 @@ pub fn solve_dc_with_mosfets(
     let system = MnaBuilder::with_options(dialect, options)
         .build_fragment(source)
         .map_err(DaeError::Build)?;
-    fold_and_solve(&system, source, dialect, &all_diodes, None)
+    fold_and_solve(&system, source, dialect, &all_diodes, &Scheme::Dc)
 }
 
 fn fold_and_solve(
@@ -182,7 +301,7 @@ fn fold_and_solve(
     source: &str,
     dialect: Dialect,
     diodes: &BTreeMap<String, Diode>,
-    step: Option<(&[f64], f64)>,
+    scheme: &Scheme,
 ) -> Result<OperatingPoint, DaeError> {
     let nodes = topology::diode_nodes(source, dialect);
     let order = system.order();
@@ -196,30 +315,51 @@ fn fold_and_solve(
     }
     let numeric0 = system.evaluate(&base_values).map_err(DaeError::Evaluate)?;
 
-    // Backward-Euler fold: A -> A + K/dt, u -> u + (K/dt)*x_prev. With step=None (a plain DC
-    // solve) this is a no-op (effective matrix/RHS equal the algebraic A0/u0 exactly).
-    let (a_eff, u_eff): (elspice_mna::Matrix<f64>, Vec<f64>) = match step {
-        None => (numeric0.a.clone(), numeric0.u.clone()),
-        Some((x_prev, dt)) => {
-            let mut a_eff = numeric0.a.clone();
-            for row in 0..order {
-                for col in 0..order {
-                    a_eff[(row, col)] += numeric0.k[(row, col)] / dt;
+    // a_eff/u_eff_base: the effective matrix and the part of the effective RHS that doesn't
+    // depend on this step's own diode currents (those are added per-diode below, since
+    // Trapezoidal's history term needs each diode's own B column). coupling_scale multiplies
+    // how much *this* step's resolved diode current contributes to x/V — see Scheme::Trapezoidal.
+    let (a_eff, u_eff_base, coupling_scale): (elspice_mna::Matrix<f64>, Vec<f64>, f64) =
+        match scheme {
+            Scheme::Dc => (numeric0.a.clone(), numeric0.u.clone(), 1.0),
+            Scheme::BackwardEuler { x_prev, dt } => {
+                let mut a_eff = numeric0.a.clone();
+                for row in 0..order {
+                    for col in 0..order {
+                        a_eff[(row, col)] += numeric0.k[(row, col)] / dt;
+                    }
                 }
+                let u_eff: Vec<f64> = (0..order)
+                    .map(|row| {
+                        let k_x: f64 = (0..order)
+                            .map(|col| numeric0.k[(row, col)] * x_prev[col])
+                            .sum();
+                        numeric0.u[row] + k_x / dt
+                    })
+                    .collect();
+                (a_eff, u_eff, 1.0)
             }
-            let u_eff: Vec<f64> = (0..order)
-                .map(|row| {
-                    let k_x: f64 = (0..order)
-                        .map(|col| numeric0.k[(row, col)] * x_prev[col])
-                        .sum();
-                    numeric0.u[row] + k_x / dt
-                })
-                .collect();
-            (a_eff, u_eff)
-        }
-    };
-
-    let x0 = dense_solve(&a_eff, &u_eff).map_err(DaeError::Linear)?;
+            Scheme::Trapezoidal { x_prev, dt, .. } => {
+                let mut a_eff = numeric0.a.clone();
+                for row in 0..order {
+                    for col in 0..order {
+                        a_eff[(row, col)] = a_eff[(row, col)] / 2.0 + numeric0.k[(row, col)] / dt;
+                    }
+                }
+                let u_eff: Vec<f64> = (0..order)
+                    .map(|row| {
+                        let k_x: f64 = (0..order)
+                            .map(|col| numeric0.k[(row, col)] * x_prev[col])
+                            .sum();
+                        let a_x: f64 = (0..order)
+                            .map(|col| numeric0.a[(row, col)] * x_prev[col])
+                            .sum();
+                        numeric0.u[row] + k_x / dt - a_x / 2.0
+                    })
+                    .collect();
+                (a_eff, u_eff, 0.5)
+            }
+        };
 
     struct DiodeInfo {
         name: String,
@@ -229,6 +369,7 @@ fn fold_and_solve(
         w: Vec<f64>,
     }
 
+    let mut u_eff = u_eff_base;
     let mut infos = Vec::with_capacity(diodes.len());
     for (name, diode) in diodes {
         let column = system
@@ -237,6 +378,22 @@ fn fold_and_solve(
             .position(|input| input == name)
             .ok_or_else(|| DaeError::UnknownDiodeInput(name.clone()))?;
         let b_col: Vec<f64> = (0..order).map(|row| numeric0.b[(row, column)]).collect();
+
+        // Trapezoidal history: the previous step's already-known diode current contributes
+        // its own (B/2)*raw_Ioff_n term to this step's effective RHS directly (only this
+        // step's *new* current needs the LCP-fold coupling_scale treatment below).
+        if let Scheme::Trapezoidal {
+            prev_diode_raw_ioff,
+            ..
+        } = scheme
+        {
+            if let Some(&prev_ioff) = prev_diode_raw_ioff.get(name) {
+                for (row, &b) in b_col.iter().enumerate() {
+                    u_eff[row] += 0.5 * b * prev_ioff;
+                }
+            }
+        }
+
         let w = dense_solve(&a_eff, &b_col).map_err(DaeError::Linear)?;
 
         let terminals = &nodes[name];
@@ -251,6 +408,8 @@ fn fold_and_solve(
             w,
         });
     }
+
+    let x0 = dense_solve(&a_eff, &u_eff).map_err(DaeError::Linear)?;
 
     let get = |x: &[f64], index: Option<usize>| index.map(|i| x[i]).unwrap_or(0.0);
 
@@ -279,16 +438,16 @@ fn fold_and_solve(
         let row_w1 = 2 * k;
         q[row_w1] = v0[k] - infos[k].canonical.v_breakdown;
         for (j, info_j) in infos.iter().enumerate() {
-            m[row_w1][2 * j] += -gamma[k][j] * info_j.canonical.delta_br;
-            m[row_w1][2 * j + 1] += gamma[k][j] * info_j.canonical.delta_on;
+            m[row_w1][2 * j] += -gamma[k][j] * info_j.canonical.delta_br * coupling_scale;
+            m[row_w1][2 * j + 1] += gamma[k][j] * info_j.canonical.delta_on * coupling_scale;
         }
         m[row_w1][2 * k] += 1.0;
 
         let row_w2 = 2 * k + 1;
         q[row_w2] = infos[k].canonical.v_th - v0[k];
         for (j, info_j) in infos.iter().enumerate() {
-            m[row_w2][2 * j] += gamma[k][j] * info_j.canonical.delta_br;
-            m[row_w2][2 * j + 1] += -gamma[k][j] * info_j.canonical.delta_on;
+            m[row_w2][2 * j] += gamma[k][j] * info_j.canonical.delta_br * coupling_scale;
+            m[row_w2][2 * j + 1] += -gamma[k][j] * info_j.canonical.delta_on * coupling_scale;
         }
         m[row_w2][2 * k + 1] += 1.0;
     }
@@ -297,14 +456,20 @@ fn fold_and_solve(
 
     let mut x = x0;
     let mut diode_z = Vec::with_capacity(n_diodes);
+    let mut diode_raw_ioff = Vec::with_capacity(n_diodes);
     for (k, info) in infos.iter().enumerate() {
         let z1 = sol.z[2 * k];
         let z2 = sol.z[2 * k + 1];
+        // True (unscaled) physical current, used for reporting and as the next step's
+        // trapezoidal history — NOT the same as how much it moves x this step (that's scaled
+        // by coupling_scale, since only half of it entered the effective RHS above).
         let raw_ioff = info.canonical.delta_on * z2 - info.canonical.delta_br * z1;
+        let x_contribution = raw_ioff * coupling_scale;
         for (xi, wi) in x.iter_mut().zip(info.w.iter()) {
-            *xi += wi * raw_ioff;
+            *xi += wi * x_contribution;
         }
         diode_z.push((z1, z2));
+        diode_raw_ioff.push(raw_ioff);
     }
 
     Ok(OperatingPoint {
@@ -312,5 +477,111 @@ fn fold_and_solve(
         x,
         diode_names: infos.into_iter().map(|d| d.name).collect(),
         diode_z,
+        diode_raw_ioff,
     })
+}
+
+#[cfg(test)]
+mod scheme_tests {
+    //! `Scheme` and `fold_and_solve` are private, so the convergence-rate check that proves
+    //! trapezoidal is actually second-order (not just "still passes at the same tolerance")
+    //! has to live here rather than in `tests/`.
+    use super::*;
+
+    enum Kind {
+        BackwardEuler,
+        /// Trapezoidal for every step after the first (which is always backward Euler, for a
+        /// consistent `x0` — matching `simulate_transient`'s own policy).
+        Trapezoidal,
+    }
+
+    /// Runs the same RC circuit as `tests/transient.rs`'s
+    /// `rc_charging_matches_closed_form_exponential` (`Vc(t) = 5*(1-e^-t)`) with a single
+    /// scheme throughout, and returns the error against the closed-form solution at `t_final`.
+    fn rc_final_error(kind: &Kind, dt: f64, t_final: f64) -> f64 {
+        let source = "V1 a 0 5\nR1 a b 1\nC1 b 0 1";
+        let system = MnaBuilder::new(Dialect::Ngspice)
+            .build_fragment(source)
+            .unwrap();
+        let diodes = BTreeMap::new();
+        let steps = (t_final / dt).round() as usize;
+
+        let mut x = vec![0.0; system.order()];
+        for step in 0..steps {
+            let use_be = matches!(kind, Kind::BackwardEuler) || step == 0;
+            let point = if use_be {
+                fold_and_solve(
+                    &system,
+                    source,
+                    Dialect::Ngspice,
+                    &diodes,
+                    &Scheme::BackwardEuler { x_prev: &x, dt },
+                )
+            } else {
+                fold_and_solve(
+                    &system,
+                    source,
+                    Dialect::Ngspice,
+                    &diodes,
+                    &Scheme::Trapezoidal {
+                        x_prev: &x,
+                        dt,
+                        prev_diode_raw_ioff: &BTreeMap::new(),
+                    },
+                )
+            }
+            .unwrap();
+            x = point.x;
+        }
+
+        let vb_index = system.unknowns.iter().position(|u| u == "V(b)").unwrap();
+        let expected = 5.0 * (1.0 - (-t_final).exp());
+        (x[vb_index] - expected).abs()
+    }
+
+    /// The standard way to verify a method's convergence *order* is to halve `dt` and check
+    /// how much the error shrinks, not to compare absolute error magnitudes at one `dt`
+    /// against another method's (which depends on unknown, method-specific constants and can
+    /// easily mislead). Backward Euler is first-order: halving `dt` should roughly halve the
+    /// error. Both checked over the same halving, at deliberately coarse `dt` so the halving
+    /// ratio is clearly visible before floating-point/near-exact-cancellation noise matters.
+    #[test]
+    fn backward_euler_error_roughly_halves_when_dt_halves() {
+        let t_final = 2.0;
+        let error_coarse = rc_final_error(&Kind::BackwardEuler, 0.1, t_final);
+        let error_fine = rc_final_error(&Kind::BackwardEuler, 0.05, t_final);
+        let ratio = error_coarse / error_fine;
+        assert!(
+            (1.7..=2.3).contains(&ratio),
+            "backward-Euler error ratio (dt vs dt/2) = {ratio}, expected close to 2.0 (first-order)"
+        );
+    }
+
+    /// Trapezoidal is second-order: halving `dt` should quarter the error.
+    #[test]
+    fn trapezoidal_error_roughly_quarters_when_dt_halves() {
+        let t_final = 2.0;
+        let error_coarse = rc_final_error(&Kind::Trapezoidal, 0.1, t_final);
+        let error_fine = rc_final_error(&Kind::Trapezoidal, 0.05, t_final);
+        let ratio = error_coarse / error_fine;
+        assert!(
+            (3.0..=5.5).contains(&ratio),
+            "trapezoidal error ratio (dt vs dt/2) = {ratio}, expected close to 4.0 (second-order)"
+        );
+    }
+
+    /// And, directly: at the same coarse `dt`, trapezoidal's error should be substantially
+    /// smaller than backward Euler's (not asserting a specific factor, since that depends on
+    /// problem-specific constants — just that it is, robustly, much better).
+    #[test]
+    fn trapezoidal_is_more_accurate_than_backward_euler_at_the_same_dt() {
+        let t_final = 2.0;
+        let dt = 0.1;
+        let error_be = rc_final_error(&Kind::BackwardEuler, dt, t_final);
+        let error_tr = rc_final_error(&Kind::Trapezoidal, dt, t_final);
+        assert!(
+            error_tr < error_be / 10.0,
+            "trapezoidal error {error_tr} should be well under backward-Euler error {error_be} at dt={dt}"
+        );
+    }
 }
