@@ -1,0 +1,10 @@
+[package]
+name = "pwl-devices"
+version = "0.1.0"
+description = "Piecewise-linear device companion models (diode, MOSFET) in Chua-Lin canonical form, for LCP-based mode selection instead of Newton-Raphson + voltage limiting."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+lcp-solver = { path = "../lcp-solver" }
