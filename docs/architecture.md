@@ -118,5 +118,16 @@ variables including cross-coupling, substitute into the LCP). Verified by reprod
 Milestone 2's hand-derived two-diode numbers through real netlist parsing instead of a
 hand-typed `(M, q)` — see `crates/dae-runtime/tests/two_diode_via_netlist.rs`.
 
-Still a DC-operating-point solve only (no `K`/storage, no transient integration). No MOSFET
-model, no `continuous-blocks`, no `elspice-pwl-cli` yet — Milestones 4-6.
+`pwl_devices::Mosfet` (Milestone 4) needed **no further `elspice-mna` changes**: a gated-on
+MOSFET is a plain bidirectional resistor (reuses `elspice-mna`'s existing switch mechanism), a
+gated-off MOSFET falls back to its intrinsic body diode (reuses the `'D'` stamp and LCP fold
+unchanged, via `Mosfet::body_diode: Diode`). Gate state is exogenous — decided by the caller
+per timestep, not resolved by the LCP — so `dae-runtime::solve_dc_with_mosfets` just routes
+each instance to whichever mechanism its current gate state calls for. Getting the body
+diode's polarity right reuses `Diode` completely unchanged via a node-order convention
+(`(source, drain)`, not the datasheet `(drain, source)`) — see `Mosfet`'s doc comment.
+MOSFETs must use device letter `'D'` in netlist text (not `'M'`, which `spice-core` correctly
+enforces real 4-node SPICE grammar for).
+
+Still a DC-operating-point solve only (no `K`/storage, no transient integration). No
+`continuous-blocks`, no `elspice-pwl-cli` yet — Milestones 5-6.

@@ -13,5 +13,7 @@
 //! example of that folding done manually, as the first end-to-end proof this approach works.
 
 mod diode;
+mod mosfet;
 
 pub use diode::{Diode, DiodeCanonical};
+pub use mosfet::Mosfet;

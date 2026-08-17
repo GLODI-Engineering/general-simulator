@@ -29,11 +29,13 @@ mod topology;
 
 use std::collections::BTreeMap;
 
-use elspice_mna::{BuildError, EvaluationError, MnaBuilder};
+use elspice_mna::{BuildError, BuildOptions, EvaluationError, Expression, MnaBuilder, MnaSystem};
 use lcp_solver::LcpError;
 use linsolve::{dense_solve, SingularMatrix};
-use pwl_devices::Diode;
+use pwl_devices::{Diode, Mosfet};
 use spice_core::Dialect;
+
+pub use elspice_mna::SwitchState as GateState;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OperatingPoint {
@@ -76,6 +78,56 @@ pub fn solve_dc(
     let system = MnaBuilder::new(dialect)
         .build_fragment(source)
         .map_err(DaeError::Build)?;
+    fold_and_solve(system, source, dialect, diodes)
+}
+
+/// Solves the DC operating point of a netlist containing linear devices, ordinary `D` diodes
+/// (`diodes`), and any number of `Mosfet` instances (`mosfets`), each with its own known gate
+/// state (see [`GateState`], a re-export of `elspice_mna::SwitchState` — the same concept: an
+/// exogenous, externally-decided mode, not something the LCP resolves).
+///
+/// A gated-on MOSFET is stamped as a plain `r_on` switch (reusing `elspice-mna`'s existing
+/// switch mechanism — every gated-on MOSFET in one call shares `shared_r_on`, matching that
+/// mechanism's own single-shared-resistance design; per-instance `Ron` is a possible future
+/// extension, not needed yet). A gated-off MOSFET is folded into the LCP exactly like an
+/// ordinary diode, using its `body_diode` — see [`Mosfet`]'s doc comment for the
+/// `(source, drain)` node-order convention this requires in the netlist. Each MOSFET element
+/// must still use device letter `'D'` in the netlist text (not `'M'`) — see this crate's
+/// `docs`/journal for why.
+pub fn solve_dc_with_mosfets(
+    source: &str,
+    dialect: Dialect,
+    diodes: &BTreeMap<String, Diode>,
+    mosfets: &BTreeMap<String, (Mosfet, GateState)>,
+    shared_r_on: f64,
+) -> Result<OperatingPoint, DaeError> {
+    let mut options = BuildOptions {
+        on_resistance: Expression::Constant(shared_r_on),
+        ..BuildOptions::default()
+    };
+
+    let mut all_diodes = diodes.clone();
+    for (name, (mosfet, state)) in mosfets {
+        match state {
+            GateState::On => options.set_switch(name, GateState::On),
+            GateState::Off => {
+                all_diodes.insert(name.clone(), mosfet.body_diode);
+            }
+        }
+    }
+
+    let system = MnaBuilder::with_options(dialect, options)
+        .build_fragment(source)
+        .map_err(DaeError::Build)?;
+    fold_and_solve(system, source, dialect, &all_diodes)
+}
+
+fn fold_and_solve(
+    system: MnaSystem,
+    source: &str,
+    dialect: Dialect,
+    diodes: &BTreeMap<String, Diode>,
+) -> Result<OperatingPoint, DaeError> {
     let nodes = topology::diode_nodes(source, dialect);
 
     // Fix every diode's conductance at its canonical reference slope and its Norton current at
