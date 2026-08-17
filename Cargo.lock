@@ -10,6 +10,7 @@ version = "0.1.0"
 name = "dae-runtime"
 version = "0.1.0"
 dependencies = [
+ "continuous-blocks",
  "elspice-mna",
  "lcp-solver",
  "pwl-devices",

@@ -9,5 +9,6 @@ publish.workspace = true
 [dependencies]
 lcp-solver = { path = "../lcp-solver" }
 pwl-devices = { path = "../pwl-devices" }
+continuous-blocks = { path = "../continuous-blocks" }
 spice-core = { path = "../../../spice-lsp/servers/core" }
 elspice-mna = { path = "../../../elspice-mna" }

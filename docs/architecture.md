@@ -95,8 +95,15 @@ error magnitudes): backward Euler roughly halves error, trapezoidal roughly quar
 gate signal (PWM), rebuilding the symbolic `elspice-mna` system every step (a gate transition
 is a structural stamp change, not just a numeric one) and forcing backward Euler on any step
 whose gate states differ from the previous step's, on top of the existing diode-segment-change
-fallback. Not yet in this loop: `continuous-blocks` (no wiring into the global system yet), and
-`elspice-pwl-cli` doesn't exist yet.
+fallback. `dae_runtime::simulate_closed_loop` wires a `continuous-blocks` controller (a compiled `Pid`)
+into a real closed loop around a circuit's MOSFET gate(s), as a sampled-data co-simulation
+(controller reads the previous step's measured output, steps its own RK4 integrator, decides
+this step's gate states via a caller-supplied PWM comparator) rather than a fully implicit
+unified system — deliberately: this is how a real digital PID+PWM controller actually works,
+not an approximation. Verified via the standard "integral control zeroes steady-state error"
+property on a chopper-fed RC regulator, not by hand-deriving the exact switching transient
+(not analytically tractable for any real switching converter). `elspice-pwl-cli` doesn't
+exist yet.
 
 ## Numeric stack
 

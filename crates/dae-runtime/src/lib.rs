@@ -24,8 +24,11 @@
 //! (`w1_k = V_k - v_breakdown_k + z1_k`, `w2_k = v_th_k - V_k + z2_k`) gives exactly the LCP
 //! `(M, q)` this crate builds and hands to `lcp_solver::solve`.
 
+mod closed_loop;
 mod linsolve;
 mod topology;
+
+pub use closed_loop::{sawtooth_carrier, simulate_closed_loop};
 
 use std::collections::BTreeMap;
 
