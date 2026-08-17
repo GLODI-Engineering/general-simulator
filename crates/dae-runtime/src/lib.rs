@@ -78,7 +78,62 @@ pub fn solve_dc(
     let system = MnaBuilder::new(dialect)
         .build_fragment(source)
         .map_err(DaeError::Build)?;
-    fold_and_solve(system, source, dialect, diodes)
+    fold_and_solve(&system, source, dialect, diodes, None)
+}
+
+/// Runs a backward-Euler transient simulation of a netlist containing linear devices
+/// (including storage — `C`, `L`) plus any number of `D` diodes, from `t = 0` to `t_final` in
+/// fixed steps of `dt`, starting from `x_initial` (all zero if `None` — the usual "circuit at
+/// rest, then a step/DC source turns on at `t = 0`" case used by this crate's own tests).
+///
+/// Backward Euler, not trapezoidal: on a descriptor DAE `A x + K dx/dt = B u`, approximating
+/// `dx/dt ~= (x_{n+1} - x_n) / dt` and solving for `x_{n+1}` gives
+///
+/// ```text
+/// (A + K/dt) x_{n+1} = B u_{n+1} + (K/dt) x_n
+/// ```
+///
+/// which is *exactly* the same linear-solve shape [`solve_dc`] already uses — `K/dt` folds
+/// into the effective matrix, `(K/dt) x_n` folds into the effective RHS, and the entire
+/// diode/LCP fold is unchanged, since it only ever depended on "the effective matrix" and
+/// "the effective baseline RHS" being fixed for a given solve, not on what they actually are.
+/// A row with no storage element has a zero `K` row, so this reduces to the ordinary algebraic
+/// equation there automatically — no special-casing dynamic vs. algebraic rows is needed.
+///
+/// This is a deliberate, documented scope choice: full trapezoidal integration (second-order
+/// accurate, matching Xyce/SPICE's own default) is **not implemented yet** — it needs each
+/// step to also carry forward the previous step's `dx/dt`, more bookkeeping than backward
+/// Euler needs, and backward Euler is already the architecture's own sanctioned choice
+/// immediately after every LCP-resolved mode change (see `docs/architecture.md`) — which, for
+/// a circuit whose PWL devices switch segments often, may be most of the time anyway. Revisit
+/// if/when a circuit's simulated waveform needs the extra accuracy.
+pub fn simulate_transient(
+    source: &str,
+    dialect: Dialect,
+    diodes: &BTreeMap<String, Diode>,
+    x_initial: Option<&[f64]>,
+    t_final: f64,
+    dt: f64,
+) -> Result<Vec<(f64, OperatingPoint)>, DaeError> {
+    let system = MnaBuilder::new(dialect)
+        .build_fragment(source)
+        .map_err(DaeError::Build)?;
+
+    let mut x_prev = match x_initial {
+        Some(x) => x.to_vec(),
+        None => vec![0.0; system.order()],
+    };
+
+    let steps = (t_final / dt).round() as usize;
+    let mut trace = Vec::with_capacity(steps);
+    let mut t = 0.0;
+    for _ in 0..steps {
+        t += dt;
+        let point = fold_and_solve(&system, source, dialect, diodes, Some((&x_prev, dt)))?;
+        x_prev = point.x.clone();
+        trace.push((t, point));
+    }
+    Ok(trace)
 }
 
 /// Solves the DC operating point of a netlist containing linear devices, ordinary `D` diodes
@@ -119,26 +174,52 @@ pub fn solve_dc_with_mosfets(
     let system = MnaBuilder::with_options(dialect, options)
         .build_fragment(source)
         .map_err(DaeError::Build)?;
-    fold_and_solve(system, source, dialect, &all_diodes)
+    fold_and_solve(&system, source, dialect, &all_diodes, None)
 }
 
 fn fold_and_solve(
-    system: MnaSystem,
+    system: &MnaSystem,
     source: &str,
     dialect: Dialect,
     diodes: &BTreeMap<String, Diode>,
+    step: Option<(&[f64], f64)>,
 ) -> Result<OperatingPoint, DaeError> {
     let nodes = topology::diode_nodes(source, dialect);
+    let order = system.order();
 
     // Fix every diode's conductance at its canonical reference slope and its Norton current at
-    // zero: this is the "A0" the whole LCP fold above is built on.
+    // zero: this is the "A0"/"u0" the whole LCP fold above is built on.
     let mut base_values = BTreeMap::new();
     for (name, diode) in diodes {
         base_values.insert(format!("{name}_G"), diode.g_off);
         base_values.insert(format!("{name}_Ioff"), 0.0);
     }
     let numeric0 = system.evaluate(&base_values).map_err(DaeError::Evaluate)?;
-    let x0 = dense_solve(&numeric0.a, &numeric0.u).map_err(DaeError::Linear)?;
+
+    // Backward-Euler fold: A -> A + K/dt, u -> u + (K/dt)*x_prev. With step=None (a plain DC
+    // solve) this is a no-op (effective matrix/RHS equal the algebraic A0/u0 exactly).
+    let (a_eff, u_eff): (elspice_mna::Matrix<f64>, Vec<f64>) = match step {
+        None => (numeric0.a.clone(), numeric0.u.clone()),
+        Some((x_prev, dt)) => {
+            let mut a_eff = numeric0.a.clone();
+            for row in 0..order {
+                for col in 0..order {
+                    a_eff[(row, col)] += numeric0.k[(row, col)] / dt;
+                }
+            }
+            let u_eff: Vec<f64> = (0..order)
+                .map(|row| {
+                    let k_x: f64 = (0..order)
+                        .map(|col| numeric0.k[(row, col)] * x_prev[col])
+                        .sum();
+                    numeric0.u[row] + k_x / dt
+                })
+                .collect();
+            (a_eff, u_eff)
+        }
+    };
+
+    let x0 = dense_solve(&a_eff, &u_eff).map_err(DaeError::Linear)?;
 
     struct DiodeInfo {
         name: String,
@@ -155,10 +236,8 @@ fn fold_and_solve(
             .iter()
             .position(|input| input == name)
             .ok_or_else(|| DaeError::UnknownDiodeInput(name.clone()))?;
-        let b_col: Vec<f64> = (0..system.order())
-            .map(|row| numeric0.b[(row, column)])
-            .collect();
-        let w = dense_solve(&numeric0.a, &b_col).map_err(DaeError::Linear)?;
+        let b_col: Vec<f64> = (0..order).map(|row| numeric0.b[(row, column)]).collect();
+        let w = dense_solve(&a_eff, &b_col).map_err(DaeError::Linear)?;
 
         let terminals = &nodes[name];
         let p = topology::node_index(&system.unknowns, &terminals.positive);

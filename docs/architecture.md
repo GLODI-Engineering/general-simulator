@@ -72,18 +72,22 @@ in their currently-resolved PWL segment, plus every continuous block. LCP mode s
 ever has to reason about the discrete PWL part; continuous blocks are always linear and never
 participate in the complementarity problem.
 
-## Timestep loop (once assembly + LCP formulation exist)
+## Timestep loop
 
-1. Assemble the global `(A, K, B)` for the current timestep: `elspice-mna`'s linear-device
-   stamps + each `pwl-devices` element in its currently-assumed segment + every
-   `continuous-blocks` fragment.
-2. Solve the LCP for the discrete PWL segment combination (`lcp-solver`), warm-started from the
-   previous timestep's segments where possible.
-3. With segments resolved, do one implicit linear solve (trapezoidal, or backward Euler
-   immediately after a mode change) for `x(t+h)`.
-4. Advance time; repeat.
+`dae_runtime::simulate_transient` (Milestone 6) implements this for diode-only circuits today:
 
-No Newton loop, no voltage limiting, anywhere in this sequence.
+1. Assemble the effective backward-Euler matrix/RHS once (`A + K/dt`, independent of `x_prev`
+   — only the RHS's `(K/dt) x_prev` term changes per step) via the same reference-conductance
+   fold Milestones 2-3 already use.
+2. Each step: fold the diode LCP against that effective matrix/RHS (identical code path to
+   `solve_dc`, since it only ever depended on "the effective matrix/RHS" being fixed for a
+   given solve — not on what they are), solve it (`lcp-solver`), recover `x(t+h)`.
+3. Advance time; repeat.
+
+No Newton loop, no voltage limiting, anywhere in this sequence. Not yet in this loop: MOSFETs
+(no time-varying gate/PWM support yet), `continuous-blocks` (no wiring into the global system
+yet), and full trapezoidal integration (backward Euler only, a documented scope choice — see
+`simulate_transient`'s own doc comment for why, and `elspice-pwl-cli` doesn't exist yet either).
 
 ## Numeric stack
 
@@ -139,5 +143,10 @@ numerator zero, so its full (non-minimal) 2-state realization's step response eq
 into `dae-runtime`'s global system is still open — meaningful only once transient integration
 (Milestone 6) exists, since a controller has nothing to do at a single DC operating point.
 
-Still a DC-operating-point solve only (no `K`/storage, no transient integration in
-`dae-runtime` itself). No `elspice-pwl-cli` yet — Milestone 6.
+`dae_runtime::simulate_transient` (Milestone 6) closes the DC-only gap for diode circuits:
+backward-Euler timestepping, verified against an algebraic circuit's exact DC answer at every
+step, a plain RC charge curve, and an RC-through-a-diode circuit against a hand-derived
+closed-form solution combining both mechanisms. Still backward-Euler only (not trapezoidal),
+diode-only (no MOSFET/PWM transient variant), and `continuous-blocks` isn't wired into the
+global system yet — see the journal for the reasoning behind each of those scope choices. No
+`elspice-pwl-cli` yet.
