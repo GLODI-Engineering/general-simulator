@@ -17,6 +17,16 @@ pub fn product(inputs: &[f64]) -> f64 {
     inputs.iter().product()
 }
 
+/// Compares a periodic ramp (as produced by [`crate::Vco`], in `[0, 1)`) against a duty
+/// threshold, with an optional phase offset — the standard way a PWM carrier or oscillator
+/// output becomes a logic/gate signal (a reference tool/a reference tool both have an equivalent Relational-
+/// Operator-on-a-ramp block). Kept separate from `Vco` itself so one shared oscillator can
+/// drive several independently-phased/duty-shifted gates (e.g. a half-bridge's two
+/// complementary switches) without needing a second oscillator instance.
+pub fn pwm_from_ramp(ramp: f64, phase_offset: f64, duty: f64) -> bool {
+    (ramp + phase_offset).rem_euclid(1.0) < duty
+}
+
 /// Clamps `u` to `[-limit, limit]`. Piecewise, like a PWL device, but evaluated directly here
 /// rather than through the LCP machinery: a saturation block's active segment depends only on
 /// its own input, never on other unknowns it doesn't already know, so there is no
@@ -51,5 +61,14 @@ mod tests {
         assert_eq!(saturation(5.0, 2.0), 2.0);
         assert_eq!(saturation(-5.0, 2.0), -2.0);
         assert_eq!(saturation(1.0, 2.0), 1.0);
+    }
+
+    #[test]
+    fn pwm_from_ramp_compares_against_duty_with_phase_offset() {
+        assert!(pwm_from_ramp(0.1, 0.0, 0.48));
+        assert!(!pwm_from_ramp(0.5, 0.0, 0.48));
+        // phase_offset=0.5 shifts the comparison window by half a period
+        assert!(pwm_from_ramp(0.6, 0.5, 0.48));
+        assert!(!pwm_from_ramp(0.1, 0.5, 0.48));
     }
 }

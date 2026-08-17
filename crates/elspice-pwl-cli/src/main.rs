@@ -16,39 +16,55 @@
 //! `r_on` — `dae-runtime`'s switch mechanism uses one shared on-resistance per call (see
 //! `dae_runtime::solve_dc_with_mosfets`'s doc comment).
 //!
-//! `--mode closed-loop` additionally recognizes two more device-file line kinds (only usable
-//! together, and only one `kind=pid` controller per file -- `dae_runtime::simulate_closed_loop`
-//! itself is single-controller):
+//! ## `--mode closed-loop`
+//!
+//! A closed loop is a graph of small, independently reusable `continuous-blocks` blocks —
+//! `const`, `pwl` (piecewise-constant source, e.g. a reference schedule), `sum` (an error
+//! junction with explicit `+`/`-` signs), `gain`, `pid`, `vco` — wired together with plain
+//! device-file lines, the same discipline a real block-diagram tool (a reference tool, a reference tool) uses:
+//! **the error signal is a `sum` block's own output, and a frequency-modulated PWM carrier is
+//! `sum -> pid -> sum -> vco`, not one fused "closed-loop controller" that bakes a specific
+//! topology together.** Each block is declared with `kind=<block>`, its own parameters, and
+//! `in=<signal>` (single-input blocks) or `inputs=<signal>,<signal>,...` (`sum`, one per
+//! `signs=` entry). A `<signal>` is either another block's name (its output this same step) or
+//! `meas:<node>` (the circuit's own previous-step measurement, e.g. `meas:vout` for
+//! `V(vout)`). **Blocks are evaluated in the order they appear in the file** — every signal
+//! must reference a block declared *earlier* (or a `meas:` signal, which has no ordering
+//! constraint) — so declare sources first and sinks last, same as you'd read a signal-flow
+//! diagram left to right.
+//!
+//! A MOSFET's gate can reference a `kind=vco` block by name instead of a fixed/`pwm` spec:
+//! `gate=vco ctrl=<vco-block-name> phase=<0..1> duty=<0..1>` — several gates naming the same
+//! `vco` share one oscillator with different phase offsets (a half-bridge's two complementary
+//! switches, for instance) rather than needing a separate oscillator per gate.
+//!
+//! Example — a frequency-modulated half-bridge PID (LLC-family converters regulate by
+//! switching frequency, not PWM duty, unlike buck/boost) with a reference step test:
 //!
 //! ```text
-//! CTRL1 kind=pid measure=vout kp=800 ki=4e6 kd=0 n=1000 f_nom=115000 f_min=100000 f_max=130000 duty=0.48
-//! D1 kind=mosfet r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=freqpid ctrl=CTRL1 phase=0
-//! D2 kind=mosfet r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=freqpid ctrl=CTRL1 phase=0.5
-//! REF0 kind=ref ctrl=CTRL1 t=0 v=20
-//! REF1 kind=ref ctrl=CTRL1 t=0.012 v=15
+//! REF    kind=pwl points=0:20,0.014:17
+//! ERR    kind=sum inputs=REF,meas:vout signs=1,-1
+//! PID1   kind=pid kp=800 ki=4e6 kd=0 n=1000 clamp_lo=-15000 clamp_hi=15000 in=ERR
+//! FNOM   kind=const value=115000
+//! FREQ   kind=sum inputs=FNOM,PID1 signs=1,-1
+//! VCO1   kind=vco f_min=100000 f_max=130000 in=FREQ
+//!
+//! D1 kind=mosfet r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=vco ctrl=VCO1 phase=0 duty=0.48
+//! D2 kind=mosfet r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=vco ctrl=VCO1 phase=0.5 duty=0.48
 //! ```
 //!
-//! `kind=pid` compiles a `continuous_blocks::Pid` and drives every `gate=freqpid` MOSFET from a
-//! single shared numerically-controlled oscillator: `freq = (f_nom - pid_output).clamp(f_min,
-//! f_max)`, phase accumulated each step by `freq*dt`, each MOSFET on while `(phase +
-//! device_phase).rem_euclid(1.0) < duty` -- a frequency-modulated half-bridge/PWM, as opposed
-//! to `gate=pwm`'s fixed-frequency duty modulation (buck/boost use duty; LLC-family resonant
-//! converters are controlled by frequency instead, see
-//! `internal-archive/experiments/elspice-pwl-llc-closed-loop-vs-xyce-ngspice/`).
-//! `kind=ref` entries (any number, one `t=`/`v=` pair each) build that controller's
-//! piecewise-constant reference-vs-time schedule -- a reference *step* test (settle at one
-//! setpoint, then jump to another) is just two `kind=ref` lines, not a separate code path.
+//! See `internal-archive/experiments/elspice-pwl-llc-closed-loop-vs-xyce-ngspice/`
+//! for the full worked example this syntax was built for.
 
-use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::process::ExitCode;
 
-use continuous_blocks::Pid;
+use continuous_blocks::{Pid, Vco};
 use dae_runtime::{
-    simulate_closed_loop, simulate_transient, simulate_transient_with_mosfets, solve_dc,
-    solve_dc_with_mosfets, GateState,
+    simulate_closed_loop_blocks, simulate_transient, simulate_transient_with_mosfets, solve_dc,
+    solve_dc_with_mosfets, BlockInstance, BlockKind, GateBinding, GateState, Signal,
 };
 use pwl_devices::{Diode, Mosfet};
 use spice_core::Dialect;
@@ -60,32 +76,14 @@ enum Kind {
         r_on: f64,
         gate: GateSpec,
     },
-    Pid(PidConfig),
-    Ref {
-        ctrl: String,
-        t: f64,
-        v: f64,
-    },
-}
-
-#[derive(Clone)]
-struct PidConfig {
-    kp: f64,
-    ki: f64,
-    kd: f64,
-    n: f64,
-    measure: String,
-    f_nom: f64,
-    f_min: f64,
-    f_max: f64,
-    duty: f64,
+    Block(BlockInstance),
 }
 
 #[derive(Clone)]
 enum GateSpec {
     Fixed(GateState),
     Pwm { freq_hz: f64, duty: f64 },
-    FreqPid { ctrl: String, phase: f64 },
+    Vco { ctrl: String, phase: f64, duty: f64 },
 }
 
 fn main() -> ExitCode {
@@ -147,13 +145,12 @@ fn run() -> Result<(), String> {
             let text = fs::read_to_string(path).map_err(|e| format!("reading {path}: {e}"))?;
             parse_devices(&text)?
         }
-        None => BTreeMap::new(),
+        None => Vec::new(),
     };
 
     let mut diodes = BTreeMap::new();
     let mut mosfets = BTreeMap::new();
-    let mut controllers: BTreeMap<String, PidConfig> = BTreeMap::new();
-    let mut ref_schedule: Vec<(String, f64, f64)> = Vec::new();
+    let mut blocks: Vec<BlockInstance> = Vec::new();
     let mut shared_r_on: Option<f64> = None;
     for (name, kind) in devices {
         match kind {
@@ -173,12 +170,7 @@ fn run() -> Result<(), String> {
                 }
                 mosfets.insert(name, (mosfet, gate));
             }
-            Kind::Pid(config) => {
-                controllers.insert(name, config);
-            }
-            Kind::Ref { ctrl, t, v } => {
-                ref_schedule.push((ctrl, t, v));
-            }
+            Kind::Block(instance) => blocks.push(instance),
         }
     }
     let shared_r_on = shared_r_on.unwrap_or(0.0);
@@ -213,9 +205,9 @@ fn run() -> Result<(), String> {
                 .map(|(n, (_, g))| (n.clone(), g.clone()))
                 .collect::<BTreeMap<_, _>>();
             for (name, gate) in &gates {
-                if matches!(gate, GateSpec::FreqPid { .. }) {
+                if matches!(gate, GateSpec::Vco { .. }) {
                     return Err(format!(
-                        "device '{name}': gate=freqpid needs --mode closed-loop (a fixed/pwm-scheduled \
+                        "device '{name}': gate=vco needs --mode closed-loop (a fixed/pwm-scheduled \
                          --mode transient run has no controller to drive the oscillator's frequency)"
                     ));
                 }
@@ -231,7 +223,7 @@ fn run() -> Result<(), String> {
                         GateState::Off
                     }
                 }
-                Some(GateSpec::FreqPid { .. }) | None => GateState::Off,
+                Some(GateSpec::Vco { .. }) | None => GateState::Off,
             };
             let trace = simulate_transient_with_mosfets(
                 &netlist,
@@ -258,8 +250,7 @@ fn run() -> Result<(), String> {
             dialect,
             &diodes,
             &mosfets,
-            &controllers,
-            &ref_schedule,
+            &blocks,
             shared_r_on,
             t_final,
             dt,
@@ -291,9 +282,9 @@ fn fixed_gate_states(
                         GateState::Off
                     }
                 }
-                GateSpec::FreqPid { .. } => {
+                GateSpec::Vco { .. } => {
                     return Err(format!(
-                        "device '{name}': gate=freqpid needs --mode closed-loop, not 'dc'"
+                        "device '{name}': gate=vco needs --mode closed-loop, not 'dc'"
                     ))
                 }
             };
@@ -302,115 +293,61 @@ fn fixed_gate_states(
         .collect()
 }
 
-/// `--mode closed-loop`: drives every `gate=freqpid` MOSFET from a single shared
-/// numerically-controlled oscillator under one `kind=pid` controller's command -- see this
-/// file's module doc comment for the device-file syntax.
+/// `--mode closed-loop`: runs the device file's `kind=const/pwl/sum/gain/pid/vco` block graph
+/// alongside the circuit, driving every `gate=vco` MOSFET from its named oscillator block —
+/// see this file's module doc comment for the full syntax and an LLC-converter example.
 #[allow(clippy::too_many_arguments)]
 fn run_closed_loop(
     netlist: &str,
     dialect: Dialect,
     diodes: &BTreeMap<String, Diode>,
     mosfets: &BTreeMap<String, (Mosfet, GateSpec)>,
-    controllers: &BTreeMap<String, PidConfig>,
-    ref_schedule: &[(String, f64, f64)],
+    blocks: &[BlockInstance],
     shared_r_on: f64,
     t_final: f64,
     dt: f64,
 ) -> Result<(), String> {
-    if controllers.len() != 1 {
-        return Err(format!(
-            "--mode closed-loop needs exactly one kind=pid controller in the devices file, found {}",
-            controllers.len()
-        ));
+    if blocks.is_empty() {
+        return Err(
+            "--mode closed-loop needs at least one block (kind=const/pwl/sum/gain/pid/vco) \
+             in the devices file"
+                .to_string(),
+        );
     }
-    let (ctrl_name, config) = controllers.iter().next().unwrap();
 
     let mosfets_only: BTreeMap<String, Mosfet> =
         mosfets.iter().map(|(n, (m, _))| (n.clone(), *m)).collect();
-    let mut phases: BTreeMap<String, f64> = BTreeMap::new();
+    let mut gates: BTreeMap<String, GateBinding> = BTreeMap::new();
     for (name, (_, gate)) in mosfets {
         match gate {
-            GateSpec::FreqPid { ctrl, phase } => {
-                if ctrl != ctrl_name {
-                    return Err(format!(
-                        "device '{name}': gate=freqpid references unknown controller '{ctrl}'"
-                    ));
-                }
-                phases.insert(name.clone(), *phase);
+            GateSpec::Vco { ctrl, phase, duty } => {
+                gates.insert(
+                    name.clone(),
+                    GateBinding {
+                        vco: ctrl.clone(),
+                        phase: *phase,
+                        duty: *duty,
+                    },
+                );
             }
             _ => {
                 return Err(format!(
-                    "device '{name}': --mode closed-loop needs every MOSFET to use gate=freqpid"
+                    "device '{name}': --mode closed-loop needs every MOSFET to use gate=vco"
                 ))
             }
         }
     }
-    if phases.is_empty() {
-        return Err("--mode closed-loop needs at least one gate=freqpid MOSFET".to_string());
+    if gates.is_empty() {
+        return Err("--mode closed-loop needs at least one gate=vco MOSFET".to_string());
     }
 
-    let mut schedule: Vec<(f64, f64)> = ref_schedule
-        .iter()
-        .filter(|(ctrl, _, _)| ctrl == ctrl_name)
-        .map(|(_, t, v)| (*t, *v))
-        .collect();
-    if schedule.is_empty() {
-        return Err(format!(
-            "controller '{ctrl_name}' has no kind=ref entries (need at least one reference point)"
-        ));
-    }
-    schedule.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-    let reference = move |t: f64| -> f64 {
-        let mut v = schedule[0].1;
-        for &(t_i, v_i) in &schedule {
-            if t_i <= t {
-                v = v_i;
-            } else {
-                break;
-            }
-        }
-        v
-    };
-
-    let pid = Pid::new(config.kp, config.ki, config.kd, config.n);
-    let controller = pid.to_state_space();
-    let measure_expr = format!("V({})", config.measure);
-    let measure = move |point: &dae_runtime::OperatingPoint| point.value(&measure_expr).unwrap();
-
-    let f_nom = config.f_nom;
-    let f_min = config.f_min;
-    let f_max = config.f_max;
-    let duty = config.duty;
-    let phase_acc = Cell::new(0.0f64);
-    let pwm = move |pid_output: f64, _t: f64| {
-        let freq = (f_nom - pid_output).clamp(f_min, f_max);
-        let p = (phase_acc.get() + freq * dt).rem_euclid(1.0);
-        phase_acc.set(p);
-        phases
-            .iter()
-            .map(|(name, offset)| {
-                let local = (p + offset).rem_euclid(1.0);
-                let state = if local < duty {
-                    GateState::On
-                } else {
-                    GateState::Off
-                };
-                (name.clone(), state)
-            })
-            .collect()
-    };
-    let output_clamp = (f_nom - f_max, f_nom - f_min);
-
-    let trace = simulate_closed_loop(
+    let trace = simulate_closed_loop_blocks(
         netlist,
         dialect,
         diodes,
         &mosfets_only,
-        &controller,
-        reference,
-        measure,
-        pwm,
-        output_clamp,
+        blocks,
+        &gates,
         shared_r_on,
         None,
         t_final,
@@ -418,13 +355,17 @@ fn run_closed_loop(
     )
     .map_err(|e| format!("{e:?}"))?;
 
+    let block_names: Vec<String> = blocks.iter().map(|b| b.name.clone()).collect();
     if let Some((_, first, _)) = trace.first() {
-        println!("t,{},freq", first.unknowns.join(","));
+        println!("t,{},{}", first.unknowns.join(","), block_names.join(","));
     }
-    for (t, point, pid_output) in &trace {
+    for (t, point, outputs) in &trace {
         let values: Vec<String> = point.x.iter().map(|v| v.to_string()).collect();
-        let freq = f_nom - pid_output;
-        println!("{t},{},{freq}", values.join(","));
+        let block_values: Vec<String> = block_names
+            .iter()
+            .map(|name| outputs.get(name).copied().unwrap_or(f64::NAN).to_string())
+            .collect();
+        println!("{t},{},{}", values.join(","), block_values.join(","));
     }
 
     Ok(())
@@ -439,8 +380,17 @@ fn print_row(t: f64, point: &dae_runtime::OperatingPoint) {
     println!("{t},{}", values.join(","));
 }
 
-fn parse_devices(text: &str) -> Result<BTreeMap<String, Kind>, String> {
-    let mut result = BTreeMap::new();
+/// Parses a `<signal>` field value: `meas:<node>` for a circuit measurement, anything else is
+/// another block's name.
+fn parse_signal(text: &str) -> Signal {
+    match text.strip_prefix("meas:") {
+        Some(node) => Signal::Measure(node.to_string()),
+        None => Signal::Block(text.to_string()),
+    }
+}
+
+fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
+    let mut result = Vec::new();
     for (line_number, raw_line) in text.lines().enumerate() {
         let line = raw_line.trim();
         if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
@@ -511,9 +461,10 @@ fn parse_devices(text: &str) -> Result<BTreeMap<String, Kind>, String> {
                         freq_hz: get("freq")?,
                         duty: get("duty")?,
                     },
-                    Some("freqpid") => GateSpec::FreqPid {
+                    Some("vco") => GateSpec::Vco {
                         ctrl: get_str("ctrl")?,
                         phase: get("phase")?,
+                        duty: get("duty")?,
                     },
                     Some(other) => {
                         return Err(format!(
@@ -528,22 +479,96 @@ fn parse_devices(text: &str) -> Result<BTreeMap<String, Kind>, String> {
                     gate,
                 }
             }
-            "pid" => Kind::Pid(PidConfig {
-                kp: get("kp")?,
-                ki: get("ki")?,
-                kd: get("kd")?,
-                n: get("n")?,
-                measure: get_str("measure")?,
-                f_nom: get("f_nom")?,
-                f_min: get("f_min")?,
-                f_max: get("f_max")?,
-                duty: get("duty")?,
+            "const" => Kind::Block(BlockInstance {
+                name: name.to_string(),
+                kind: BlockKind::Const(get("value")?),
+                inputs: Vec::new(),
             }),
-            "ref" => Kind::Ref {
-                ctrl: get_str("ctrl")?,
-                t: get("t")?,
-                v: get("v")?,
-            },
+            "pwl" => {
+                let points_text = get_str("points")?;
+                let mut points = Vec::new();
+                for point in points_text.split(',') {
+                    let (t_str, v_str) = point.split_once(':').ok_or_else(|| {
+                        format!(
+                            "line {}: device '{name}' field 'points' entry '{point}' is not \
+                             '<t>:<v>'",
+                            line_number + 1
+                        )
+                    })?;
+                    let t: f64 = t_str.parse().map_err(|_| {
+                        format!(
+                            "line {}: device '{name}' points entry '{point}': '{t_str}' is \
+                             not a number",
+                            line_number + 1
+                        )
+                    })?;
+                    let v: f64 = v_str.parse().map_err(|_| {
+                        format!(
+                            "line {}: device '{name}' points entry '{point}': '{v_str}' is \
+                             not a number",
+                            line_number + 1
+                        )
+                    })?;
+                    points.push((t, v));
+                }
+                points.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                Kind::Block(BlockInstance {
+                    name: name.to_string(),
+                    kind: BlockKind::Pwl(points),
+                    inputs: Vec::new(),
+                })
+            }
+            "sum" => {
+                let inputs: Vec<Signal> = get_str("inputs")?.split(',').map(parse_signal).collect();
+                let signs: Vec<f64> = get_str("signs")?
+                    .split(',')
+                    .map(|s| {
+                        s.parse::<f64>().map_err(|_| {
+                            format!(
+                                "line {}: device '{name}' field 'signs' entry '{s}' is not a \
+                                 number",
+                                line_number + 1
+                            )
+                        })
+                    })
+                    .collect::<Result<_, _>>()?;
+                if inputs.len() != signs.len() {
+                    return Err(format!(
+                        "line {}: device '{name}': 'inputs' has {} entries but 'signs' has {} \
+                         (need one sign per input)",
+                        line_number + 1,
+                        inputs.len(),
+                        signs.len()
+                    ));
+                }
+                Kind::Block(BlockInstance {
+                    name: name.to_string(),
+                    kind: BlockKind::Sum(signs),
+                    inputs,
+                })
+            }
+            "gain" => Kind::Block(BlockInstance {
+                name: name.to_string(),
+                kind: BlockKind::Gain(get("k")?),
+                inputs: vec![parse_signal(&get_str("in")?)],
+            }),
+            "pid" => {
+                let pid = Pid::new(get("kp")?, get("ki")?, get("kd")?, get("n")?);
+                let clamp = (get("clamp_lo")?, get("clamp_hi")?);
+                Kind::Block(BlockInstance {
+                    name: name.to_string(),
+                    kind: BlockKind::Pid { pid, clamp },
+                    inputs: vec![parse_signal(&get_str("in")?)],
+                })
+            }
+            "vco" => {
+                let vco = Vco::new(get("f_min")?, get("f_max")?);
+                Kind::Block(BlockInstance {
+                    name: name.to_string(),
+                    kind: BlockKind::Vco(vco),
+                    inputs: vec![parse_signal(&get_str("in")?)],
+                })
+            }
             other => {
                 return Err(format!(
                     "line {}: unknown device kind '{other}'",
@@ -551,7 +576,7 @@ fn parse_devices(text: &str) -> Result<BTreeMap<String, Kind>, String> {
                 ))
             }
         };
-        result.insert(name.to_string(), entry);
+        result.push((name.to_string(), entry));
     }
     Ok(result)
 }

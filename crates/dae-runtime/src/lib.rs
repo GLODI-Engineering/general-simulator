@@ -24,10 +24,15 @@
 //! (`w1_k = V_k - v_breakdown_k + z1_k`, `w2_k = v_th_k - V_k + z2_k`) gives exactly the LCP
 //! `(M, q)` this crate builds and hands to `lcp_solver::solve`.
 
+mod block_graph;
 mod closed_loop;
 mod linsolve;
 mod topology;
 
+pub use block_graph::{
+    simulate_closed_loop_blocks, BlockInstance, BlockKind, ClosedLoopBlocksStep, GateBinding,
+    Signal,
+};
 pub use closed_loop::{sawtooth_carrier, simulate_closed_loop};
 
 use std::collections::BTreeMap;
@@ -71,6 +76,11 @@ pub enum DaeError {
     Linear(SingularMatrix),
     Lcp(LcpError),
     UnknownDiodeInput(String),
+    /// A [`closed_loop::BlockInstance`]'s input, or a [`closed_loop::GateBinding`], refers to
+    /// a block name that either doesn't exist or hasn't been declared yet (block graph
+    /// evaluation is a single forward pass in declaration order, so every input must name an
+    /// earlier block, a circuit measurement, or itself be a source block with no inputs).
+    UnknownBlockInput(String),
 }
 
 /// Solves the DC operating point of a netlist containing linear devices plus any number of

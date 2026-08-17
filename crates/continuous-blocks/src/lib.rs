@@ -1,6 +1,12 @@
 //! Continuous-time block-diagram elements — transfer function, state-space, PID, integrator,
-//! filtered derivative, and stateless math ops — matching the standard `Continuous` and
-//! `Math Operations` block sets common to block-diagram simulation tools.
+//! filtered derivative, voltage-controlled oscillator, and stateless math ops (gain, sum,
+//! product, saturation, ramp-to-PWM) — matching the standard `Continuous`/`Math Operations`
+//! block sets common to block-diagram simulation tools (a reference tool, a reference tool). Each block does one
+//! job and is meant to be wired to the others by the caller — an error signal is a `Sum`
+//! block's output, not something a controller computes internally, and a frequency-modulated
+//! PWM carrier is `Pid -> Gain -> Vco`, not a single fused "closed loop" function. See
+//! `dae-runtime`'s `closed_loop` module for how a circuit's MOSFET gates get wired to a chain
+//! of these blocks.
 //!
 //! Every dynamic block compiles to a [`StateSpace`] — the same descriptor-DAE shape
 //! `elspice-mna` already uses for circuits (`A x + K dx/dt = B u`, with `K` here called `e`
@@ -22,8 +28,10 @@ pub mod math_ops;
 mod pid;
 mod state_space;
 mod transfer_function;
+mod vco;
 
 pub use dynamics::{derivative_filtered, integrator};
 pub use pid::Pid;
 pub use state_space::{SingularMatrix, StateSpace};
 pub use transfer_function::{TransferFunction, TransferFunctionError};
+pub use vco::Vco;
