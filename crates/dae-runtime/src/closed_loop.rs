@@ -40,6 +40,23 @@ pub fn sawtooth_carrier(t: f64, freq_hz: f64) -> f64 {
 /// (system rebuilt per step, trapezoidal with backward-Euler fallback on any diode-segment or
 /// gate-state change).
 ///
+/// `output_clamp = (lo, hi)` is the controller output's valid (unsaturated) range — typically
+/// `(0.0, 1.0)` for a duty command. **Two-sided conditional-integration anti-windup** is
+/// applied against it: if a tentative controller step would push the output further past
+/// `lo` or `hi` while the current error is still driving it that direction, the controller's
+/// internal state is *not* advanced that step (frozen at its previous value) rather than
+/// integrating further into a saturation it may struggle to recover from. This directly
+/// addresses a documented real failure mode this project validated against: a Xyce/ngspice
+/// closed-loop boost-PI experiment
+/// (`internal-archive`'s `experiments/converters-benchmark-boost-pid/`,
+/// `gotchas/xyce-boost-pi-nonlinear-failure-integrator-windup.md`) used *one-sided*
+/// anti-windup and, per that experiment's own conclusion, never actually achieved working
+/// closed-loop regulation — the integrator wound down past the point of recovery during
+/// startup overshoot, the PWM output floored at zero, and the converter stopped switching for
+/// the rest of the run, with the misleadingly-plausible final voltage reading being nothing
+/// more than the output capacitor passively discharging through the load. Symmetric
+/// (two-sided) anti-windup is the standard, well-known fix for exactly this failure mode.
+///
 /// Returns, per step: `(t, OperatingPoint, controller_output)`.
 #[allow(clippy::too_many_arguments)]
 pub fn simulate_closed_loop(
@@ -51,6 +68,7 @@ pub fn simulate_closed_loop(
     reference: f64,
     measure: impl Fn(&OperatingPoint) -> f64,
     pwm: impl Fn(f64, f64) -> BTreeMap<String, GateState>,
+    output_clamp: (f64, f64),
     shared_r_on: f64,
     x_initial: Option<&[f64]>,
     t_final: f64,
@@ -94,8 +112,21 @@ pub fn simulate_closed_loop(
 
         let measured = measure(&point_prev);
         let error = [reference - measured];
-        controller_x = controller.rk4_step(&controller_x, &error, dt);
-        let controller_output = controller.output(&controller_x, &error)[0];
+
+        let (lo, hi) = output_clamp;
+        let tentative_x = controller.rk4_step(&controller_x, &error, dt);
+        let tentative_output = controller.output(&tentative_x, &error)[0];
+        let saturating_further = (tentative_output >= hi && error[0] > 0.0)
+            || (tentative_output <= lo && error[0] < 0.0);
+        let controller_output = if saturating_further {
+            // Freeze: don't advance the controller's state further into a saturation the
+            // current error is still driving it toward (two-sided conditional-integration
+            // anti-windup -- see this function's doc comment for why one-sided isn't enough).
+            controller.output(&controller_x, &error)[0].clamp(lo, hi)
+        } else {
+            controller_x = tentative_x;
+            tentative_output
+        };
 
         let gate_states = pwm(controller_output, t);
         let states: BTreeMap<String, (Mosfet, GateState)> = mosfets

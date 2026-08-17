@@ -91,18 +91,32 @@ diode segments differ from the previous step's (trapezoidal's derivation needs `
 satisfy the circuit's algebraic constraints exactly — the DAE analog of "needs consistent
 initial conditions" — which only a just-completed backward-Euler-or-DC step guarantees),
 trapezoidal otherwise. Verified by convergence order (halving `dt`, not comparing one-`dt`
-error magnitudes): backward Euler roughly halves error, trapezoidal roughly quarters it. `simulate_transient_with_mosfets` extends this to MOSFETs with a caller-supplied time-varying
+error magnitudes): backward Euler roughly halves error, trapezoidal roughly quarters it.
+
+`simulate_transient_with_mosfets` extends this to MOSFETs with a caller-supplied time-varying
 gate signal (PWM), rebuilding the symbolic `elspice-mna` system every step (a gate transition
 is a structural stamp change, not just a numeric one) and forcing backward Euler on any step
 whose gate states differ from the previous step's, on top of the existing diode-segment-change
-fallback. `dae_runtime::simulate_closed_loop` wires a `continuous-blocks` controller (a compiled `Pid`)
+fallback.
+
+`dae_runtime::simulate_closed_loop` wires a `continuous-blocks` controller (a compiled `Pid`)
 into a real closed loop around a circuit's MOSFET gate(s), as a sampled-data co-simulation
 (controller reads the previous step's measured output, steps its own RK4 integrator, decides
 this step's gate states via a caller-supplied PWM comparator) rather than a fully implicit
 unified system — deliberately: this is how a real digital PID+PWM controller actually works,
-not an approximation. Verified via the standard "integral control zeroes steady-state error"
-property on a chopper-fed RC regulator, not by hand-deriving the exact switching transient
-(not analytically tractable for any real switching converter).
+not an approximation. It also applies **two-sided conditional-integration anti-windup**
+against a caller-supplied output range: if a tentative controller step would push the output
+further past either saturation rail while the current error still drives it that way, the
+controller's state is frozen rather than advanced. This directly fixes a documented real
+failure mode: a Xyce/ngspice closed-loop boost-PI experiment in the sibling
+`internal-archive` repo (`experiments/converters-benchmark-boost-pid`,
+`gotchas/xyce-boost-pi-nonlinear-failure-integrator-windup.md`) used one-sided anti-windup and,
+per that experiment's own conclusion, never actually achieved working regulation — the
+integrator wound down past recovery during startup overshoot, PWM floored at zero, and the
+converter stopped switching for the rest of the run, with the misleadingly-plausible final
+voltage reading being nothing more than the output capacitor discharging through the load.
+`elspice-pwl`'s two-sided version, at correctly-scaled gains, achieves real sustained
+regulation on the identical circuit spec — see `crates/dae-runtime/tests/closed_loop_boost_anti_windup.rs`.
 
 `crates/elspice-pwl-cli` (binary `elspice-pwl`) is a thin netlist-in/CSV-waveform-out runner
 over `dae-runtime`'s public API, with a small hand-rolled device-params file format (no
@@ -138,6 +152,7 @@ written direct piecewise formula at every segment and both breakpoints
 (`src/diode.rs` unit tests), and a hand-built LCP for the PCNR paper's two-diode circuit
 (`tests/two_diode_circuit.rs`) matches two hand-derived operating points exactly — the first
 proof the whole approach reproduces a real circuit's answer with no Newton-Raphson anywhere.
+
 `crates/dae-runtime` (Milestone 3) closes the loop for diodes: `elspice-mna` was extended
 (sibling repo, commit `9d190db`) to stamp `'D'` elements as a fixed symbolic conductance plus a
 Norton current source, and `dae-runtime` folds any netlist's linear part plus any number of
@@ -175,6 +190,9 @@ backward Euler after the mandatory first step and after any LCP-resolved mode ch
 verified against an algebraic circuit's exact DC answer at every step, a plain RC charge curve,
 an RC-through-a-diode circuit against a hand-derived closed-form solution combining both
 mechanisms, and directly by convergence order (backward Euler ~halves error as `dt` halves,
-trapezoidal ~quarters it). Still diode-only (no MOSFET/PWM transient variant), and
-`continuous-blocks` isn't wired into the global system yet — see the journal for the reasoning
+trapezoidal ~quarters it). `simulate_transient_with_mosfets`, `simulate_closed_loop`, and
+`elspice-pwl-cli` (all described in "Timestep loop" above) closed every gap this paragraph
+used to note as still open — see the journal for the full account, including the two-sided
+anti-windup fix and the cross-simulator validation against Xyce/ngspice on buck, boost
+(open- and closed-loop), and LLC — rather than repeating it here.
 behind each of those scope choices. No `elspice-pwl-cli` yet.

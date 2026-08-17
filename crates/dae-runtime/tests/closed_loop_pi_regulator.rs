@@ -74,6 +74,7 @@ fn pi_controller_regulates_output_to_reference_at_steady_state() {
         reference,
         measure,
         pwm,
+        (0.0, 1.0),
         0.1,
         None,
         t_final,
