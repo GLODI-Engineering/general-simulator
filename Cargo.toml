@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/lcp-solver", "crates/pwl-devices"]
+members = ["crates/lcp-solver", "crates/pwl-devices", "crates/dae-runtime"]
 
 [workspace.package]
 edition = "2021"

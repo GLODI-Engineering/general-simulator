@@ -108,7 +108,15 @@ written direct piecewise formula at every segment and both breakpoints
 (`src/diode.rs` unit tests), and a hand-built LCP for the PCNR paper's two-diode circuit
 (`tests/two_diode_circuit.rs`) matches two hand-derived operating points exactly — the first
 proof the whole approach reproduces a real circuit's answer with no Newton-Raphson anywhere.
-No MOSFET model, no `continuous-blocks`, no `dae-runtime`, no `elspice-pwl-cli` yet — those
-are Milestones 3-5, and Milestone 3 has an open cross-repo decision (extend `elspice-mna`'s
-public API vs. reimplement minimal linear stamping locally) flagged in the journal rather than
-decided unilaterally.
+`crates/dae-runtime` (Milestone 3) closes the loop for diodes: `elspice-mna` was extended
+(sibling repo, commit `9d190db`) to stamp `'D'` elements as a fixed symbolic conductance plus a
+Norton current source, and `dae-runtime` folds any netlist's linear part plus any number of
+diodes into one LCP via a generic Thevenin-style reduction (fix every diode's conductance at
+its canonical reference slope, solve once for a baseline operating point and once per diode for
+a sensitivity vector, express every diode's voltage as an affine function of every diode's `z`
+variables including cross-coupling, substitute into the LCP). Verified by reproducing
+Milestone 2's hand-derived two-diode numbers through real netlist parsing instead of a
+hand-typed `(M, q)` — see `crates/dae-runtime/tests/two_diode_via_netlist.rs`.
+
+Still a DC-operating-point solve only (no `K`/storage, no transient integration). No MOSFET
+model, no `continuous-blocks`, no `elspice-pwl-cli` yet — Milestones 4-6.

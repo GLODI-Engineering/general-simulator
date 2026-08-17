@@ -3,6 +3,23 @@
 version = 4
 
 [[package]]
+name = "dae-runtime"
+version = "0.1.0"
+dependencies = [
+ "elspice-mna",
+ "lcp-solver",
+ "pwl-devices",
+ "spice-core",
+]
+
+[[package]]
+name = "elspice-mna"
+version = "0.1.0"
+dependencies = [
+ "spice-core",
+]
+
+[[package]]
 name = "lcp-solver"
 version = "0.1.0"
 
@@ -12,3 +29,7 @@ version = "0.1.0"
 dependencies = [
  "lcp-solver",
 ]
+
+[[package]]
+name = "spice-core"
+version = "0.1.0"
