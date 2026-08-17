@@ -166,25 +166,34 @@ pub fn simulate_transient(
         Some(x) => x.to_vec(),
         None => vec![0.0; system.order()],
     };
+    let mut x_prev_prev: Option<Vec<f64>> = None;
     let mut prev_diode_raw_ioff: BTreeMap<String, f64> = BTreeMap::new();
     let mut prev_segments: Option<Vec<Segment>> = None;
+    let mut ringing_cooldown: u32 = 0;
 
     let steps = (t_final / dt).round() as usize;
     let mut trace = Vec::with_capacity(steps);
     let mut t = 0.0;
     for step_index in 0..steps {
         t += dt;
-        let point = step_with_fallback(
+        let forced = step_index == 0 || ringing_cooldown > 0;
+        let (point, used_backward_euler) = step_with_fallback(
             &system,
             source,
             dialect,
             diodes,
+            x_prev_prev.as_deref(),
             &x_prev,
             dt,
             &prev_diode_raw_ioff,
             &prev_segments,
-            step_index == 0,
+            forced,
         )?;
+        if used_backward_euler && !forced {
+            ringing_cooldown = RINGING_COOLDOWN_STEPS;
+        } else if ringing_cooldown > 0 {
+            ringing_cooldown = ringing_cooldown.saturating_sub(1);
+        }
 
         prev_segments = Some(classify_segments(&point));
         prev_diode_raw_ioff = point
@@ -193,7 +202,7 @@ pub fn simulate_transient(
             .cloned()
             .zip(point.diode_raw_ioff.iter().copied())
             .collect();
-        x_prev = point.x.clone();
+        x_prev_prev = Some(std::mem::replace(&mut x_prev, point.x.clone()));
         trace.push((t, point));
     }
     Ok(trace)
@@ -222,23 +231,73 @@ fn classify_segments(point: &OperatingPoint) -> Vec<Segment> {
         .collect()
 }
 
+/// Detects trapezoidal "ringing": trapezoidal integration is A-stable (bounded) but not
+/// L-stable, so a very lightly damped mode (e.g. a switch node left nearly floating during
+/// MOSFET dead time, with only tiny leakage conductance) doesn't decay under it — it
+/// oscillates at the Nyquist frequency (sign-flipping every single step) with roughly
+/// constant amplitude instead. Detected as three consecutive values of the same unknown
+/// alternating in sign (`x_prev_prev`, `x_prev`, `trial` share the outer two signs, opposite
+/// the middle one) with the magnitude not shrinking step to step — the direct signature of a
+/// sustained oscillation, as opposed to a legitimate sign change while settling (which
+/// shrinks, not sustains, in magnitude) or ordinary numerical noise near zero (excluded by
+/// the noise floor). Found and root-caused via `elspice-pwl`'s LLC validation
+/// (`crates/dae-runtime/examples/llc_validation.rs`): the switching node's voltage oscillated
+/// between roughly +/-3000V for the entire ~200ns MOSFET dead-time window every period, while
+/// every other tracked quantity (notably the actual circuit output) stayed smooth and
+/// physically reasonable throughout — falling back to backward Euler (which has no such
+/// weakness) the instant this is detected fixes it, consistent with backward Euler already
+/// being this crate's answer to every other kind of transient stiffness.
+fn is_ringing(x_prev_prev: &[f64], x_prev: &[f64], trial: &[f64]) -> bool {
+    const NOISE_FLOOR: f64 = 1e-9;
+    x_prev_prev
+        .iter()
+        .zip(x_prev)
+        .zip(trial)
+        .any(|((&a, &b), &c)| {
+            if a.abs() < NOISE_FLOOR || b.abs() < NOISE_FLOOR || c.abs() < NOISE_FLOOR {
+                return false;
+            }
+            let alternating = (a > 0.0) == (c > 0.0) && (a > 0.0) != (b > 0.0);
+            alternating && c.abs() >= b.abs() * 0.9
+        })
+}
+
+/// How many additional steps to keep using backward Euler after a ringing catch, before
+/// trusting trapezoidal again. A single corrective backward-Euler step pulls the ringing
+/// mode's *value* back to something reasonable, but doesn't fully re-establish it as "settled"
+/// in the sense trapezoidal's own derivation needs (see [`Scheme::Trapezoidal`]'s doc comment
+/// on consistent initial conditions) — resuming trapezoidal immediately was observed to let a
+/// smaller residual oscillation resume and drift to a stale-but-stable wrong plateau, rather
+/// than fully recovering. A short cooldown of plain, unconditionally-stable backward-Euler
+/// steps lets the correction actually settle first.
+const RINGING_COOLDOWN_STEPS: u32 = 3;
+
 /// Solves one timestep, choosing between [`Scheme::Trapezoidal`] and [`Scheme::BackwardEuler`]
 /// the same lagging way [`simulate_transient`] and [`simulate_transient_with_mosfets`] both
-/// need: `force_backward_euler` covers reasons known *before* solving (the very first step, or
-/// — for the MOSFET variant — a gate state that just changed); a diode segment change is only
-/// detectable *after* trying trapezoidal, so that case redoes the step with backward Euler.
+/// need: `force_backward_euler` covers reasons known *before* solving (the very first step, a
+/// gate state that just changed, or an active [`RINGING_COOLDOWN_STEPS`] cooldown); a diode
+/// segment change and trapezoidal ringing (see [`is_ringing`]) are only detectable *after*
+/// trying trapezoidal, so either one redoes the step with backward Euler. `x_prev_prev` (the
+/// state two steps back) is `None` for the first two steps of a run, when ringing can't yet be
+/// detected — the existing `force_backward_euler` on the very first step, plus ringing needing
+/// at least one full oscillation to show its signature, means this is never a gap in practice.
+///
+/// Returns `(point, used_backward_euler)` — callers use the flag to drive a
+/// [`RINGING_COOLDOWN_STEPS`]-step cooldown after any backward-Euler fallback (not just a
+/// ringing-triggered one — a segment or gate change deserves the same settling courtesy).
 #[allow(clippy::too_many_arguments)]
 fn step_with_fallback(
     system: &MnaSystem,
     source: &str,
     dialect: Dialect,
     diodes: &BTreeMap<String, Diode>,
+    x_prev_prev: Option<&[f64]>,
     x_prev: &[f64],
     dt: f64,
     prev_diode_raw_ioff: &BTreeMap<String, f64>,
     prev_segments: &Option<Vec<Segment>>,
     force_backward_euler: bool,
-) -> Result<OperatingPoint, DaeError> {
+) -> Result<(OperatingPoint, bool), DaeError> {
     if force_backward_euler {
         return fold_and_solve(
             system,
@@ -246,7 +305,8 @@ fn step_with_fallback(
             dialect,
             diodes,
             &Scheme::BackwardEuler { x_prev, dt },
-        );
+        )
+        .map(|point| (point, true));
     }
     let trial = fold_and_solve(
         system,
@@ -260,9 +320,9 @@ fn step_with_fallback(
         },
     )?;
     let trial_segments = classify_segments(&trial);
-    if Some(&trial_segments) == prev_segments.as_ref() {
-        Ok(trial)
-    } else {
+    let segments_changed = Some(&trial_segments) != prev_segments.as_ref();
+    let ringing = x_prev_prev.is_some_and(|xpp| is_ringing(xpp, x_prev, &trial.x));
+    if segments_changed || ringing {
         fold_and_solve(
             system,
             source,
@@ -270,6 +330,9 @@ fn step_with_fallback(
             diodes,
             &Scheme::BackwardEuler { x_prev, dt },
         )
+        .map(|point| (point, true))
+    } else {
+        Ok((trial, false))
     }
 }
 
@@ -340,9 +403,11 @@ pub fn simulate_transient_with_mosfets(
         Some(x) => x.to_vec(),
         None => vec![0.0; system0.order()],
     };
+    let mut x_prev_prev: Option<Vec<f64>> = None;
     let mut prev_diode_raw_ioff: BTreeMap<String, f64> = BTreeMap::new();
     let mut prev_segments: Option<Vec<Segment>> = None;
     let mut prev_gate_states: Option<BTreeMap<String, GateState>> = None;
+    let mut ringing_cooldown: u32 = 0;
 
     let steps = (t_final / dt).round() as usize;
     let mut trace = Vec::with_capacity(steps);
@@ -355,20 +420,27 @@ pub fn simulate_transient_with_mosfets(
             .map(|(name, (_, state))| (name.clone(), *state))
             .collect();
         let gate_changed = prev_gate_states.as_ref() != Some(&gate_states);
+        let forced = step_index == 0 || gate_changed || ringing_cooldown > 0;
 
         let (system, all_diodes) =
             build_with_mosfets(source, dialect, diodes, &states, shared_r_on)?;
-        let point = step_with_fallback(
+        let (point, used_backward_euler) = step_with_fallback(
             &system,
             source,
             dialect,
             &all_diodes,
+            x_prev_prev.as_deref(),
             &x_prev,
             dt,
             &prev_diode_raw_ioff,
             &prev_segments,
-            step_index == 0 || gate_changed,
+            forced,
         )?;
+        if used_backward_euler && !forced {
+            ringing_cooldown = RINGING_COOLDOWN_STEPS;
+        } else if ringing_cooldown > 0 {
+            ringing_cooldown = ringing_cooldown.saturating_sub(1);
+        }
 
         prev_segments = Some(classify_segments(&point));
         prev_gate_states = Some(gate_states);
@@ -378,7 +450,7 @@ pub fn simulate_transient_with_mosfets(
             .cloned()
             .zip(point.diode_raw_ioff.iter().copied())
             .collect();
-        x_prev = point.x.clone();
+        x_prev_prev = Some(std::mem::replace(&mut x_prev, point.x.clone()));
         trace.push((t, point));
     }
     Ok(trace)

@@ -10,23 +10,40 @@
 //! the other simulators' numbers, not a pass/fail assertion.
 //!
 //! Result recorded when this was last run (see
-//! `internal-archive/experiments/elspice-pwl-buck-vs-xyce-ngspice/README.md`'s
-//! follow-up entry for the full writeup): avg `Vout` (last 90% of the run) landed within
-//! ~9% of ngspice's own steady-state average -- a real topology-complexity increase over
-//! buck/boost's <1% spread, plausible given a resonant tank is far more sensitive to exact
-//! component/parasitic modeling than a simple hard-switched filter, but still the right
-//! ballpark, not a different regime.
+//! `internal-archive/experiments/elspice-pwl-boost-llc-vs-xyce-ngspice/README.md`
+//! for the full writeup): avg `Vout` (last 90% of the run) = 33.70V, a ~6.3% spread against
+//! ngspice/Xyce's own (tightly mutually agreeing, <0.03% apart) ~31.69V, down from ~8.7% before
+//! the fix below. The fix resolves the dead-time spike itself; the remaining spread is a
+//! separate, pre-existing parameter-fitting gap (see this file's PWL device comments below and
+//! the README's Next Steps) unrelated to the spike.
 //!
-//! One genuine numerical finding worth being upfront about: at the exact instant both
-//! switches are in dead time (neither gated on), node `vx` has essentially zero conductance
-//! to any reference from the switch stamps themselves (only the resonant tank's `Cr`
-//! provides any path at all), and the backward-Euler step forced right at that gate
-//! transition produces a large (thousands of volts) one-step spike in `V(vx)` before
-//! immediately correcting on the next step. `V(vout)` itself is not visibly perturbed by
-//! it (checked directly, not assumed). A tiny nonzero `g_off` leakage on the switch's body
-//! diode reduces the spike's magnitude but does not eliminate it, so this is not treated as
-//! solved here -- it's recorded as a genuine known limitation for very low-conductance
-//! dead-time nodes, worth investigating further in a future session.
+//! ## Dead-time voltage spike -- root-caused and fixed
+//!
+//! During dead time (both switches gated off simultaneously, twice per switching period),
+//! node `vx` had essentially zero conductance to any reference from the switch stamps
+//! themselves (only the resonant tank's `Cr` coupled to it at all) -- a genuinely
+//! near-floating node. Under [`dae_runtime::simulate_transient_with_mosfets`]'s trapezoidal
+//! integration, that near-zero damping triggered classic **trapezoidal ringing** (A-stable
+//! but not L-stable: `V(vx)` oscillated between roughly +/-3000V, sign-flipping every single
+//! step, while every other tracked quantity stayed smooth throughout).
+//!
+//! Two things fixed this, one at each level:
+//! 1. **Circuit level (the actual fix)**: added the `Rs1`/`Cs1`, `Rs2`/`Cs2` RC snubbers --
+//!    the *same* ones the reference Xyce/ngspice decks already have and this translation had
+//!    originally dropped. A real MOSFET always has nonzero output capacitance (`Coss`); an
+//!    RC snubber approximates it, giving the switching node a genuine charge-storage anchor
+//!    during dead time (the capacitor) plus real damping to dissipate the resulting ringing
+//!    (the resistor) -- exactly why real converters use snubbers in hardware, not just in
+//!    simulation. With them in place, `V(vx)` transitions *smoothly and monotonically*
+//!    between rails during dead time (a physically correct RC-discharge-shaped ramp), no
+//!    oscillation at all.
+//! 2. **Solver level (defense in depth, not a substitute for the above)**: `dae-runtime` now
+//!    detects trapezoidal ringing directly (three consecutive values of the same unknown
+//!    alternating in sign without shrinking in magnitude) and falls back to backward Euler
+//!    for a short cooldown when it happens, the same way it already does for a diode-segment
+//!    or gate-state change. This bounds the damage for any circuit that still lacks adequate
+//!    damping at some node, but a circuit with real snubbers/parasitic capacitance (like this
+//!    one, now) shouldn't need to lean on it.
 
 use std::collections::BTreeMap;
 use std::time::Instant;
@@ -39,6 +56,10 @@ fn main() {
     let netlist = "V1 vin 0 400\n\
                     D1 vin vx mosfetmodel\n\
                     D2 vx 0 mosfetmodel\n\
+                    Rs1 vin vx 1k\n\
+                    Cs1 vin vx 1n\n\
+                    Rs2 vx 0 1k\n\
+                    Cs2 vx 0 1n\n\
                     Cr vx vr 22n\n\
                     Lr vr vp 100u\n\
                     Lm vp 0 400u\n\

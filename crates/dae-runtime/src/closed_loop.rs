@@ -22,7 +22,10 @@ use continuous_blocks::StateSpace;
 use pwl_devices::{Diode, Mosfet};
 use spice_core::Dialect;
 
-use crate::{classify_segments, step_with_fallback, DaeError, GateState, OperatingPoint, Segment};
+use crate::{
+    classify_segments, step_with_fallback, DaeError, GateState, OperatingPoint, Segment,
+    RINGING_COOLDOWN_STEPS,
+};
 
 /// A free-running sawtooth PWM carrier in `[0, 1)` at frequency `freq_hz`. Compare a duty
 /// command (also `[0, 1]`) against this to decide gate state: on while the carrier is below
@@ -86,23 +89,26 @@ pub fn simulate_closed_loop(
         Some(x) => x.to_vec(),
         None => vec![0.0; system0.order()],
     };
-    let mut point_prev = step_with_fallback(
+    let (mut point_prev, _) = step_with_fallback(
         &system0,
         source,
         dialect,
         &all_diodes0,
+        None,
         &x_prev,
         dt,
         &BTreeMap::new(),
         &None,
         true,
     )?;
-    x_prev = point_prev.x.clone();
+    let mut x_prev_prev: Option<Vec<f64>> =
+        Some(std::mem::replace(&mut x_prev, point_prev.x.clone()));
 
     let mut controller_x = vec![0.0; controller.states()];
     let mut prev_diode_raw_ioff: BTreeMap<String, f64> = BTreeMap::new();
     let mut prev_segments: Option<Vec<Segment>> = None;
     let mut prev_gate_states: Option<BTreeMap<String, GateState>> = None;
+    let mut ringing_cooldown: u32 = 0;
 
     let steps = (t_final / dt).round() as usize;
     let mut trace = Vec::with_capacity(steps);
@@ -139,20 +145,27 @@ pub fn simulate_closed_loop(
             })
             .collect();
         let gate_changed = prev_gate_states.as_ref() != Some(&gate_states);
+        let forced = step_index == 0 || gate_changed || ringing_cooldown > 0;
 
         let (system, all_diodes) =
             crate::build_with_mosfets(source, dialect, diodes, &states, shared_r_on)?;
-        let point = step_with_fallback(
+        let (point, used_backward_euler) = step_with_fallback(
             &system,
             source,
             dialect,
             &all_diodes,
+            x_prev_prev.as_deref(),
             &x_prev,
             dt,
             &prev_diode_raw_ioff,
             &prev_segments,
-            step_index == 0 || gate_changed,
+            forced,
         )?;
+        if used_backward_euler && !forced {
+            ringing_cooldown = RINGING_COOLDOWN_STEPS;
+        } else if ringing_cooldown > 0 {
+            ringing_cooldown = ringing_cooldown.saturating_sub(1);
+        }
 
         prev_segments = Some(classify_segments(&point));
         prev_gate_states = Some(gate_states);
@@ -162,7 +175,7 @@ pub fn simulate_closed_loop(
             .cloned()
             .zip(point.diode_raw_ioff.iter().copied())
             .collect();
-        x_prev = point.x.clone();
+        x_prev_prev = Some(std::mem::replace(&mut x_prev, point.x.clone()));
         point_prev = point.clone();
         trace.push((t, point, controller_output));
     }
