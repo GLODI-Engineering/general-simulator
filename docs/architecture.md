@@ -100,5 +100,15 @@ No Newton loop, no voltage limiting, anywhere in this sequence.
 (`crates/lcp-solver/tests/fixtures.rs`): a trivial no-pivot case, a single-pivot scalar case,
 a multi-pivot positive-definite case, a degenerate boundary case, a general
 solution-satisfies-its-own-definition sweep, and a genuinely infeasible case that correctly
-reports ray termination rather than fabricating an answer. No circuit-facing crate exists yet
-— `pwl-devices`, `continuous-blocks`, `dae-runtime`, and `elspice-pwl-cli` are Milestones 2-5.
+reports ray termination rather than fabricating an answer.
+
+`crates/pwl-devices` (Milestone 2) implements a 3-segment PWL diode via the Chua-Lin canonical
+decomposition described above. Verified two ways: the decomposition matches an independently
+written direct piecewise formula at every segment and both breakpoints
+(`src/diode.rs` unit tests), and a hand-built LCP for the PCNR paper's two-diode circuit
+(`tests/two_diode_circuit.rs`) matches two hand-derived operating points exactly — the first
+proof the whole approach reproduces a real circuit's answer with no Newton-Raphson anywhere.
+No MOSFET model, no `continuous-blocks`, no `dae-runtime`, no `elspice-pwl-cli` yet — those
+are Milestones 3-5, and Milestone 3 has an open cross-repo decision (extend `elspice-mna`'s
+public API vs. reimplement minimal linear stamping locally) flagged in the journal rather than
+decided unilaterally.
