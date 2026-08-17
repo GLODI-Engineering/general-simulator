@@ -46,6 +46,7 @@
 //!    one, now) shouldn't need to lean on it.
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::time::Instant;
 
 use dae_runtime::{simulate_transient_with_mosfets, GateState};
@@ -134,4 +135,21 @@ fn main() {
         .sum::<f64>()
         / tail.len() as f64;
     println!("avg Vout (last 90%): {avg_vout:.4}");
+
+    // CSV export (t, V(vout), V(vx)) for the cross-simulator waveform plot -- see
+    // internal-archive's experiments/elspice-pwl-boost-llc-vs-xyce-ngspice/README.md.
+    // Same `t,unknown1,unknown2,...` column convention as elspice-pwl-cli's own CSV output.
+    let out_path = "llc_elspice_pwl_out.csv";
+    let mut f = std::fs::File::create(out_path).unwrap();
+    writeln!(f, "t,V(vout),V(vx)").unwrap();
+    for (t, point) in &trace {
+        writeln!(
+            f,
+            "{t},{},{}",
+            point.value("V(vout)").unwrap(),
+            point.value("V(vx)").unwrap()
+        )
+        .unwrap();
+    }
+    println!("wrote {out_path}");
 }
