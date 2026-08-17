@@ -47,7 +47,7 @@ fn main() {
         &diodes,
         &mosfets,
         &controller,
-        reference,
+        move |_| reference,
         measure,
         pwm,
         (0.0, 1.0),

@@ -28,6 +28,7 @@ dependencies = [
 name = "elspice-pwl-cli"
 version = "0.1.0"
 dependencies = [
+ "continuous-blocks",
  "dae-runtime",
  "pwl-devices",
  "spice-core",

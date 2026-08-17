@@ -11,6 +11,7 @@ name = "elspice-pwl"
 path = "src/main.rs"
 
 [dependencies]
+continuous-blocks = { path = "../continuous-blocks" }
 dae-runtime = { path = "../dae-runtime" }
 pwl-devices = { path = "../pwl-devices" }
 spice-core = { path = "../../../spice-lsp/servers/core" }

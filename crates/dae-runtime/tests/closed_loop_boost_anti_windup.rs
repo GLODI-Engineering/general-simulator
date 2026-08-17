@@ -61,7 +61,7 @@ fn boost_pid_regulates_without_windup_collapse() {
         &diodes,
         &mosfets,
         &controller,
-        reference,
+        move |_| reference,
         measure,
         pwm,
         (0.0, 1.0),

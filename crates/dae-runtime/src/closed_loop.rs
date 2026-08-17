@@ -37,11 +37,15 @@ pub fn sawtooth_carrier(t: f64, freq_hz: f64) -> f64 {
 
 /// Runs a closed-loop transient: at each timestep, `measure` reads a scalar from the
 /// *previous* step's [`OperatingPoint`] (e.g. an output node voltage), `controller` (its own
-/// state carried forward internally) is stepped with `reference - measured` as its input via
-/// RK4, and `pwm(controller_output, t)` decides every MOSFET's gate state for this step from
-/// that controller output. Everything else matches [`crate::simulate_transient_with_mosfets`]
-/// (system rebuilt per step, trapezoidal with backward-Euler fallback on any diode-segment or
-/// gate-state change).
+/// state carried forward internally) is stepped with `reference(t) - measured` as its input
+/// via RK4, and `pwm(controller_output, t)` decides every MOSFET's gate state for this step
+/// from that controller output. Everything else matches
+/// [`crate::simulate_transient_with_mosfets`] (system rebuilt per step, trapezoidal with
+/// backward-Euler fallback on any diode-segment or gate-state change).
+///
+/// `reference` is a function of time rather than a fixed value so a reference-step robustness
+/// test (settle at one setpoint, then step to another mid-run) is just `move |t| if t < t_step
+/// { v1 } else { v2 }` — no separate code path needed. Pass `move |_| v` for a fixed setpoint.
 ///
 /// `output_clamp = (lo, hi)` is the controller output's valid (unsaturated) range — typically
 /// `(0.0, 1.0)` for a duty command. **Two-sided conditional-integration anti-windup** is
@@ -68,7 +72,7 @@ pub fn simulate_closed_loop(
     diodes: &BTreeMap<String, Diode>,
     mosfets: &BTreeMap<String, Mosfet>,
     controller: &StateSpace,
-    reference: f64,
+    reference: impl Fn(f64) -> f64,
     measure: impl Fn(&OperatingPoint) -> f64,
     pwm: impl Fn(f64, f64) -> BTreeMap<String, GateState>,
     output_clamp: (f64, f64),
@@ -117,7 +121,7 @@ pub fn simulate_closed_loop(
         t += dt;
 
         let measured = measure(&point_prev);
-        let error = [reference - measured];
+        let error = [reference(t) - measured];
 
         let (lo, hi) = output_clamp;
         let tentative_x = controller.rk4_step(&controller_x, &error, dt);
