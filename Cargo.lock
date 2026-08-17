@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "continuous-blocks"
+version = "0.1.0"
+
+[[package]]
 name = "dae-runtime"
 version = "0.1.0"
 dependencies = [

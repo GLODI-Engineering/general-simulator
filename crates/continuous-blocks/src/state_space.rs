@@ -1,0 +1,141 @@
+//! A descriptor state-space system `E * dx/dt = A*x + B*u`, `y = C*x + D*u` — the same
+//! `A x + K dx/dt = B u` shape `elspice-mna` uses for circuits, with `K = E` (a standard
+//! "Descriptor State-Space" block, `E dx/dt = Ax + Bu`, is textually identical to this
+//! convention — see `docs/architecture.md`). Plain `E = I` is the ordinary (non-descriptor)
+//! state-space case.
+//!
+//! Matrices are plain row-major `Vec<Vec<f64>>` here rather than `elspice_mna::Matrix`: block
+//! parameters (gains, pole/zero locations, PID coefficients) are ordinary known numbers at
+//! model-build time, not symbolic netlist parameters, so there is no `Expression` layer to
+//! carry — wiring a block's *evaluated* `(A, K, B)` into a circuit's global descriptor system
+//! is `dae-runtime`'s job in a later milestone.
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StateSpace {
+    /// `n x n` dynamics matrix.
+    pub a: Vec<Vec<f64>>,
+    /// `n x m` input matrix (`m` = number of inputs).
+    pub b: Vec<Vec<f64>>,
+    /// `p x n` output matrix (`p` = number of outputs).
+    pub c: Vec<Vec<f64>>,
+    /// `p x m` feedthrough matrix.
+    pub d: Vec<Vec<f64>>,
+    /// `n x n` descriptor matrix. `None` means the identity (ordinary state-space); an explicit
+    /// non-identity `e` is the "Descriptor State-Space" case.
+    pub e: Option<Vec<Vec<f64>>>,
+}
+
+impl StateSpace {
+    pub fn states(&self) -> usize {
+        self.a.len()
+    }
+
+    pub fn inputs(&self) -> usize {
+        self.b.first().map_or(0, |row| row.len())
+    }
+
+    pub fn outputs(&self) -> usize {
+        self.c.len()
+    }
+
+    /// `y = C*x + D*u`.
+    pub fn output(&self, x: &[f64], u: &[f64]) -> Vec<f64> {
+        (0..self.outputs())
+            .map(|row| {
+                let cx: f64 = (0..self.states())
+                    .map(|col| self.c[row][col] * x[col])
+                    .sum();
+                let du: f64 = (0..self.inputs())
+                    .map(|col| self.d[row][col] * u[col])
+                    .sum();
+                cx + du
+            })
+            .collect()
+    }
+
+    /// `dx/dt` at the given `(x, u)`, solving `E * dx/dt = A*x + B*u` for `dx/dt` when a
+    /// non-identity descriptor matrix `e` is present (via the same dense Gauss-Jordan solve
+    /// `dae-runtime` uses — small, hand-checkable, `faer` deferred until it's actually needed;
+    /// see that crate's `linsolve` module doc for the same reasoning applied here).
+    pub fn derivative(&self, x: &[f64], u: &[f64]) -> Vec<f64> {
+        let rhs: Vec<f64> = (0..self.states())
+            .map(|row| {
+                let ax: f64 = (0..self.states())
+                    .map(|col| self.a[row][col] * x[col])
+                    .sum();
+                let bu: f64 = (0..self.inputs())
+                    .map(|col| self.b[row][col] * u[col])
+                    .sum();
+                ax + bu
+            })
+            .collect();
+        match &self.e {
+            None => rhs,
+            Some(e) => dense_solve(e, &rhs).expect("descriptor matrix E must be nonsingular"),
+        }
+    }
+
+    /// Advances one RK4 step of size `dt`, holding `u` constant over the step (zero-order
+    /// hold — matches how a discrete-timestep circuit/controller simulation would drive this
+    /// block in `dae-runtime`'s eventual timestep loop). Returns the new state; call
+    /// [`StateSpace::output`] separately for `y` at the new state.
+    pub fn rk4_step(&self, x: &[f64], u: &[f64], dt: f64) -> Vec<f64> {
+        let add = |a: &[f64], b: &[f64], scale: f64| -> Vec<f64> {
+            a.iter().zip(b).map(|(ai, bi)| ai + scale * bi).collect()
+        };
+        let k1 = self.derivative(x, u);
+        let k2 = self.derivative(&add(x, &k1, dt / 2.0), u);
+        let k3 = self.derivative(&add(x, &k2, dt / 2.0), u);
+        let k4 = self.derivative(&add(x, &k3, dt), u);
+        (0..x.len())
+            .map(|i| x[i] + (dt / 6.0) * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]))
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SingularMatrix;
+
+fn dense_solve(a: &[Vec<f64>], b: &[f64]) -> Result<Vec<f64>, SingularMatrix> {
+    let n = a.len();
+    let mut augmented: Vec<Vec<f64>> = a
+        .iter()
+        .zip(b)
+        .map(|(row, &rhs)| {
+            let mut r = row.clone();
+            r.push(rhs);
+            r
+        })
+        .collect();
+
+    for pivot_col in 0..n {
+        let pivot_row = (pivot_col..n)
+            .max_by(|&l, &r| {
+                augmented[l][pivot_col]
+                    .abs()
+                    .total_cmp(&augmented[r][pivot_col].abs())
+            })
+            .expect("range is nonempty");
+        if augmented[pivot_row][pivot_col].abs() <= 1e-12 {
+            return Err(SingularMatrix);
+        }
+        augmented.swap(pivot_row, pivot_col);
+        let pivot = augmented[pivot_col][pivot_col];
+        for col in pivot_col..=n {
+            augmented[pivot_col][col] /= pivot;
+        }
+        for row in 0..n {
+            if row == pivot_col {
+                continue;
+            }
+            let factor = augmented[row][pivot_col];
+            if factor == 0.0 {
+                continue;
+            }
+            for col in pivot_col..=n {
+                augmented[row][col] -= factor * augmented[pivot_col][col];
+            }
+        }
+    }
+    Ok((0..n).map(|row| augmented[row][n]).collect())
+}

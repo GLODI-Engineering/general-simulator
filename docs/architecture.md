@@ -57,7 +57,7 @@ descriptor state-space, PID, integrator, derivative, and piecewise math blocks l
 saturation) is *also* naturally expressible in this exact shape:
 
 - A state-space block `dx/dt = Ax + Bu, y = Cx + Du` is a descriptor system with `K = I`.
-- a reference tool's own "Descriptor State-Space" block, `E dx/dt = Ax + Bu`, is textually identical
+- A standard "Descriptor State-Space" block, `E dx/dt = Ax + Bu`, is textually identical
   to `elspice-mna`'s convention with `K = E` — no translation needed at all.
 - A transfer function `N(s)/D(s)` is realized once, via controllable canonical form, into
   `(A, B, C, D)`, then handled exactly like the state-space case.
@@ -129,5 +129,15 @@ diode's polarity right reuses `Diode` completely unchanged via a node-order conv
 MOSFETs must use device letter `'D'` in netlist text (not `'M'`, which `spice-core` correctly
 enforces real 4-node SPICE grammar for).
 
-Still a DC-operating-point solve only (no `K`/storage, no transient integration). No
-`continuous-blocks`, no `elspice-pwl-cli` yet — Milestones 5-6.
+`crates/continuous-blocks` (Milestone 5) implements the transfer-function/state-space/PID/
+integrator/math-op compilation described above, standalone and verified against hand-derived
+results before any circuit wiring: a first-order lowpass and a pure integrator's step
+responses checked against closed-form solutions via its own RK4 stepper, and — the strongest
+check — a PID with `Kd=0` where the derivative-filter pole cancels *exactly* against a
+numerator zero, so its full (non-minimal) 2-state realization's step response equals the ideal
+`y(t) = Kp + Ki*t` for every `t`, not just asymptotically. Wiring a compiled block's `(A, K, B)`
+into `dae-runtime`'s global system is still open — meaningful only once transient integration
+(Milestone 6) exists, since a controller has nothing to do at a single DC operating point.
+
+Still a DC-operating-point solve only (no `K`/storage, no transient integration in
+`dae-runtime` itself). No `elspice-pwl-cli` yet — Milestone 6.

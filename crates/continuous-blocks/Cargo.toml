@@ -1,0 +1,9 @@
+[package]
+name = "continuous-blocks"
+version = "0.1.0"
+description = "Continuous-time block-diagram elements (transfer function, state-space, PID, math ops) compiled into descriptor-DAE fragments of the same A*x + K*dx/dt = B*u shape elspice-mna already uses for circuits."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
