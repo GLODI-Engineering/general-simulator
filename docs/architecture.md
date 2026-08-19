@@ -146,8 +146,12 @@ command to be compared against — its output feeds a `GateBinding::Block` gate 
 while the block's output is `>=0.5`, no carrier at all.
 
 Crucially, `GateBinding` covers *every* gate kind — `Fixed`, `PwmFixed` (fixed-frequency/fixed-
-duty, no block graph needed), `Vco`, `Pwm` (block-driven duty), and `Block` (direct on/off, no
-carrier — for `Hysteresis`-driven gates) — resolved by exactly the
+duty, no block graph needed), `Vco`, `Pwm` (block-driven duty), `Block` (direct on/off, no
+carrier — for `Hysteresis`-driven gates), and `VcoPhase` (`Vco`'s block-driven-phase
+counterpart — for modulation schemes, like a dual-active-bridge converter's phase-shift
+control, where the phase offset itself is a controller output recomputed periodically rather
+than a netlist-time constant; `duty` stays fixed, since every leg/pole in that kind of scheme
+typically shares one duty, only phase varies) — resolved by exactly the
 same per-step loop. There is deliberately no separate "closed-loop" function or CLI mode: a
 
 `BlockKind::CScript` is the deliberate exception to "every block is a small, self-contained Rust

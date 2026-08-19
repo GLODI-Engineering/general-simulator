@@ -174,16 +174,33 @@ pub enum GateBinding {
     /// to compare against (unlike [`GateBinding::Pwm`]). Meant for a [`BlockKind::Hysteresis`]
     /// block, whose output is already `1.0`/`0.0`, but works with any block.
     Block(String),
+    /// Frequency modulation with a *block-driven* phase, instead of [`GateBinding::Vco`]'s
+    /// fixed `f64` — on while `(ramp + phase).rem_euclid(1.0) < duty`, where `ramp` is a named
+    /// [`BlockKind::Vco`] block's current `[0, 1)` output and `phase` is a *different* named
+    /// block's current output, read fresh every step. Exactly [`GateBinding::Pwm`]'s relation
+    /// to [`GateBinding::Vco`] and [`GateBinding::PwmFixed`] — a fixed value promoted to a
+    /// block-driven one — needed for phase-shift modulation schemes (e.g. a dual-active-bridge
+    /// converter's secondary-leg phase shift) where the phase itself is a controller output
+    /// recomputed periodically, not a netlist-time constant. `duty` stays a plain `f64`: every
+    /// leg/pole in this kind of scheme uses the same fixed duty (typically `~0.5`, minus a
+    /// dead-time shrink), only the phase varies.
+    VcoPhase {
+        vco: String,
+        phase: String,
+        duty: f64,
+    },
 }
 
 impl GateBinding {
-    /// The block this binding reads from, if any (`Fixed`/`PwmFixed` need none).
-    fn source_block(&self) -> Option<&str> {
+    /// The blocks this binding reads from, if any (`Fixed`/`PwmFixed` need none;
+    /// `VcoPhase` needs two — `vco` and `phase` name different blocks).
+    fn source_blocks(&self) -> [Option<&str>; 2] {
         match self {
-            GateBinding::Fixed(_) | GateBinding::PwmFixed { .. } => None,
-            GateBinding::Vco { vco, .. } => Some(vco),
-            GateBinding::Pwm { duty, .. } => Some(duty),
-            GateBinding::Block(name) => Some(name),
+            GateBinding::Fixed(_) | GateBinding::PwmFixed { .. } => [None, None],
+            GateBinding::Vco { vco, .. } => [Some(vco), None],
+            GateBinding::Pwm { duty, .. } => [Some(duty), None],
+            GateBinding::Block(name) => [Some(name), None],
+            GateBinding::VcoPhase { vco, phase, .. } => [Some(vco), Some(phase)],
         }
     }
 
@@ -200,6 +217,11 @@ impl GateBinding {
                 sawtooth_carrier(t, *freq_hz) < source.clamp(0.0, 1.0)
             }
             GateBinding::Block(name) => outputs[name.as_str()] >= 0.5,
+            GateBinding::VcoPhase { vco, phase, duty } => {
+                let ramp = outputs[vco.as_str()];
+                let phase = outputs[phase.as_str()];
+                math_ops::pwm_from_ramp(ramp, phase, *duty)
+            }
         };
         if on {
             GateState::On
@@ -426,7 +448,7 @@ pub fn simulate_transient_with_blocks(
     let block_names: std::collections::BTreeSet<&str> =
         blocks.iter().map(|b| b.name.as_str()).collect();
     for binding in gates.values() {
-        if let Some(needed) = binding.source_block() {
+        for needed in binding.source_blocks().into_iter().flatten() {
             if !block_names.contains(needed) {
                 return Err(DaeError::UnknownBlockInput(needed.to_string()));
             }

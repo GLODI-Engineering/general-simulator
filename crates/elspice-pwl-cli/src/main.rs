@@ -119,6 +119,11 @@
 //! - `gate=block ctrl=<block-name>` — direct on/off control, on while the named block's output
 //!   is `>= 0.5`, no carrier at all. Meant for a `kind=hysteresis` block (bang-bang current-mode
 //!   control has no fixed switching frequency to compare against), but works with any block.
+//! - `gate=vcophase vco=<vco-block-name> phase=<phase-block-name> duty=<0..1>` — like
+//!   `gate=vco`, but `phase` is itself a named block's current output rather than a fixed
+//!   number, read fresh every step. Needed for modulation schemes where the phase offset is a
+//!   controller output recomputed periodically (e.g. a dual-active-bridge converter's
+//!   secondary-leg phase shift), not a netlist-time constant.
 //!
 //! Example — a frequency-modulated half-bridge PID (LLC-family converters regulate by
 //! switching frequency, not PWM duty, unlike buck/boost) with a reference step test, as it
@@ -175,10 +180,27 @@ enum Kind {
 #[derive(Clone)]
 enum GateSpec {
     Fixed(GateState),
-    Pwm { freq_hz: f64, duty: f64 },
-    Vco { ctrl: String, phase: f64, duty: f64 },
-    DutyCtrl { ctrl: String, freq_hz: f64 },
-    Block { ctrl: String },
+    Pwm {
+        freq_hz: f64,
+        duty: f64,
+    },
+    Vco {
+        ctrl: String,
+        phase: f64,
+        duty: f64,
+    },
+    DutyCtrl {
+        ctrl: String,
+        freq_hz: f64,
+    },
+    Block {
+        ctrl: String,
+    },
+    VcoPhase {
+        vco: String,
+        phase: String,
+        duty: f64,
+    },
 }
 
 impl GateSpec {
@@ -199,6 +221,11 @@ impl GateSpec {
                 freq_hz: *freq_hz,
             },
             GateSpec::Block { ctrl } => GateBinding::Block(ctrl.clone()),
+            GateSpec::VcoPhase { vco, phase, duty } => GateBinding::VcoPhase {
+                vco: vco.clone(),
+                phase: phase.clone(),
+                duty: *duty,
+            },
         }
     }
 }
@@ -403,10 +430,14 @@ fn fixed_gate_states(
                         GateState::Off
                     }
                 }
-                GateSpec::Vco { .. } | GateSpec::DutyCtrl { .. } | GateSpec::Block { .. } => {
+                GateSpec::Vco { .. }
+                | GateSpec::DutyCtrl { .. }
+                | GateSpec::Block { .. }
+                | GateSpec::VcoPhase { .. } => {
                     return Err(format!(
-                        "device '{name}': gate=vco/dutyctrl/block needs --mode transient, not \
-                         'dc' (a DC operating point has no notion of a block's time-stepped \
+                        "device '{name}': gate=vco/dutyctrl/block/vcophase needs --mode \
+                         transient, not 'dc' (a DC operating point has no notion of a block's \
+                         time-stepped \
                          state)"
                     ))
                 }
@@ -660,6 +691,11 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                     },
                     Some("block") => GateSpec::Block {
                         ctrl: get_str("ctrl")?,
+                    },
+                    Some("vcophase") => GateSpec::VcoPhase {
+                        vco: get_str("vco")?,
+                        phase: get_str("phase")?,
+                        duty: get("duty")?,
                     },
                     Some(other) => {
                         return Err(format!(
