@@ -127,14 +127,15 @@ fn clone_trait_panics_when_cscript_clone_is_missing() {
 
 #[test]
 fn missing_required_symbol_is_a_clear_error_not_a_panic() {
-    // Reuse the accumulator source but only export cscript_start, to exercise the
-    // MissingSymbol path for a genuinely required symbol (cscript_output).
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let source = manifest_dir.join("tests/fixtures/broken_missing_output.c");
-    std::fs::write(&source, "void *cscript_start(void) { return (void*)0; }\n")
-        .expect("write broken fixture source");
+    // A block exporting only cscript_start, to exercise the MissingSymbol path for a
+    // genuinely required symbol (cscript_output) -- generated straight into the temp output
+    // dir, not tests/fixtures/, since this source is synthesized by the test itself rather
+    // than a real fixture meant to be read/reused.
     let out_dir = std::env::temp_dir().join("cscript-ffi-test-fixtures");
     std::fs::create_dir_all(&out_dir).expect("create fixture output dir");
+    let source = out_dir.join("broken_missing_output.c");
+    std::fs::write(&source, "void *cscript_start(void) { return (void*)0; }\n")
+        .expect("write broken fixture source");
     let lib_path = out_dir.join("libbroken_missing_output.so");
     let status = Command::new("cc")
         .args(["-shared", "-fPIC", "-O0", "-o"])
