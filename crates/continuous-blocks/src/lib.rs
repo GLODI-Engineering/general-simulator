@@ -29,9 +29,11 @@ mod pid;
 mod state_space;
 mod transfer_function;
 mod vco;
+pub mod waveform_arithmetic;
 
 pub use dynamics::{derivative_filtered, integrator};
 pub use pid::Pid;
 pub use state_space::{SingularMatrix, StateSpace};
 pub use transfer_function::{TransferFunction, TransferFunctionError};
 pub use vco::Vco;
+pub use waveform_arithmetic::{MathFn1, MathFn2, MathFn3};

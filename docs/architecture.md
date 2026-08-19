@@ -122,7 +122,9 @@ regulation on the identical circuit spec — see `crates/dae-runtime/tests/close
 comparator) — the right shape for the common buck/boost case, but not general. `dae_runtime::
 block_graph::simulate_transient_with_blocks` generalizes this: gates are resolved from a graph
 of named, independently reusable `continuous-blocks` blocks (`Const`, `Pwl`, `Sum`, `Gain`,
-`Pid`, `StateSpace`, `TransferFunction`, `Vco`) wired together by the caller, evaluated once
+`Pid`, `StateSpace`, `TransferFunction`, `Vco`, `Product`, `Saturation`, `Table`, and the whole
+real-valued scalar function library in `continuous_blocks::waveform_arithmetic` — trig,
+exponential/log, sign, min/max, select/clamp) wired together by the caller, evaluated once
 per circuit step in declaration order — the same discipline a real block-diagram tool
 (a reference tool, a reference tool) uses. An error signal is a `Sum` block's own output (explicit `+`/`-` signs),
 not something a controller computes internally; a frequency-modulated PWM carrier (needed for

@@ -28,7 +28,9 @@
 
 use std::collections::BTreeMap;
 
-use continuous_blocks::{math_ops, Pid, StateSpace, TransferFunction, Vco};
+use continuous_blocks::{
+    math_ops, MathFn1, MathFn2, MathFn3, Pid, StateSpace, TransferFunction, Vco,
+};
 use pwl_devices::{Diode, Mosfet};
 use spice_core::Dialect;
 
@@ -86,11 +88,29 @@ pub enum BlockKind {
     TransferFunction(TransferFunction),
     /// A voltage-controlled oscillator (see [`Vco`]).
     Vco(Vco),
+    /// Multiplies all its inputs together (see [`math_ops::product`]).
+    Product,
+    /// Clamps its single input to `[-limit, limit]` (see [`math_ops::saturation`]).
+    Saturation(f64),
+    /// Linear interpolation through a fixed `(x, y)` table (see
+    /// [`continuous_blocks::waveform_arithmetic::table`]) — a `table(x, a, b, c, d, ...)`-
+    /// style lookup.
+    Table(Vec<(f64, f64)>),
+    /// One of the single-argument real waveform-arithmetic functions (`cos`, `sin`, `exp`,
+    /// `sqrt`, ... — see [`continuous_blocks::waveform_arithmetic`] for the full list and what
+    /// was deliberately left out).
+    MathFn1(MathFn1),
+    /// One of the two-argument real waveform-arithmetic functions (`atan2`, `hypot`, `pow`,
+    /// `min`, `max`, ...).
+    MathFn2(MathFn2),
+    /// One of the three-argument real waveform-arithmetic functions (`if`, `limit`).
+    MathFn3(MathFn3),
 }
 
 /// One named block instance and where its inputs (if any) come from. `Const`/`Pwl` blocks
-/// must have zero inputs; `Sum` needs one input per sign; `Gain`/`Pid`/`StateSpace`/
-/// `TransferFunction`/`Vco` each need exactly one. Evaluated in the order given in the slice
+/// must have zero inputs; `Sum`/`Product` need one input per sign/factor; `Gain`/`Pid`/
+/// `StateSpace`/`TransferFunction`/`Vco`/`Saturation`/`Table`/`MathFn1` each need exactly one;
+/// `MathFn2` needs two; `MathFn3` needs three. Evaluated in the order given in the slice
 /// passed to [`simulate_transient_with_blocks`] — every input must reference a `Measure` or a
 /// block *earlier* in that same slice (source blocks, naturally, need none).
 #[derive(Debug, Clone, PartialEq)]
@@ -295,6 +315,14 @@ pub fn simulate_transient_with_blocks(
                 }
                 (BlockKind::Sum(signs), _) => math_ops::sum(&input_vals, signs),
                 (BlockKind::Gain(k), _) => math_ops::gain(*k, input_vals[0]),
+                (BlockKind::Product, _) => math_ops::product(&input_vals),
+                (BlockKind::Saturation(limit), _) => math_ops::saturation(input_vals[0], *limit),
+                (BlockKind::Table(points), _) => {
+                    continuous_blocks::waveform_arithmetic::table(input_vals[0], points)
+                }
+                (BlockKind::MathFn1(f), _) => f.call(input_vals[0]),
+                (BlockKind::MathFn2(f), _) => f.call(input_vals[0], input_vals[1]),
+                (BlockKind::MathFn3(f), _) => f.call(input_vals[0], input_vals[1], input_vals[2]),
                 (BlockKind::Pid { clamp, .. }, BlockState::Dynamic { state_space, x }) => {
                     let (lo, hi) = *clamp;
                     let error = [input_vals[0]];

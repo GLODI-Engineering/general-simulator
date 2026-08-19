@@ -63,6 +63,19 @@
 //! denominator and given directly as `num`/`den`, instead of `kind=pid`'s `kp`/`ki`/`kd`/`n`
 //! convenience parameterization.
 //!
+//! `kind=product inputs=<signal>,...` (multiplies all its inputs) and `kind=saturation
+//! limit=<f64> in=<signal>` (clamps to `[-limit, limit]`) round out the stateless math ops.
+//! `kind=table points=<x>:<y>,<x>:<y>,... in=<signal>` linearly interpolates through a fixed
+//! lookup table (clamped, not extrapolated, past either end). Beyond those, any `kind=` naming
+//! a real-valued scalar function (`cos`, `sin`, `tan`, `exp`, `ln`, `log10`, `sqrt`, `abs`,
+//! `sinh`/`cosh`/`tanh`, `asin`/`acos`/`atan`, `asinh`/`acosh`/`atanh`, `floor`/`ceil`/`round`/
+//! `int`, `sgn`, `u`/`uramp` (unit step / ramp), `buf`/`inv` (threshold at 0.5) — each with
+//! `in=<signal>`; `atan2`/`hypot`/`pow`/`pwr`/`pwrs`/`min`/`max` — each with `in1=`/`in2=`;
+//! `if`/`limit` — each with `in1=`/`in2=`/`in3=`) resolves to that function as a block, no
+//! separate `kind=` list to maintain — see `continuous_blocks::waveform_arithmetic` for the
+//! full set and exactly what was left out (a derivative, noise/random generators, complex-data
+//! functions, and Boolean/comparison operators — none of those are stateless real-valued math).
+//!
 //! A MOSFET's gate can reference a controller block by name instead of a fixed/`pwm` spec, two
 //! ways:
 //! - `gate=vco ctrl=<vco-block-name> phase=<0..1> duty=<0..1>` — frequency modulation (LLC-
@@ -400,6 +413,35 @@ fn parse_signal(text: &str) -> Signal {
     }
 }
 
+/// Parses a `<x>:<y>,<x>:<y>,...` point list (a `kind=pwl` reference schedule, or a
+/// `kind=table` lookup table), sorted ascending by `x` on return.
+fn parse_xy_points(text: &str, name: &str, line_number: usize) -> Result<Vec<(f64, f64)>, String> {
+    let mut points = Vec::new();
+    for point in text.split(',') {
+        let (x_str, y_str) = point.split_once(':').ok_or_else(|| {
+            format!(
+                "line {}: device '{name}' field 'points' entry '{point}' is not '<x>:<y>'",
+                line_number + 1
+            )
+        })?;
+        let x: f64 = x_str.parse().map_err(|_| {
+            format!(
+                "line {}: device '{name}' points entry '{point}': '{x_str}' is not a number",
+                line_number + 1
+            )
+        })?;
+        let y: f64 = y_str.parse().map_err(|_| {
+            format!(
+                "line {}: device '{name}' points entry '{point}': '{y_str}' is not a number",
+                line_number + 1
+            )
+        })?;
+        points.push((x, y));
+    }
+    points.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    Ok(points)
+}
+
 /// Parses a comma-separated list of numbers, e.g. a `kind=statespace` block's `b`/`c` vector
 /// or a `kind=tf` block's `num`/`den` coefficients.
 fn parse_vector(
@@ -546,33 +588,7 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                 inputs: Vec::new(),
             }),
             "pwl" => {
-                let points_text = get_str("points")?;
-                let mut points = Vec::new();
-                for point in points_text.split(',') {
-                    let (t_str, v_str) = point.split_once(':').ok_or_else(|| {
-                        format!(
-                            "line {}: device '{name}' field 'points' entry '{point}' is not \
-                             '<t>:<v>'",
-                            line_number + 1
-                        )
-                    })?;
-                    let t: f64 = t_str.parse().map_err(|_| {
-                        format!(
-                            "line {}: device '{name}' points entry '{point}': '{t_str}' is \
-                             not a number",
-                            line_number + 1
-                        )
-                    })?;
-                    let v: f64 = v_str.parse().map_err(|_| {
-                        format!(
-                            "line {}: device '{name}' points entry '{point}': '{v_str}' is \
-                             not a number",
-                            line_number + 1
-                        )
-                    })?;
-                    points.push((t, v));
-                }
-                points.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                let points = parse_xy_points(&get_str("points")?, name, line_number)?;
                 Kind::Block(BlockInstance {
                     name: name.to_string(),
                     kind: BlockKind::Pwl(points),
@@ -676,11 +692,59 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                     inputs: vec![parse_signal(&get_str("in")?)],
                 })
             }
+            "product" => Kind::Block(BlockInstance {
+                name: name.to_string(),
+                kind: BlockKind::Product,
+                inputs: get_str("inputs")?.split(',').map(parse_signal).collect(),
+            }),
+            "saturation" => Kind::Block(BlockInstance {
+                name: name.to_string(),
+                kind: BlockKind::Saturation(get("limit")?),
+                inputs: vec![parse_signal(&get_str("in")?)],
+            }),
+            "table" => {
+                let points = parse_xy_points(&get_str("points")?, name, line_number)?;
+                Kind::Block(BlockInstance {
+                    name: name.to_string(),
+                    kind: BlockKind::Table(points),
+                    inputs: vec![parse_signal(&get_str("in")?)],
+                })
+            }
             other => {
-                return Err(format!(
-                    "line {}: unknown device kind '{other}'",
-                    line_number + 1
-                ))
+                // Not one of the block kinds above: try the real-valued waveform-arithmetic
+                // function library (cos, sin, exp, sqrt, atan2, hypot, if, limit, ...) before
+                // giving up — see `continuous_blocks::waveform_arithmetic` for the full list.
+                if let Some(f) = continuous_blocks::MathFn1::from_name(other) {
+                    Kind::Block(BlockInstance {
+                        name: name.to_string(),
+                        kind: BlockKind::MathFn1(f),
+                        inputs: vec![parse_signal(&get_str("in")?)],
+                    })
+                } else if let Some(f) = continuous_blocks::MathFn2::from_name(other) {
+                    Kind::Block(BlockInstance {
+                        name: name.to_string(),
+                        kind: BlockKind::MathFn2(f),
+                        inputs: vec![
+                            parse_signal(&get_str("in1")?),
+                            parse_signal(&get_str("in2")?),
+                        ],
+                    })
+                } else if let Some(f) = continuous_blocks::MathFn3::from_name(other) {
+                    Kind::Block(BlockInstance {
+                        name: name.to_string(),
+                        kind: BlockKind::MathFn3(f),
+                        inputs: vec![
+                            parse_signal(&get_str("in1")?),
+                            parse_signal(&get_str("in2")?),
+                            parse_signal(&get_str("in3")?),
+                        ],
+                    })
+                } else {
+                    return Err(format!(
+                        "line {}: unknown device kind '{other}'",
+                        line_number + 1
+                    ));
+                }
             }
         };
         result.push((name.to_string(), entry));
