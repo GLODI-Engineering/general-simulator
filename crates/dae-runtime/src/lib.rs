@@ -83,6 +83,17 @@ pub enum DaeError {
     /// evaluation is a single forward pass in declaration order, so every input must name an
     /// earlier block, a circuit measurement, or itself be a source block with no inputs).
     UnknownBlockInput(String),
+    /// Loading or resolving symbols in a [`block_graph::BlockKind::CScript`]'s shared library
+    /// failed — see [`cscript_ffi::CScriptError`].
+    CScript(cscript_ffi::CScriptError),
+    /// A netlist declares a [`block_graph::BlockKind::CScript`] block whose library doesn't
+    /// export `cscript_clone`, but the run was requested with [`TimeStep::Adaptive`], which
+    /// needs to clone every block's state before each trial step — see `cscript_ffi`'s own
+    /// module doc comment, "Adaptive step-size control and instance cloning." Pass a fixed
+    /// `TimeStep::Fixed` instead, or add `cscript_clone` to the library.
+    CScriptRequiresCloneForAdaptiveStep {
+        block_name: String,
+    },
 }
 
 /// Solves the DC operating point of a netlist containing linear devices plus any number of

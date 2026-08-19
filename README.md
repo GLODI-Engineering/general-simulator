@@ -19,7 +19,7 @@ piecewise-linear (a diode's three conduction segments, a MOSFET's controlled/nat
 commutation modes), so within any *fixed* combination of active segments the whole circuit is
 exactly linear. Which segment each device is in, per timestep, is decided by solving a **Linear
 Complementarity Problem (LCP)** via Lemke's algorithm — the same rigorous mode-selection
-approach used by a reference tool — instead of continuous Newton iteration. See
+approach commercial power-electronics simulators use — instead of continuous Newton iteration. See
 [`docs/architecture.md`](docs/architecture.md) for the full formulation.
 
 ## Relationship to the sibling repos

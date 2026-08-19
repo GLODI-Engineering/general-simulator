@@ -19,8 +19,9 @@ pub fn product(inputs: &[f64]) -> f64 {
 
 /// Compares a periodic ramp (as produced by [`crate::Vco`], in `[0, 1)`) against a duty
 /// threshold, with an optional phase offset — the standard way a PWM carrier or oscillator
-/// output becomes a logic/gate signal (a reference tool/a reference tool both have an equivalent Relational-
-/// Operator-on-a-ramp block). Kept separate from `Vco` itself so one shared oscillator can
+/// output becomes a logic/gate signal (block-diagram simulation tools typically offer an
+/// equivalent relational-operator-on-a-ramp block). Kept separate from `Vco` itself so one
+/// shared oscillator can
 /// drive several independently-phased/duty-shifted gates (e.g. a half-bridge's two
 /// complementary switches) without needing a second oscillator instance.
 pub fn pwm_from_ramp(ramp: f64, phase_offset: f64, duty: f64) -> bool {

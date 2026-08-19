@@ -1,6 +1,6 @@
 /// A voltage-controlled oscillator: given a frequency command (Hz, clamped to `[f_min,
-/// f_max]`), outputs a repeating ramp in `[0, 1)` — the same standard block a reference tool/a reference tool
-/// libraries provide (their own "VCO"/"Repeating Sequence" blocks), used here to build a
+/// f_max]`), outputs a repeating ramp in `[0, 1)` — the same standard block block-diagram
+/// simulation tools provide (their own "VCO"/"Repeating Sequence" blocks), used here to build a
 /// frequency-modulated PWM carrier. LLC-family resonant converters regulate by switching
 /// *frequency*, not duty, unlike buck/boost, which is why this block exists alongside `Pid`
 /// rather than folding frequency modulation into `Pid` or into `dae-runtime` directly — a

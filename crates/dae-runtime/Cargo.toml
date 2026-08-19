@@ -10,5 +10,6 @@ publish.workspace = true
 lcp-solver = { path = "../lcp-solver" }
 pwl-devices = { path = "../pwl-devices" }
 continuous-blocks = { path = "../continuous-blocks" }
+cscript-ffi = { path = "../cscript-ffi" }
 spice-core = { path = "../../../spice-lsp/servers/core" }
 elspice-mna = { path = "../../../elspice-mna" }

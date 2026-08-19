@@ -1,8 +1,8 @@
 //! Resolves every MOSFET's gate state, each transient step, from a graph of named,
 //! independently reusable `continuous-blocks` blocks (`Const`, `Pwl`, `Sum`, `Gain`, `Pid`,
-//! `StateSpace`, `TransferFunction`, `Vco`, `Hysteresis`) wired together by the caller — the same discipline
-//! a real block-diagram tool (a reference tool, a reference tool) uses: an error signal is a `Sum` block's
-//! output, a filtered-derivative PID compensator is a `TransferFunction` given its own
+//! `StateSpace`, `TransferFunction`, `Vco`, `Hysteresis`, `CScript`) wired together by the
+//! caller — the same discipline a real block-diagram tool uses: an error signal is a `Sum`
+//! block's output, a filtered-derivative PID compensator is a `TransferFunction` given its own
 //! `N(s)/D(s)` coefficients, and a frequency-modulated PWM carrier is `Pid -> Gain -> Vco`, not
 //! a single function that bakes a specific topology together.
 //!
@@ -12,11 +12,11 @@
 //! [`Signal::Measure`] of the circuit's own state (the historically "closed-loop" case) — both
 //! are resolved by exactly the same code, every step, because from the solver's point of view
 //! they're the same kind of question: "what's this device's terminal condition right now,"
-//! answered from whatever the netlist and device file actually say. Real circuit simulators
-//! (SPICE, a reference tool) don't have a closed-loop *mode* either — closed-loop is a property of how a
-//! circuit happens to be wired, not an analysis type the tool needs to be told about upfront;
-//! `.op` and `.tran` are genuinely distinct analyses (different equations solved), but nothing
-//! about *this* function is analysis-specific.
+//! answered from whatever the netlist and device file actually say. A real circuit simulator
+//! doesn't have a closed-loop *mode* either — closed-loop is a property of how a circuit
+//! happens to be wired, not an analysis type the tool needs to be told about upfront; `.op` and
+//! `.tran` are genuinely distinct analyses (different equations solved), but nothing about
+//! *this* function is analysis-specific.
 //!
 //! Sampled-data co-simulation: every block reads the *previous* circuit step's measurement,
 //! the whole graph is evaluated once per circuit step (in declaration order — see
@@ -31,6 +31,7 @@ use std::collections::BTreeMap;
 use continuous_blocks::{
     math_ops, Hysteresis, MathFn1, MathFn2, MathFn3, Pid, StateSpace, TransferFunction, Vco,
 };
+use cscript_ffi::CScriptRegistry;
 use pwl_devices::{Diode, Mosfet};
 use spice_core::Dialect;
 
@@ -110,6 +111,27 @@ pub enum BlockKind {
     /// `Pid` feeding a [`GateBinding::Pwm`]). Its output is `1.0`/`0.0`, read directly by a
     /// [`GateBinding::Block`] rather than compared against a carrier.
     Hysteresis(Hysteresis),
+    /// A dynamically-loaded, user-supplied block (see [`cscript_ffi`]): `lib` is a precompiled
+    /// shared library exporting `cscript_start`/`cscript_output`/(optionally)`cscript_free`/
+    /// `cscript_clone`, filling `output_names.len()` outputs. Unlike every other `BlockKind`,
+    /// this one can carry state no Rust type here knows anything about — see [`cscript_ffi`]'s
+    /// own module doc comment for the full C-side contract and why [`TimeStep::Adaptive`]
+    /// requires `cscript_clone` to be exported.
+    ///
+    /// `sample_time`, if given, makes this block run on its *own* fixed-period sample grid
+    /// (like a discrete controller block with a configured `Ts` in any block-diagram tool),
+    /// independent of the circuit's own resolved step size: `cscript_output` is only actually
+    /// called once accumulated time since the last call reaches `sample_time`, and this block's
+    /// output holds its last value (zero-order hold) on every step in between — the right model
+    /// for something like a fixed-frequency digital controller, which genuinely does not run at
+    /// the power stage's own (much finer, and possibly adaptive/irregular) step rate. `None`
+    /// (the default) calls `cscript_output` every resolved circuit step instead, passing that
+    /// step's own `dt` — the right choice for a block meant to behave continuously.
+    CScript {
+        lib: std::path::PathBuf,
+        output_names: Vec<String>,
+        sample_time: Option<f64>,
+    },
 }
 
 /// One named block instance and where its inputs (if any) come from. `Const`/`Pwl` blocks
@@ -204,6 +226,21 @@ enum BlockState {
     Hysteresis {
         hysteresis: Hysteresis,
         on: bool,
+    },
+    /// A live, per-instance [`cscript_ffi::CScriptInstance`], plus the zero-order-hold
+    /// bookkeeping [`BlockKind::CScript`]'s `sample_time` needs: `time_since_sample` accumulates
+    /// circuit `dt`s until it reaches the configured sample period (or is always "due" every
+    /// step when `sample_time` is `None`), and `last_output` is what gets returned/held on
+    /// every step the block *doesn't* actually run `cscript_output`. Cloning this variant (only
+    /// ever needed by [`TimeStep::Adaptive`]'s retry loop, which clones the whole
+    /// `block_states` vector before every trial) calls into `cscript_clone` for `instance` and
+    /// **panics** if the library doesn't export it — see
+    /// [`simulate_transient_with_blocks`]'s own upfront check, which exists specifically so
+    /// that panic is unreachable in practice.
+    CScript {
+        instance: cscript_ffi::CScriptInstance,
+        time_since_sample: f64,
+        last_output: Vec<f64>,
     },
 }
 
@@ -302,6 +339,49 @@ fn evaluate_blocks(
                     0.0
                 }
             }
+            (
+                BlockKind::CScript {
+                    output_names,
+                    sample_time,
+                    ..
+                },
+                BlockState::CScript {
+                    instance,
+                    time_since_sample,
+                    last_output,
+                },
+            ) => {
+                // sample_time = None: run every step, exactly like every other dynamic block.
+                // sample_time = Some(ts): accumulate circuit dt until ts is reached, then run
+                // once with the *accumulated* elapsed time as this call's dt (not the much
+                // finer circuit dt), and hold the result (zero-order hold) on every step in
+                // between -- see BlockKind::CScript's own doc comment for why.
+                let (due, elapsed) = match sample_time {
+                    None => (true, dt),
+                    Some(ts) => {
+                        *time_since_sample += dt;
+                        if *time_since_sample + 1e-15 >= *ts {
+                            let elapsed = *time_since_sample;
+                            *time_since_sample = 0.0;
+                            (true, elapsed)
+                        } else {
+                            (false, 0.0)
+                        }
+                    }
+                };
+                if due {
+                    *last_output = instance.call(&input_vals, elapsed, output_names.len());
+                }
+                // The primary value (this block's own name) is last_output[0], inserted below
+                // like every other block; any additional declared output_names are inserted
+                // here under their own names, so a downstream block can reference them
+                // directly via Signal::Block(name) without needing to know they came from a
+                // CScript block.
+                for (name, v) in output_names.iter().zip(last_output.iter()).skip(1) {
+                    outputs.insert(name.clone(), *v);
+                }
+                last_output.first().copied().unwrap_or(0.0)
+            }
             _ => unreachable!("BlockState variant always matches its BlockKind"),
         };
         outputs.insert(block.name.clone(), value);
@@ -378,29 +458,55 @@ pub fn simulate_transient_with_blocks(
     };
     let mut x_prev_prev: Option<Vec<f64>> = None;
 
-    let mut block_states: Vec<BlockState> = blocks
-        .iter()
-        .map(|b| {
-            let dynamic = |state_space: StateSpace| {
-                let x = vec![0.0; state_space.states()];
-                BlockState::Dynamic { state_space, x }
-            };
-            match &b.kind {
-                BlockKind::Pid { pid, .. } => dynamic(pid.to_state_space()),
-                BlockKind::StateSpace(ss) => dynamic(ss.clone()),
-                BlockKind::TransferFunction(tf) => dynamic(tf.to_state_space()),
-                BlockKind::Vco(vco) => BlockState::Vco {
-                    vco: *vco,
-                    phase: 0.0,
-                },
-                BlockKind::Hysteresis(hysteresis) => BlockState::Hysteresis {
-                    hysteresis: *hysteresis,
-                    on: false,
-                },
-                _ => BlockState::Stateless,
+    let mut cscript_registry = CScriptRegistry::new();
+    let mut block_states: Vec<BlockState> = Vec::with_capacity(blocks.len());
+    for b in blocks {
+        let dynamic = |state_space: StateSpace| {
+            let x = vec![0.0; state_space.states()];
+            BlockState::Dynamic { state_space, x }
+        };
+        let state = match &b.kind {
+            BlockKind::Pid { pid, .. } => dynamic(pid.to_state_space()),
+            BlockKind::StateSpace(ss) => dynamic(ss.clone()),
+            BlockKind::TransferFunction(tf) => dynamic(tf.to_state_space()),
+            BlockKind::Vco(vco) => BlockState::Vco {
+                vco: *vco,
+                phase: 0.0,
+            },
+            BlockKind::Hysteresis(hysteresis) => BlockState::Hysteresis {
+                hysteresis: *hysteresis,
+                on: false,
+            },
+            BlockKind::CScript {
+                lib,
+                output_names,
+                sample_time,
+            } => {
+                let instance = cscript_registry
+                    .instantiate(lib)
+                    .map_err(DaeError::CScript)?;
+                if matches!(step, TimeStep::Adaptive(_)) && !instance.supports_clone() {
+                    return Err(DaeError::CScriptRequiresCloneForAdaptiveStep {
+                        block_name: b.name.clone(),
+                    });
+                }
+                BlockState::CScript {
+                    instance,
+                    // Initialized to `sample_time` itself (not 0.0, and deliberately not an
+                    // infinite sentinel -- that would poison the first call's `elapsed` value
+                    // into +inf once `dt` is added to it below): this guarantees the first
+                    // evaluate_blocks call is always "due" (time_since_sample + dt >= ts
+                    // trivially), while keeping `elapsed` a small, finite, sane first-call
+                    // value (one sample period, plus that first step's own dt) instead of
+                    // corrupting the block's own state with an infinite integration step.
+                    time_since_sample: sample_time.unwrap_or(0.0),
+                    last_output: vec![0.0; output_names.len()],
+                }
             }
-        })
-        .collect();
+            _ => BlockState::Stateless,
+        };
+        block_states.push(state);
+    }
 
     let mut prev_diode_raw_ioff: BTreeMap<String, f64> = BTreeMap::new();
     let mut prev_segments: Option<Vec<Segment>> = None;

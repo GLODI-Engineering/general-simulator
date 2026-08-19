@@ -1,7 +1,8 @@
 /// A Schmitt-trigger comparator: stays HIGH until the input drops below `low`, stays LOW
 /// until the input rises above `high` — the standard bang-bang/hysteresis-band block
-/// (a reference tool/a reference tool's own "Relay"/hysteresis blocks) used for current-mode control when
-/// there's no fixed switching frequency to modulate a duty command onto, unlike [`crate::Pid`]
+/// (block-diagram simulation tools typically offer an equivalent "Relay"/hysteresis block)
+/// used for current-mode control when there's no fixed switching frequency to modulate a duty
+/// command onto, unlike [`crate::Pid`]
 /// feeding a PWM carrier. Deliberately not a [`crate::StateSpace`]: the on/off memory is a
 /// genuine discrete latch, not a linear dynamic, the same reason [`crate::Vco`]'s wraparound
 /// is evaluated directly rather than folded into one.

@@ -38,7 +38,7 @@ the same companion-model conductances that would otherwise go straight into an M
 Solving that LCP (via Lemke's algorithm, `crates/lcp-solver`) picks out one self-consistent
 combination of active segments across every PWL device in the circuit simultaneously, in one
 finite pivoting pass — no continuous iteration, no clamping, no path-dependence. This is the
-same rigorous approach a reference tool uses for its piecewise-linear circuit solver.
+same rigorous approach commercial piecewise-linear circuit solvers use.
 
 The MOSFET's four-way behavior (gate-state × current-sign) needs more than a single
 diode-style guard; the exact number of complementarity pairs per MOSFET instance is worked out
@@ -126,7 +126,7 @@ of named, independently reusable `continuous-blocks` blocks (`Const`, `Pwl`, `Su
 real-valued scalar function library in `continuous_blocks::waveform_arithmetic` — trig,
 exponential/log, sign, min/max, select/clamp) wired together by the caller, evaluated once
 per circuit step in declaration order — the same discipline a real block-diagram tool
-(a reference tool, a reference tool) uses. An error signal is a `Sum` block's own output (explicit `+`/`-` signs),
+uses. An error signal is a `Sum` block's own output (explicit `+`/`-` signs),
 not something a controller computes internally; a frequency-modulated PWM carrier (needed for
 LLC-family converters, which regulate by switching *frequency* rather than duty, unlike
 buck/boost) is `Sum -> Pid -> Sum -> Vco`, four separately testable blocks, not one fused
@@ -149,6 +149,26 @@ Crucially, `GateBinding` covers *every* gate kind — `Fixed`, `PwmFixed` (fixed
 duty, no block graph needed), `Vco`, `Pwm` (block-driven duty), and `Block` (direct on/off, no
 carrier — for `Hysteresis`-driven gates) — resolved by exactly the
 same per-step loop. There is deliberately no separate "closed-loop" function or CLI mode: a
+
+`BlockKind::CScript` is the deliberate exception to "every block is a small, self-contained Rust
+type": it dynamically loads a user-precompiled shared library (via the new `crates/cscript-ffi`
+— `cscript_start`/`cscript_output`/optionally `cscript_free`/`cscript_clone`) for block behavior
+none of `continuous-blocks`'s own blocks cover, including genuine state a Rust type here knows
+nothing about. This is the one place in the whole workspace where calling into arbitrary native
+code is allowed — a bounded, opt-in escape hatch (the user names a `.so` file in their own
+netlist), not a change to the "Rust throughout" decision at the top of this document for
+anything at the core of the simulator itself. `output_names` can register more than one output
+from a single call (a control output plus an internal diagnostic signal, say); `sample_time`
+(`ts=`/`freq=` at the CLI) gives the block its own fixed sample period, independent of the
+circuit's own resolved step size, holding its last output (zero-order hold) in between — needed
+for a genuinely discrete controller clocked well below the switching frequency, the same
+distinction every block-diagram tool's own scripted/code block makes between "runs every solver
+step" and "runs on its own configured `Ts`." Adaptive step-size control clones every block's
+state before each trial and discards it on a rejected one — for an opaque C state pointer that
+requires the library's own `cscript_clone`; `dae-runtime` checks this upfront and refuses
+adaptive stepping with a clean error rather than a corrupted or panicking run if it's missing.
+See `cscript-ffi`'s own module doc comment for the full C-side contract and exactly what is and
+isn't checked.
 real circuit simulator has no such mode either (a transient analysis is a transient analysis;
 whether a gate's block chain happens to read the circuit's own state back via
 `Signal::Measure` is a property of how the netlist is wired, not something the tool needs

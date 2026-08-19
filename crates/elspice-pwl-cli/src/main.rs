@@ -45,7 +45,7 @@
 //! `statespace` (arbitrary `(A,B,C,D)`), `tf` (a rational `N(s)/D(s)`), `vco`. Whether that
 //! graph happens to read the circuit's own state back (`meas:<node>`, making it what's
 //! conventionally called "closed-loop") is just a property of how the blocks are wired, the
-//! same as it would be in a reference tool or a reference tool — the solver doesn't need to be told which case it
+//! same as it would be in any real block-diagram simulation tool — the solver doesn't need to be told which case it
 //! is, because it resolves both exactly the same way: **the error signal is a `sum` block's own
 //! output, and a frequency-modulated PWM carrier is `sum -> pid -> sum -> vco`, not one fused
 //! "closed-loop controller" that bakes a specific topology together.** Each block is declared
@@ -83,6 +83,29 @@
 //! separate `kind=` list to maintain — see `continuous_blocks::waveform_arithmetic` for the
 //! full set and exactly what was left out (a derivative, noise/random generators, complex-data
 //! functions, and Boolean/comparison operators — none of those are stateless real-valued math).
+//!
+//! `kind=cscript lib=<path> [in=<signal> | inputs=<signal>,...] [outputs=<name>,<name>,...]
+//! [ts=<seconds> | freq=<hz>]` loads a user-supplied, precompiled shared library
+//! (`.so`/`.dylib`/`.dll` — the user compiles it themselves, this CLI never invokes a compiler)
+//! exporting `cscript_start`/`cscript_output`/(optionally) `cscript_free`/`cscript_clone` — an
+//! escape hatch for block behavior none of `continuous-blocks`'s own blocks cover, including
+//! genuinely stateful behavior (an integrator, a lookup table built at `cscript_start`,
+//! anything). `outputs=` names more than one output signal from a single `cscript_output` call
+//! (the block's own name aliases the *first* one); omit it for the common single-output case,
+//! where the block's own name is the only output. `ts=`/`freq=` (mutually exclusive) give this
+//! block its own fixed sample period, independent of the circuit's own resolved step size —
+//! `cscript_output` only actually runs once accumulated time reaches `ts` (or `1/freq`), and
+//! the block holds its last output (zero-order hold) on every step in between, the right model
+//! for a genuinely discrete controller running at a fixed rate (e.g. a digital control loop
+//! clocked well below the switching frequency) rather than something meant to behave
+//! continuously; omit both to run `cscript_output` every resolved circuit step instead (the
+//! right choice for a continuous-like block). **Adaptive step-size control (the default when
+//! `--dt` is omitted) requires `cscript_clone` to be exported** — adaptive stepping clones
+//! every block's state before each trial and discards it on a rejected trial, and an opaque C
+//! state pointer can't be deep-copied without the library's own help; pass `--dt` (fixed-step)
+//! instead if the library doesn't export it. See `cscript_ffi`'s own module doc comment for the
+//! full C-side contract, why loading and calling into a shared library is unsafe by
+//! construction, and what is and isn't checked.
 //!
 //! A MOSFET's gate can reference a controller block by name instead of a fixed/`pwm` spec, two
 //! ways:
@@ -428,7 +451,16 @@ fn run_transient_with_mosfets(
     )
     .map_err(|e| format!("{e:?}"))?;
 
-    let block_names: Vec<String> = blocks.iter().map(|b| b.name.clone()).collect();
+    // A cscript block with `outputs=` naming more than one signal registers extra named
+    // outputs beyond its own block name (see block_graph::evaluate_blocks) -- list those too,
+    // so they show up as their own CSV columns instead of only being reachable via
+    // Signal::Block from another declared block.
+    let mut block_names: Vec<String> = blocks.iter().map(|b| b.name.clone()).collect();
+    for block in blocks {
+        if let BlockKind::CScript { output_names, .. } = &block.kind {
+            block_names.extend(output_names.iter().skip(1).cloned());
+        }
+    }
     if let Some((_, first, _)) = trace.first() {
         if block_names.is_empty() {
             print_header(&first.unknowns);
@@ -712,6 +744,38 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                     name: name.to_string(),
                     kind: BlockKind::Hysteresis(hysteresis),
                     inputs: vec![parse_signal(&get_str("in")?)],
+                })
+            }
+            "cscript" => {
+                let lib = std::path::PathBuf::from(get_str("lib")?);
+                let output_names = match fields.get("outputs") {
+                    Some(names) => names.split(',').map(str::to_string).collect(),
+                    None => vec![name.to_string()],
+                };
+                let inputs = match fields.get("inputs") {
+                    Some(list) => list.split(',').map(parse_signal).collect(),
+                    None => vec![parse_signal(&get_str("in")?)],
+                };
+                let sample_time = match (fields.get("ts"), fields.get("freq")) {
+                    (Some(_), Some(_)) => {
+                        return Err(format!(
+                            "line {}: device '{name}': 'ts' and 'freq' are mutually exclusive \
+                             (both set this block's sample time)",
+                            line_number + 1
+                        ))
+                    }
+                    (Some(_), None) => Some(get("ts")?),
+                    (None, Some(_)) => Some(1.0 / get("freq")?),
+                    (None, None) => None,
+                };
+                Kind::Block(BlockInstance {
+                    name: name.to_string(),
+                    kind: BlockKind::CScript {
+                        lib,
+                        output_names,
+                        sample_time,
+                    },
+                    inputs,
                 })
             }
             "statespace" => {
