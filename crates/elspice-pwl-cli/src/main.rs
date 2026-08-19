@@ -70,7 +70,11 @@
 //! `kind=product inputs=<signal>,...` (multiplies all its inputs) and `kind=saturation
 //! limit=<f64> in=<signal>` (clamps to `[-limit, limit]`) round out the stateless math ops.
 //! `kind=table points=<x>:<y>,<x>:<y>,... in=<signal>` linearly interpolates through a fixed
-//! lookup table (clamped, not extrapolated, past either end). Beyond those, any `kind=` naming
+//! lookup table (clamped, not extrapolated, past either end). `kind=hysteresis high=<f64>
+//! low=<f64> in=<signal>` is a Schmitt-trigger comparator (output `1.0`/`0.0`): stays HIGH
+//! until the input drops below `low`, stays LOW until it rises above `high` — the standard
+//! bang-bang/hysteresis-band block for current-mode control, where there's no fixed switching
+//! frequency to modulate a duty command onto. Beyond those, any `kind=` naming
 //! a real-valued scalar function (`cos`, `sin`, `tan`, `exp`, `ln`, `log10`, `sqrt`, `abs`,
 //! `sinh`/`cosh`/`tanh`, `asin`/`acos`/`atan`, `asinh`/`acosh`/`atanh`, `floor`/`ceil`/`round`/
 //! `int`, `sgn`, `u`/`uramp` (unit step / ramp), `buf`/`inv` (threshold at 0.5) — each with
@@ -89,6 +93,9 @@
 //! - `gate=dutyctrl ctrl=<block-name> freq=<hz>` — duty modulation at a fixed carrier frequency
 //!   (buck/boost-style), with the duty *command* coming from anywhere in the graph instead of
 //!   being a fixed value.
+//! - `gate=block ctrl=<block-name>` — direct on/off control, on while the named block's output
+//!   is `>= 0.5`, no carrier at all. Meant for a `kind=hysteresis` block (bang-bang current-mode
+//!   control has no fixed switching frequency to compare against), but works with any block.
 //!
 //! Example — a frequency-modulated half-bridge PID (LLC-family converters regulate by
 //! switching frequency, not PWM duty, unlike buck/boost) with a reference step test, as it
@@ -111,7 +118,7 @@
 //! unremarkable LLC deck. `elspice-pwl-cli some.cir --mode transient` (no `--devices`) sees the
 //! complete closed loop.
 //!
-//! `--mode dc` cannot resolve a block-driven gate (`gate=vco`/`gate=dutyctrl`): a DC operating
+//! `--mode dc` cannot resolve a block-driven gate (`gate=vco`/`gate=dutyctrl`/`gate=block`): a DC operating
 //! point has no notion of the time-stepped state a `Pid`/`Vco` block carries, so those gate
 //! kinds need `--mode transient`.
 //!
@@ -124,7 +131,7 @@ use std::env;
 use std::fs;
 use std::process::ExitCode;
 
-use continuous_blocks::{Pid, StateSpace, TransferFunction, Vco};
+use continuous_blocks::{Hysteresis, Pid, StateSpace, TransferFunction, Vco};
 use dae_runtime::{
     simulate_transient, simulate_transient_with_blocks, solve_dc, solve_dc_with_mosfets,
     AdaptiveConfig, BlockInstance, BlockKind, GateBinding, GateState, Signal, TimeStep,
@@ -148,6 +155,7 @@ enum GateSpec {
     Pwm { freq_hz: f64, duty: f64 },
     Vco { ctrl: String, phase: f64, duty: f64 },
     DutyCtrl { ctrl: String, freq_hz: f64 },
+    Block { ctrl: String },
 }
 
 impl GateSpec {
@@ -167,6 +175,7 @@ impl GateSpec {
                 duty: ctrl.clone(),
                 freq_hz: *freq_hz,
             },
+            GateSpec::Block { ctrl } => GateBinding::Block(ctrl.clone()),
         }
     }
 }
@@ -371,10 +380,10 @@ fn fixed_gate_states(
                         GateState::Off
                     }
                 }
-                GateSpec::Vco { .. } | GateSpec::DutyCtrl { .. } => {
+                GateSpec::Vco { .. } | GateSpec::DutyCtrl { .. } | GateSpec::Block { .. } => {
                     return Err(format!(
-                        "device '{name}': gate=vco/dutyctrl needs --mode transient, not 'dc' \
-                         (a DC operating point has no notion of a Pid/Vco block's time-stepped \
+                        "device '{name}': gate=vco/dutyctrl/block needs --mode transient, not \
+                         'dc' (a DC operating point has no notion of a block's time-stepped \
                          state)"
                     ))
                 }
@@ -617,6 +626,9 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                         ctrl: get_str("ctrl")?,
                         freq_hz: get("freq")?,
                     },
+                    Some("block") => GateSpec::Block {
+                        ctrl: get_str("ctrl")?,
+                    },
                     Some(other) => {
                         return Err(format!(
                             "line {}: unknown gate spec '{other}'",
@@ -691,6 +703,14 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                 Kind::Block(BlockInstance {
                     name: name.to_string(),
                     kind: BlockKind::Vco(vco),
+                    inputs: vec![parse_signal(&get_str("in")?)],
+                })
+            }
+            "hysteresis" => {
+                let hysteresis = Hysteresis::new(get("high")?, get("low")?);
+                Kind::Block(BlockInstance {
+                    name: name.to_string(),
+                    kind: BlockKind::Hysteresis(hysteresis),
                     inputs: vec![parse_signal(&get_str("in")?)],
                 })
             }

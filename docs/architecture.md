@@ -122,7 +122,7 @@ regulation on the identical circuit spec — see `crates/dae-runtime/tests/close
 comparator) — the right shape for the common buck/boost case, but not general. `dae_runtime::
 block_graph::simulate_transient_with_blocks` generalizes this: gates are resolved from a graph
 of named, independently reusable `continuous-blocks` blocks (`Const`, `Pwl`, `Sum`, `Gain`,
-`Pid`, `StateSpace`, `TransferFunction`, `Vco`, `Product`, `Saturation`, `Table`, and the whole
+`Pid`, `StateSpace`, `TransferFunction`, `Vco`, `Hysteresis`, `Product`, `Saturation`, `Table`, and the whole
 real-valued scalar function library in `continuous_blocks::waveform_arithmetic` — trig,
 exponential/log, sign, min/max, select/clamp) wired together by the caller, evaluated once
 per circuit step in declaration order — the same discipline a real block-diagram tool
@@ -138,10 +138,16 @@ linear system can't express, the same reason `math_ops::saturation` is evaluated
 rather than folded into one; a separate stateless `math_ops::pwm_from_ramp` compares a shared
 oscillator's ramp against a per-gate phase/duty, so one `Vco` can drive several independently-
 phased gates (a half-bridge's two complementary switches) without needing one oscillator
-instance per gate.
+instance per gate. `Hysteresis` is likewise deliberately not a `StateSpace`: its on/off latch is
+a genuine discrete memory (Schmitt-trigger semantics — stays on until the input drops below
+`low`, stays off until it rises above `high`), used for bang-bang/hysteresis current-mode
+control, where (unlike duty-modulated PWM) there's no fixed switching frequency for a duty
+command to be compared against — its output feeds a `GateBinding::Block` gate directly, on
+while the block's output is `>=0.5`, no carrier at all.
 
 Crucially, `GateBinding` covers *every* gate kind — `Fixed`, `PwmFixed` (fixed-frequency/fixed-
-duty, no block graph needed), `Vco`, and `Pwm` (block-driven duty) — resolved by exactly the
+duty, no block graph needed), `Vco`, `Pwm` (block-driven duty), and `Block` (direct on/off, no
+carrier — for `Hysteresis`-driven gates) — resolved by exactly the
 same per-step loop. There is deliberately no separate "closed-loop" function or CLI mode: a
 real circuit simulator has no such mode either (a transient analysis is a transient analysis;
 whether a gate's block chain happens to read the circuit's own state back via

@@ -1,6 +1,7 @@
 //! Continuous-time block-diagram elements — transfer function, state-space, PID, integrator,
-//! filtered derivative, voltage-controlled oscillator, and stateless math ops (gain, sum,
-//! product, saturation, ramp-to-PWM) — matching the standard `Continuous`/`Math Operations`
+//! filtered derivative, voltage-controlled oscillator, hysteresis (Schmitt-trigger) comparator,
+//! and stateless math ops (gain, sum, product, saturation, ramp-to-PWM) — matching the standard
+//! `Continuous`/`Math Operations`
 //! block sets common to block-diagram simulation tools (a reference tool, a reference tool). Each block does one
 //! job and is meant to be wired to the others by the caller — an error signal is a `Sum`
 //! block's output, not something a controller computes internally, and a frequency-modulated
@@ -24,6 +25,7 @@
 //! assembly, is a later milestone.
 
 pub mod dynamics;
+mod hysteresis;
 pub mod math_ops;
 mod pid;
 mod state_space;
@@ -32,6 +34,7 @@ mod vco;
 pub mod waveform_arithmetic;
 
 pub use dynamics::{derivative_filtered, integrator};
+pub use hysteresis::Hysteresis;
 pub use pid::Pid;
 pub use state_space::{SingularMatrix, StateSpace};
 pub use transfer_function::{TransferFunction, TransferFunctionError};

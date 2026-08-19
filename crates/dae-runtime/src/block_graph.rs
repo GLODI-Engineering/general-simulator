@@ -1,6 +1,6 @@
 //! Resolves every MOSFET's gate state, each transient step, from a graph of named,
 //! independently reusable `continuous-blocks` blocks (`Const`, `Pwl`, `Sum`, `Gain`, `Pid`,
-//! `StateSpace`, `TransferFunction`, `Vco`) wired together by the caller — the same discipline
+//! `StateSpace`, `TransferFunction`, `Vco`, `Hysteresis`) wired together by the caller — the same discipline
 //! a real block-diagram tool (a reference tool, a reference tool) uses: an error signal is a `Sum` block's
 //! output, a filtered-derivative PID compensator is a `TransferFunction` given its own
 //! `N(s)/D(s)` coefficients, and a frequency-modulated PWM carrier is `Pid -> Gain -> Vco`, not
@@ -29,7 +29,7 @@
 use std::collections::BTreeMap;
 
 use continuous_blocks::{
-    math_ops, MathFn1, MathFn2, MathFn3, Pid, StateSpace, TransferFunction, Vco,
+    math_ops, Hysteresis, MathFn1, MathFn2, MathFn3, Pid, StateSpace, TransferFunction, Vco,
 };
 use pwl_devices::{Diode, Mosfet};
 use spice_core::Dialect;
@@ -105,6 +105,11 @@ pub enum BlockKind {
     MathFn2(MathFn2),
     /// One of the three-argument real waveform-arithmetic functions (`if`, `limit`).
     MathFn3(MathFn3),
+    /// A Schmitt-trigger comparator (see [`Hysteresis`]) — bang-bang/hysteresis-band control,
+    /// used when there's no fixed switching frequency to modulate a duty command onto (unlike
+    /// `Pid` feeding a [`GateBinding::Pwm`]). Its output is `1.0`/`0.0`, read directly by a
+    /// [`GateBinding::Block`] rather than compared against a carrier.
+    Hysteresis(Hysteresis),
 }
 
 /// One named block instance and where its inputs (if any) come from. `Const`/`Pwl` blocks
@@ -142,6 +147,11 @@ pub enum GateBinding {
     /// from anywhere in the graph (a `Pid`, a filtered `TransferFunction`, ...) instead of
     /// being a fixed value.
     Pwm { duty: String, freq_hz: f64 },
+    /// Direct duty-less on/off control: on while a named block's current output is `>= 0.5` —
+    /// no carrier at all, since bang-bang/hysteresis control has no fixed switching frequency
+    /// to compare against (unlike [`GateBinding::Pwm`]). Meant for a [`BlockKind::Hysteresis`]
+    /// block, whose output is already `1.0`/`0.0`, but works with any block.
+    Block(String),
 }
 
 impl GateBinding {
@@ -151,6 +161,7 @@ impl GateBinding {
             GateBinding::Fixed(_) | GateBinding::PwmFixed { .. } => None,
             GateBinding::Vco { vco, .. } => Some(vco),
             GateBinding::Pwm { duty, .. } => Some(duty),
+            GateBinding::Block(name) => Some(name),
         }
     }
 
@@ -166,6 +177,7 @@ impl GateBinding {
                 let source = outputs[duty.as_str()];
                 sawtooth_carrier(t, *freq_hz) < source.clamp(0.0, 1.0)
             }
+            GateBinding::Block(name) => outputs[name.as_str()] >= 0.5,
         };
         if on {
             GateState::On
@@ -188,6 +200,10 @@ enum BlockState {
     Vco {
         vco: Vco,
         phase: f64,
+    },
+    Hysteresis {
+        hysteresis: Hysteresis,
+        on: bool,
     },
 }
 
@@ -277,6 +293,14 @@ fn evaluate_blocks(
             (BlockKind::Vco(_), BlockState::Vco { vco, phase }) => {
                 *phase = vco.step(*phase, input_vals[0], dt);
                 *phase
+            }
+            (BlockKind::Hysteresis(_), BlockState::Hysteresis { hysteresis, on }) => {
+                *on = hysteresis.step(*on, input_vals[0]);
+                if *on {
+                    1.0
+                } else {
+                    0.0
+                }
             }
             _ => unreachable!("BlockState variant always matches its BlockKind"),
         };
@@ -368,6 +392,10 @@ pub fn simulate_transient_with_blocks(
                 BlockKind::Vco(vco) => BlockState::Vco {
                     vco: *vco,
                     phase: 0.0,
+                },
+                BlockKind::Hysteresis(hysteresis) => BlockState::Hysteresis {
+                    hysteresis: *hysteresis,
+                    on: false,
                 },
                 _ => BlockState::Stateless,
             }
