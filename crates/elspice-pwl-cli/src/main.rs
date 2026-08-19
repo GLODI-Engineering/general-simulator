@@ -1,6 +1,10 @@
 //! Thin runner for `elspice-pwl`: `elspice-pwl <netlist> [--devices <file>] --mode
-//! {dc|transient} [--tfinal T --dt DT]` prints a CSV waveform (`t,V(node1),V(node2),...`) to
-//! stdout, one row per resolved timestep (a single row for `--mode dc`).
+//! {dc|transient} [--tfinal T] [--dt DT | --dt-max/--dt-min/--dt-init/--reltol/--abstol]`
+//! prints a CSV waveform (`t,V(node1),V(node2),...`) to stdout, one row per resolved timestep
+//! (a single row for `--mode dc`). `--dt` fixes the step size; omit it for adaptive step-size
+//! control instead (the default — see `dae_runtime::TimeStep`/`AdaptiveConfig`'s own doc
+//! comments for the algorithm), with `--dt-max`/`--dt-min`/`--dt-init`/`--reltol`/`--abstol`
+//! overriding individual defaults derived from `--tfinal`.
 //!
 //! **The netlist is the one file** — PWL device parameters and any controller block graph
 //! live directly inside it, the same way a real SPICE deck is self-contained, not split across
@@ -123,7 +127,7 @@ use std::process::ExitCode;
 use continuous_blocks::{Pid, StateSpace, TransferFunction, Vco};
 use dae_runtime::{
     simulate_transient, simulate_transient_with_blocks, solve_dc, solve_dc_with_mosfets,
-    BlockInstance, BlockKind, GateBinding, GateState, Signal,
+    AdaptiveConfig, BlockInstance, BlockKind, GateBinding, GateState, Signal, TimeStep,
 };
 use pwl_devices::{Diode, Mosfet};
 use spice_core::Dialect;
@@ -186,10 +190,24 @@ fn run() -> Result<(), String> {
     let mut devices_path: Option<String> = None;
     let mut mode = "dc".to_string();
     let mut t_final = 1.0;
-    let mut dt = 1e-3;
+    let mut dt: Option<f64> = None;
+    let mut dt_max: Option<f64> = None;
+    let mut dt_min: Option<f64> = None;
+    let mut dt_init: Option<f64> = None;
+    let mut reltol: Option<f64> = None;
+    let mut abstol: Option<f64> = None;
 
     let mut i = 2;
     while i < args.len() {
+        let parse_f64 = |flag: &'static str, i: &mut usize| -> Result<f64, String> {
+            let v = args
+                .get(*i + 1)
+                .ok_or_else(|| format!("{flag} needs a value"))?
+                .parse()
+                .map_err(|_| format!("bad {flag}"))?;
+            *i += 2;
+            Ok(v)
+        };
         match args[i].as_str() {
             "--devices" => {
                 devices_path = Some(args.get(i + 1).ok_or("--devices needs a value")?.clone());
@@ -199,25 +217,55 @@ fn run() -> Result<(), String> {
                 mode = args.get(i + 1).ok_or("--mode needs a value")?.clone();
                 i += 2;
             }
-            "--tfinal" => {
-                t_final = args
-                    .get(i + 1)
-                    .ok_or("--tfinal needs a value")?
-                    .parse()
-                    .map_err(|_| "bad --tfinal")?;
-                i += 2;
-            }
-            "--dt" => {
-                dt = args
-                    .get(i + 1)
-                    .ok_or("--dt needs a value")?
-                    .parse()
-                    .map_err(|_| "bad --dt")?;
-                i += 2;
-            }
+            "--tfinal" => t_final = parse_f64("--tfinal", &mut i)?,
+            "--dt" => dt = Some(parse_f64("--dt", &mut i)?),
+            "--dt-max" => dt_max = Some(parse_f64("--dt-max", &mut i)?),
+            "--dt-min" => dt_min = Some(parse_f64("--dt-min", &mut i)?),
+            "--dt-init" => dt_init = Some(parse_f64("--dt-init", &mut i)?),
+            "--reltol" => reltol = Some(parse_f64("--reltol", &mut i)?),
+            "--abstol" => abstol = Some(parse_f64("--abstol", &mut i)?),
             other => return Err(format!("unrecognized argument '{other}'\n{}", usage())),
         }
     }
+
+    if dt.is_some()
+        && (dt_max.is_some()
+            || dt_min.is_some()
+            || dt_init.is_some()
+            || reltol.is_some()
+            || abstol.is_some())
+    {
+        return Err(
+            "--dt (fixed step) and --dt-max/--dt-min/--dt-init/--reltol/--abstol (adaptive \
+             step) are mutually exclusive — pick one"
+                .to_string(),
+        );
+    }
+    // No --dt at all: adaptive, same as real SPICE tools auto-managing the internal step when
+    // only the run length is given. `--dt-max`/`--dt-min`/`--dt-init` (and `--reltol`/
+    // `--abstol`) override AdaptiveConfig::from_t_final's own defaults piecemeal.
+    let step = match dt {
+        Some(dt) => TimeStep::Fixed(dt),
+        None => {
+            let mut config = AdaptiveConfig::from_t_final(t_final);
+            if let Some(v) = dt_max {
+                config.dt_max = v;
+            }
+            if let Some(v) = dt_min {
+                config.dt_min = v;
+            }
+            if let Some(v) = dt_init {
+                config.dt_init = v;
+            }
+            if let Some(v) = reltol {
+                config.reltol = v;
+            }
+            if let Some(v) = abstol {
+                config.abstol = v;
+            }
+            TimeStep::Adaptive(config)
+        }
+    };
 
     let netlist =
         fs::read_to_string(netlist_path).map_err(|e| format!("reading {netlist_path}: {e}"))?;
@@ -276,7 +324,7 @@ fn run() -> Result<(), String> {
         print_row(0.0, &point);
     } else if mode == "transient" {
         if mosfets.is_empty() {
-            let trace = simulate_transient(&netlist, dialect, &diodes, None, t_final, dt)
+            let trace = simulate_transient(&netlist, dialect, &diodes, None, t_final, step)
                 .map_err(|e| format!("{e:?}"))?;
             if let Some((_, first)) = trace.first() {
                 print_header(&first.unknowns);
@@ -293,7 +341,7 @@ fn run() -> Result<(), String> {
                 &blocks,
                 shared_r_on,
                 t_final,
-                dt,
+                step,
             )?;
         }
     } else {
@@ -348,7 +396,7 @@ fn run_transient_with_mosfets(
     blocks: &[BlockInstance],
     shared_r_on: f64,
     t_final: f64,
-    dt: f64,
+    step: TimeStep,
 ) -> Result<(), String> {
     let mosfets_only: BTreeMap<String, Mosfet> =
         mosfets.iter().map(|(n, (m, _))| (n.clone(), *m)).collect();
@@ -367,7 +415,7 @@ fn run_transient_with_mosfets(
         shared_r_on,
         None,
         t_final,
-        dt,
+        step,
     )
     .map_err(|e| format!("{e:?}"))?;
 
@@ -753,6 +801,13 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
 }
 
 fn usage() -> String {
-    "usage: elspice-pwl <netlist> [--devices <file>] [--mode dc|transient] [--tfinal T] [--dt DT]"
+    "usage: elspice-pwl <netlist> [--devices <file>] [--mode dc|transient] [--tfinal T] \
+     [--dt DT | --dt-max T --dt-min T --dt-init T --reltol R --abstol A]\n\
+     \n\
+     --dt fixes the step size every step (deterministic, exactly reproducible). Omit it (and \
+     optionally tune --dt-max/--dt-min/--dt-init/--reltol/--abstol) for adaptive step-size \
+     control instead — small steps where the solution is changing fast, large steps where it's \
+     settled, the same local-truncation-error approach every real SPICE-family tool uses by \
+     default. --dt and any --dt-*/--reltol/--abstol flag are mutually exclusive."
         .to_string()
 }

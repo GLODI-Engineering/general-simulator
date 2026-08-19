@@ -5,7 +5,7 @@
 //! *through a forward-biased diode* combines both mechanisms and is checked against a
 //! closed-form solution derived by hand before writing this test (see the module doc below).
 
-use dae_runtime::{simulate_transient, solve_dc};
+use dae_runtime::{simulate_transient, solve_dc, TimeStep};
 use pwl_devices::Diode;
 use spice_core::Dialect;
 use std::collections::BTreeMap;
@@ -23,7 +23,15 @@ fn algebraic_circuit_matches_dc_solve_at_every_step() {
     diodes.insert("D2".to_string(), Diode::new(0.0, -100.0, 0.0, 2.0, 1.0));
 
     let dc = solve_dc(netlist, Dialect::Ngspice, &diodes).unwrap();
-    let trace = simulate_transient(netlist, Dialect::Ngspice, &diodes, None, 0.5, 0.1).unwrap();
+    let trace = simulate_transient(
+        netlist,
+        Dialect::Ngspice,
+        &diodes,
+        None,
+        0.5,
+        TimeStep::Fixed(0.1),
+    )
+    .unwrap();
 
     assert_eq!(trace.len(), 5);
     for (t, point) in &trace {
@@ -47,7 +55,15 @@ fn rc_charging_matches_closed_form_exponential() {
     let netlist = "V1 a 0 5\nR1 a b 1\nC1 b 0 1";
     let diodes = BTreeMap::new();
 
-    let trace = simulate_transient(netlist, Dialect::Ngspice, &diodes, None, 3.0, 1e-3).unwrap();
+    let trace = simulate_transient(
+        netlist,
+        Dialect::Ngspice,
+        &diodes,
+        None,
+        3.0,
+        TimeStep::Fixed(1e-3),
+    )
+    .unwrap();
 
     for &t in &[0.5f64, 1.0, 2.0, 3.0] {
         let index = (t / 1e-3).round() as usize - 1;
@@ -80,7 +96,15 @@ fn rc_charging_through_a_forward_biased_diode_matches_hand_derived_solution() {
     let mut diodes = BTreeMap::new();
     diodes.insert("D1".to_string(), Diode::new(0.0, -100.0, 0.0, 0.7, 1.0));
 
-    let trace = simulate_transient(netlist, Dialect::Ngspice, &diodes, None, 4.0, 1e-3).unwrap();
+    let trace = simulate_transient(
+        netlist,
+        Dialect::Ngspice,
+        &diodes,
+        None,
+        4.0,
+        TimeStep::Fixed(1e-3),
+    )
+    .unwrap();
 
     for &t in &[0.5f64, 1.0, 2.0, 4.0] {
         let index = (t / 1e-3).round() as usize - 1;

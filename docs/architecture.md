@@ -179,6 +179,19 @@ scattered through each milestone's own entry).
   pair, i.e. per PWL device), so a sparse representation buys nothing there.
 - Implicit trapezoidal integration by default; backward Euler at startup and immediately after
   a resolved mode switch.
+- Fixed *or* adaptive step size, the caller's choice per run (`dae_runtime::TimeStep`):
+  `Fixed(dt)` is exactly the original fixed-step behavior; `Adaptive(AdaptiveConfig)` picks
+  `dt` automatically via local-truncation-error control, the same idea every real SPICE-family
+  tool uses by default — solve the same step with both backward Euler and trapezoidal, use
+  their difference (backward Euler's own larger local error dominates it) as a cheap,
+  history-free error estimate, and grow/shrink `dt` from there. `simulate_transient` and
+  `simulate_transient_with_blocks` both support it (the latter's adaptive loop must redo block
+  evaluation and gate resolution on every retry, not just re-solve, since its `system` is
+  itself a function of `dt` through the block graph); `elspice-pwl-cli` exposes it as
+  `--dt-max`/`--dt-min`/`--dt-init`/`--reltol`/`--abstol`, defaulted from `--tfinal` alone when
+  `--dt` isn't given — adaptive is the default, not fixed, matching what a real `.tran` line
+  does when only the run length is meaningfully specified. See `crates/dae-runtime/src/
+  step_control.rs`'s own doc comments for the exact algorithm.
 
 ## Status
 

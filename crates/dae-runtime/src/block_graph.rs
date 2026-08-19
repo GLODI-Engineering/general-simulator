@@ -35,8 +35,8 @@ use pwl_devices::{Diode, Mosfet};
 use spice_core::Dialect;
 
 use crate::{
-    classify_segments, sawtooth_carrier, step_with_fallback, DaeError, GateState, OperatingPoint,
-    Segment, RINGING_COOLDOWN_STEPS,
+    classify_segments, sawtooth_carrier, step_control, step_with_fallback, DaeError, GateState,
+    OperatingPoint, Segment, TimeStep, RINGING_COOLDOWN_STEPS,
 };
 
 /// Where a block's input value comes from: another block's output this same step, or the
@@ -175,6 +175,7 @@ impl GateBinding {
     }
 }
 
+#[derive(Clone)]
 enum BlockState {
     Stateless,
     /// Shared by `Pid`, `StateSpace`, and `TransferFunction` — all three are, underneath,
@@ -196,11 +197,115 @@ enum BlockState {
 /// the run used no blocks at all (every gate `Fixed`/`PwmFixed`).
 pub type TransientWithBlocksStep = (f64, OperatingPoint, BTreeMap<String, f64>);
 
+/// Evaluates every block once (in declaration order), advancing `block_states` in place at
+/// step size `dt` and reading any [`Signal::Measure`] from `point_prev` — the one piece of
+/// per-step work both [`TimeStep::Fixed`] and [`TimeStep::Adaptive`] need identically, factored
+/// out so the adaptive loop below can re-run it (against a *cloned* `block_states`) once per
+/// retry at a shrinking trial `dt`, without duplicating the block-dispatch match arms.
+fn evaluate_blocks(
+    blocks: &[BlockInstance],
+    block_states: &mut [BlockState],
+    point_prev: &OperatingPoint,
+    t: f64,
+    dt: f64,
+) -> Result<BTreeMap<String, f64>, DaeError> {
+    let mut outputs: BTreeMap<String, f64> = BTreeMap::new();
+    let resolve = |outputs: &BTreeMap<String, f64>, signal: &Signal| -> Result<f64, DaeError> {
+        match signal {
+            Signal::Block(name) => outputs
+                .get(name)
+                .copied()
+                .ok_or_else(|| DaeError::UnknownBlockInput(name.clone())),
+            Signal::Measure(node) => Ok(point_prev
+                .value(&format!("V({node})"))
+                .unwrap_or_else(|| point_prev.value(node).unwrap_or(0.0))),
+        }
+    };
+
+    for (block, state) in blocks.iter().zip(block_states.iter_mut()) {
+        let input_vals: Vec<f64> = block
+            .inputs
+            .iter()
+            .map(|s| resolve(&outputs, s))
+            .collect::<Result<_, _>>()?;
+
+        let value = match (&block.kind, state) {
+            (BlockKind::Const(v), _) => *v,
+            (BlockKind::Pwl(points), _) => {
+                let mut v = points.first().map(|(_, v)| *v).unwrap_or(0.0);
+                for &(t_i, v_i) in points {
+                    if t_i <= t {
+                        v = v_i;
+                    } else {
+                        break;
+                    }
+                }
+                v
+            }
+            (BlockKind::Sum(signs), _) => math_ops::sum(&input_vals, signs),
+            (BlockKind::Gain(k), _) => math_ops::gain(*k, input_vals[0]),
+            (BlockKind::Product, _) => math_ops::product(&input_vals),
+            (BlockKind::Saturation(limit), _) => math_ops::saturation(input_vals[0], *limit),
+            (BlockKind::Table(points), _) => {
+                continuous_blocks::waveform_arithmetic::table(input_vals[0], points)
+            }
+            (BlockKind::MathFn1(f), _) => f.call(input_vals[0]),
+            (BlockKind::MathFn2(f), _) => f.call(input_vals[0], input_vals[1]),
+            (BlockKind::MathFn3(f), _) => f.call(input_vals[0], input_vals[1], input_vals[2]),
+            (BlockKind::Pid { clamp, .. }, BlockState::Dynamic { state_space, x }) => {
+                let (lo, hi) = *clamp;
+                let error = [input_vals[0]];
+                let tentative_x = state_space.rk4_step(x, &error, dt);
+                let tentative_output = state_space.output(&tentative_x, &error)[0];
+                let saturating_further = (tentative_output >= hi && error[0] > 0.0)
+                    || (tentative_output <= lo && error[0] < 0.0);
+                if saturating_further {
+                    state_space.output(x, &error)[0].clamp(lo, hi)
+                } else {
+                    *x = tentative_x;
+                    tentative_output
+                }
+            }
+            (
+                BlockKind::StateSpace(_) | BlockKind::TransferFunction(_),
+                BlockState::Dynamic { state_space, x },
+            ) => {
+                let u = [input_vals[0]];
+                *x = state_space.rk4_step(x, &u, dt);
+                state_space.output(x, &u)[0]
+            }
+            (BlockKind::Vco(_), BlockState::Vco { vco, phase }) => {
+                *phase = vco.step(*phase, input_vals[0], dt);
+                *phase
+            }
+            _ => unreachable!("BlockState variant always matches its BlockKind"),
+        };
+        outputs.insert(block.name.clone(), value);
+    }
+    Ok(outputs)
+}
+
+fn resolve_gates(
+    gates: &BTreeMap<String, GateBinding>,
+    outputs: &BTreeMap<String, f64>,
+    t: f64,
+) -> BTreeMap<String, GateState> {
+    gates
+        .iter()
+        .map(|(mosfet_name, binding)| (mosfet_name.clone(), binding.resolve(t, outputs)))
+        .collect()
+}
+
 /// Runs a transient with every MOSFET's gate resolved from a [`GateBinding`] each step — see
 /// this module's doc comment for why there's no separate "closed-loop" entry point: a
 /// `GateBinding::Fixed`/`PwmFixed` device and a `GateBinding::Vco`/`Pwm` device driven by a
 /// `Sum`-`Pid`-`Vco` chain that happens to read [`Signal::Measure`] are resolved by exactly the
-/// same loop below. `blocks` may be empty if every gate is `Fixed`/`PwmFixed`.
+/// same loop below. `blocks` may be empty if every gate is `Fixed`/`PwmFixed`. `step` picks
+/// fixed or adaptive timing — see [`TimeStep`]/[`AdaptiveConfig`]. Adaptive mode here can't
+/// reuse [`step_control::adaptive_step`] directly (that assumes a `dt`-independent `system`):
+/// this circuit's gate states, and so its `system`, are themselves a function of `dt` through
+/// the block graph, so a rejected trial has to redo block evaluation *and* gate resolution at
+/// the smaller `dt`, not just re-solve the same system — see the retry loop below.
 #[allow(clippy::too_many_arguments)]
 pub fn simulate_transient_with_blocks(
     source: &str,
@@ -212,7 +317,7 @@ pub fn simulate_transient_with_blocks(
     shared_r_on: f64,
     x_initial: Option<&[f64]>,
     t_final: f64,
-    dt: f64,
+    step: TimeStep,
 ) -> Result<Vec<TransientWithBlocksStep>, DaeError> {
     let block_names: std::collections::BTreeSet<&str> =
         blocks.iter().map(|b| b.name.as_str()).collect();
@@ -274,133 +379,138 @@ pub fn simulate_transient_with_blocks(
     let mut prev_gate_states: Option<BTreeMap<String, GateState>> = None;
     let mut ringing_cooldown: u32 = 0;
 
-    let steps = (t_final / dt).round() as usize;
-    let mut trace = Vec::with_capacity(steps);
+    let mut trace = Vec::new();
     let mut t = 0.0;
-    for step_index in 0..steps {
-        t += dt;
 
-        let mut outputs: BTreeMap<String, f64> = BTreeMap::new();
-        let resolve = |outputs: &BTreeMap<String, f64>, signal: &Signal| -> Result<f64, DaeError> {
-            match signal {
-                Signal::Block(name) => outputs
-                    .get(name)
-                    .copied()
-                    .ok_or_else(|| DaeError::UnknownBlockInput(name.clone())),
-                Signal::Measure(node) => Ok(point_prev
-                    .value(&format!("V({node})"))
-                    .unwrap_or_else(|| point_prev.value(node).unwrap_or(0.0))),
+    match step {
+        TimeStep::Fixed(dt) => {
+            let steps = (t_final / dt).round() as usize;
+            trace.reserve(steps);
+            for step_index in 0..steps {
+                t += dt;
+
+                let outputs = evaluate_blocks(blocks, &mut block_states, &point_prev, t, dt)?;
+                let gate_states = resolve_gates(gates, &outputs, t);
+                let states: BTreeMap<String, (Mosfet, GateState)> = mosfets
+                    .iter()
+                    .map(|(name, m)| {
+                        (
+                            name.clone(),
+                            (*m, *gate_states.get(name).unwrap_or(&GateState::Off)),
+                        )
+                    })
+                    .collect();
+                let gate_changed = prev_gate_states.as_ref() != Some(&gate_states);
+                let forced = step_index == 0 || gate_changed || ringing_cooldown > 0;
+
+                let (system, all_diodes) =
+                    crate::build_with_mosfets(source, dialect, diodes, &states, shared_r_on)?;
+                let (point, used_backward_euler) = step_with_fallback(
+                    &system,
+                    source,
+                    dialect,
+                    &all_diodes,
+                    x_prev_prev.as_deref(),
+                    &x_prev,
+                    dt,
+                    &prev_diode_raw_ioff,
+                    &prev_segments,
+                    forced,
+                )?;
+                if used_backward_euler && !forced {
+                    ringing_cooldown = RINGING_COOLDOWN_STEPS;
+                } else if ringing_cooldown > 0 {
+                    ringing_cooldown = ringing_cooldown.saturating_sub(1);
+                }
+
+                prev_segments = Some(classify_segments(&point));
+                prev_gate_states = Some(gate_states);
+                prev_diode_raw_ioff = point
+                    .diode_names
+                    .iter()
+                    .cloned()
+                    .zip(point.diode_raw_ioff.iter().copied())
+                    .collect();
+                x_prev_prev = Some(std::mem::replace(&mut x_prev, point.x.clone()));
+                point_prev = point.clone();
+                trace.push((t, point, outputs));
             }
-        };
-
-        for (block, state) in blocks.iter().zip(block_states.iter_mut()) {
-            let input_vals: Vec<f64> = block
-                .inputs
-                .iter()
-                .map(|s| resolve(&outputs, s))
-                .collect::<Result<_, _>>()?;
-
-            let value = match (&block.kind, state) {
-                (BlockKind::Const(v), _) => *v,
-                (BlockKind::Pwl(points), _) => {
-                    let mut v = points.first().map(|(_, v)| *v).unwrap_or(0.0);
-                    for &(t_i, v_i) in points {
-                        if t_i <= t {
-                            v = v_i;
-                        } else {
-                            break;
-                        }
-                    }
-                    v
-                }
-                (BlockKind::Sum(signs), _) => math_ops::sum(&input_vals, signs),
-                (BlockKind::Gain(k), _) => math_ops::gain(*k, input_vals[0]),
-                (BlockKind::Product, _) => math_ops::product(&input_vals),
-                (BlockKind::Saturation(limit), _) => math_ops::saturation(input_vals[0], *limit),
-                (BlockKind::Table(points), _) => {
-                    continuous_blocks::waveform_arithmetic::table(input_vals[0], points)
-                }
-                (BlockKind::MathFn1(f), _) => f.call(input_vals[0]),
-                (BlockKind::MathFn2(f), _) => f.call(input_vals[0], input_vals[1]),
-                (BlockKind::MathFn3(f), _) => f.call(input_vals[0], input_vals[1], input_vals[2]),
-                (BlockKind::Pid { clamp, .. }, BlockState::Dynamic { state_space, x }) => {
-                    let (lo, hi) = *clamp;
-                    let error = [input_vals[0]];
-                    let tentative_x = state_space.rk4_step(x, &error, dt);
-                    let tentative_output = state_space.output(&tentative_x, &error)[0];
-                    let saturating_further = (tentative_output >= hi && error[0] > 0.0)
-                        || (tentative_output <= lo && error[0] < 0.0);
-                    if saturating_further {
-                        state_space.output(x, &error)[0].clamp(lo, hi)
-                    } else {
-                        *x = tentative_x;
-                        tentative_output
-                    }
-                }
-                (
-                    BlockKind::StateSpace(_) | BlockKind::TransferFunction(_),
-                    BlockState::Dynamic { state_space, x },
-                ) => {
-                    let u = [input_vals[0]];
-                    *x = state_space.rk4_step(x, &u, dt);
-                    state_space.output(x, &u)[0]
-                }
-                (BlockKind::Vco(_), BlockState::Vco { vco, phase }) => {
-                    *phase = vco.step(*phase, input_vals[0], dt);
-                    *phase
-                }
-                _ => unreachable!("BlockState variant always matches its BlockKind"),
-            };
-            outputs.insert(block.name.clone(), value);
         }
+        TimeStep::Adaptive(config) => {
+            let mut dt_next = config.dt_init;
+            let mut step_index = 0usize;
+            while t < t_final {
+                let mut dt = dt_next.min(t_final - t);
+                loop {
+                    let mut trial_block_states = block_states.clone();
+                    let t_candidate = t + dt;
+                    let outputs = evaluate_blocks(
+                        blocks,
+                        &mut trial_block_states,
+                        &point_prev,
+                        t_candidate,
+                        dt,
+                    )?;
+                    let gate_states = resolve_gates(gates, &outputs, t_candidate);
+                    let states: BTreeMap<String, (Mosfet, GateState)> = mosfets
+                        .iter()
+                        .map(|(name, m)| {
+                            (
+                                name.clone(),
+                                (*m, *gate_states.get(name).unwrap_or(&GateState::Off)),
+                            )
+                        })
+                        .collect();
+                    let gate_changed = prev_gate_states.as_ref() != Some(&gate_states);
+                    let forced = step_index == 0 || gate_changed || ringing_cooldown > 0;
 
-        let gate_states: BTreeMap<String, GateState> = gates
-            .iter()
-            .map(|(mosfet_name, binding)| (mosfet_name.clone(), binding.resolve(t, &outputs)))
-            .collect();
-        let states: BTreeMap<String, (Mosfet, GateState)> = mosfets
-            .iter()
-            .map(|(name, m)| {
-                (
-                    name.clone(),
-                    (*m, *gate_states.get(name).unwrap_or(&GateState::Off)),
-                )
-            })
-            .collect();
-        let gate_changed = prev_gate_states.as_ref() != Some(&gate_states);
-        let forced = step_index == 0 || gate_changed || ringing_cooldown > 0;
+                    let (system, all_diodes) =
+                        crate::build_with_mosfets(source, dialect, diodes, &states, shared_r_on)?;
+                    let attempt = step_control::lte_attempt(
+                        &system,
+                        source,
+                        dialect,
+                        &all_diodes,
+                        x_prev_prev.as_deref(),
+                        &x_prev,
+                        dt,
+                        &prev_diode_raw_ioff,
+                        &prev_segments,
+                        forced,
+                        &config,
+                    )?;
 
-        let (system, all_diodes) =
-            crate::build_with_mosfets(source, dialect, diodes, &states, shared_r_on)?;
-        let (point, used_backward_euler) = step_with_fallback(
-            &system,
-            source,
-            dialect,
-            &all_diodes,
-            x_prev_prev.as_deref(),
-            &x_prev,
-            dt,
-            &prev_diode_raw_ioff,
-            &prev_segments,
-            forced,
-        )?;
-        if used_backward_euler && !forced {
-            ringing_cooldown = RINGING_COOLDOWN_STEPS;
-        } else if ringing_cooldown > 0 {
-            ringing_cooldown = ringing_cooldown.saturating_sub(1);
+                    if !attempt.accept {
+                        dt = attempt.suggested_dt_next;
+                        continue;
+                    }
+
+                    if attempt.used_backward_euler && !forced {
+                        ringing_cooldown = RINGING_COOLDOWN_STEPS;
+                    } else if ringing_cooldown > 0 {
+                        ringing_cooldown = ringing_cooldown.saturating_sub(1);
+                    }
+
+                    block_states = trial_block_states;
+                    t = t_candidate;
+                    dt_next = attempt.suggested_dt_next;
+                    prev_segments = Some(classify_segments(&attempt.point));
+                    prev_gate_states = Some(gate_states);
+                    prev_diode_raw_ioff = attempt
+                        .point
+                        .diode_names
+                        .iter()
+                        .cloned()
+                        .zip(attempt.point.diode_raw_ioff.iter().copied())
+                        .collect();
+                    x_prev_prev = Some(std::mem::replace(&mut x_prev, attempt.point.x.clone()));
+                    point_prev = attempt.point.clone();
+                    trace.push((t, attempt.point, outputs));
+                    step_index += 1;
+                    break;
+                }
+            }
         }
-
-        prev_segments = Some(classify_segments(&point));
-        prev_gate_states = Some(gate_states);
-        prev_diode_raw_ioff = point
-            .diode_names
-            .iter()
-            .cloned()
-            .zip(point.diode_raw_ioff.iter().copied())
-            .collect();
-        x_prev_prev = Some(std::mem::replace(&mut x_prev, point.x.clone()));
-        point_prev = point.clone();
-        trace.push((t, point, outputs));
     }
     Ok(trace)
 }

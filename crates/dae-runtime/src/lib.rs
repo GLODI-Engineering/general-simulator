@@ -27,6 +27,7 @@
 mod block_graph;
 mod closed_loop;
 mod linsolve;
+mod step_control;
 mod topology;
 
 pub use block_graph::{
@@ -34,6 +35,7 @@ pub use block_graph::{
     TransientWithBlocksStep,
 };
 pub use closed_loop::{sawtooth_carrier, simulate_closed_loop};
+pub use step_control::{AdaptiveConfig, TimeStep};
 
 use std::collections::BTreeMap;
 
@@ -145,9 +147,11 @@ enum Scheme<'a> {
 }
 
 /// Runs a transient simulation of a netlist containing linear devices (including storage —
-/// `C`, `L`) plus any number of `D` diodes, from `t = 0` to `t_final` in fixed steps of `dt`,
-/// starting from `x_initial` (all zero if `None` — the usual "circuit at rest, then a step/DC
-/// source turns on at `t = 0`" case used by this crate's own tests).
+/// `C`, `L`) plus any number of `D` diodes, from `t = 0` to `t_final`, starting from
+/// `x_initial` (all zero if `None` — the usual "circuit at rest, then a step/DC source turns
+/// on at `t = 0`" case used by this crate's own tests). `step` picks fixed or adaptive timing
+/// — see [`TimeStep`]/[`AdaptiveConfig`]; `TimeStep::Fixed(dt)` reproduces exactly the fixed-`dt`
+/// behavior this function had before `TimeStep` existed.
 ///
 /// Uses [`Scheme::Trapezoidal`] (second-order accurate, matching Xyce/SPICE's own default) for
 /// most steps, but falls back to [`Scheme::BackwardEuler`] for the very first step (an
@@ -166,7 +170,7 @@ pub fn simulate_transient(
     diodes: &BTreeMap<String, Diode>,
     x_initial: Option<&[f64]>,
     t_final: f64,
-    dt: f64,
+    step: TimeStep,
 ) -> Result<Vec<(f64, OperatingPoint)>, DaeError> {
     let system = MnaBuilder::new(dialect)
         .build_fragment(source)
@@ -181,39 +185,84 @@ pub fn simulate_transient(
     let mut prev_segments: Option<Vec<Segment>> = None;
     let mut ringing_cooldown: u32 = 0;
 
-    let steps = (t_final / dt).round() as usize;
-    let mut trace = Vec::with_capacity(steps);
+    let mut trace = Vec::new();
     let mut t = 0.0;
-    for step_index in 0..steps {
-        t += dt;
-        let forced = step_index == 0 || ringing_cooldown > 0;
-        let (point, used_backward_euler) = step_with_fallback(
-            &system,
-            source,
-            dialect,
-            diodes,
-            x_prev_prev.as_deref(),
-            &x_prev,
-            dt,
-            &prev_diode_raw_ioff,
-            &prev_segments,
-            forced,
-        )?;
-        if used_backward_euler && !forced {
-            ringing_cooldown = RINGING_COOLDOWN_STEPS;
-        } else if ringing_cooldown > 0 {
-            ringing_cooldown = ringing_cooldown.saturating_sub(1);
-        }
 
-        prev_segments = Some(classify_segments(&point));
-        prev_diode_raw_ioff = point
-            .diode_names
-            .iter()
-            .cloned()
-            .zip(point.diode_raw_ioff.iter().copied())
-            .collect();
-        x_prev_prev = Some(std::mem::replace(&mut x_prev, point.x.clone()));
-        trace.push((t, point));
+    match step {
+        TimeStep::Fixed(dt) => {
+            let steps = (t_final / dt).round() as usize;
+            trace.reserve(steps);
+            for step_index in 0..steps {
+                t += dt;
+                let forced = step_index == 0 || ringing_cooldown > 0;
+                let (point, used_backward_euler) = step_with_fallback(
+                    &system,
+                    source,
+                    dialect,
+                    diodes,
+                    x_prev_prev.as_deref(),
+                    &x_prev,
+                    dt,
+                    &prev_diode_raw_ioff,
+                    &prev_segments,
+                    forced,
+                )?;
+                if used_backward_euler && !forced {
+                    ringing_cooldown = RINGING_COOLDOWN_STEPS;
+                } else if ringing_cooldown > 0 {
+                    ringing_cooldown = ringing_cooldown.saturating_sub(1);
+                }
+
+                prev_segments = Some(classify_segments(&point));
+                prev_diode_raw_ioff = point
+                    .diode_names
+                    .iter()
+                    .cloned()
+                    .zip(point.diode_raw_ioff.iter().copied())
+                    .collect();
+                x_prev_prev = Some(std::mem::replace(&mut x_prev, point.x.clone()));
+                trace.push((t, point));
+            }
+        }
+        TimeStep::Adaptive(config) => {
+            let mut dt_next = config.dt_init;
+            let mut step_index = 0usize;
+            while t < t_final {
+                let dt_trial = dt_next.min(t_final - t);
+                let forced = step_index == 0 || ringing_cooldown > 0;
+                let (point, used_backward_euler, dt_used, next_dt) = step_control::adaptive_step(
+                    &system,
+                    source,
+                    dialect,
+                    diodes,
+                    x_prev_prev.as_deref(),
+                    &x_prev,
+                    dt_trial,
+                    &prev_diode_raw_ioff,
+                    &prev_segments,
+                    forced,
+                    &config,
+                )?;
+                if used_backward_euler && !forced {
+                    ringing_cooldown = RINGING_COOLDOWN_STEPS;
+                } else if ringing_cooldown > 0 {
+                    ringing_cooldown = ringing_cooldown.saturating_sub(1);
+                }
+
+                t += dt_used;
+                dt_next = next_dt;
+                prev_segments = Some(classify_segments(&point));
+                prev_diode_raw_ioff = point
+                    .diode_names
+                    .iter()
+                    .cloned()
+                    .zip(point.diode_raw_ioff.iter().copied())
+                    .collect();
+                x_prev_prev = Some(std::mem::replace(&mut x_prev, point.x.clone()));
+                trace.push((t, point));
+                step_index += 1;
+            }
+        }
     }
     Ok(trace)
 }
