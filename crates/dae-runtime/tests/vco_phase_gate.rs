@@ -2,11 +2,12 @@
 //! `GateBinding::Vco`) — checked against hand-computed switching instants, the way every other
 //! gate-timing behavior in this crate is verified, not just "it ran."
 //!
-//! Circuit: `V1 (10V) -- D1 (MOSFET, r_on=0.1, nodes reversed b,a) -- R1 (1k) -- ground`. Nodes
-//! reversed (`D1 b a`, not `a b`) so the body diode's forward direction (`b -> a`) does *not*
-//! match the normal charging direction (`a -> b`) — otherwise the body diode would keep
-//! conducting even with the gate off, masking the OFF state (same bug already documented in
-//! this crate's own `closed_loop_pi_regulator.rs` test).
+//! Circuit: `V1 (10V) -- D1 (MOSFET, drain=a, source=b, plain SPICE node order) -- R1 (1k) --
+//! ground`. Chosen deliberately (not just "the natural declaration") so the body diode's real
+//! forward direction (anode=source=b, cathode=drain=a, i.e. `b -> a`) does *not* match the
+//! normal charging direction (`a -> b`) — otherwise the body diode would keep conducting even
+//! with the gate off, masking the OFF state (same bug already documented in this crate's own
+//! `closed_loop_pi_regulator.rs` test).
 //! `VCO1` fixed at `100kHz` (`f_min=f_max=100000`, driven by a `Const` input so its output
 //! ramps linearly), `PHASE` a `Const(0.25)` block, `duty=0.5`. On while
 //! `(ramp + phase).rem_euclid(1.0) < duty`, i.e. `ramp` in `[-0.25, 0.25) mod 1 = [0, 0.25) ∪
@@ -25,7 +26,7 @@ use spice_core::Dialect;
 
 #[test]
 fn vco_phase_gate_matches_hand_computed_switching_instants() {
-    let netlist = "V1 a 0 10\nD1 b a mosfetmodel\nR1 b 0 1k";
+    let netlist = "V1 a 0 10\nD1 a b mosfetmodel\nR1 b 0 1k";
     let mosfet = Mosfet::new(0.1, Diode::new(0.0, -100.0, 0.0, 0.7, 1.0));
     let mut mosfets = BTreeMap::new();
     mosfets.insert("D1".to_string(), mosfet);

@@ -429,10 +429,12 @@ fn step_with_fallback(
 /// switch mechanism — every gated-on MOSFET in one call shares `shared_r_on`, matching that
 /// mechanism's own single-shared-resistance design; per-instance `Ron` is a possible future
 /// extension, not needed yet). A gated-off MOSFET is folded into the LCP exactly like an
-/// ordinary diode, using its `body_diode` — see [`Mosfet`]'s doc comment for the
-/// `(source, drain)` node-order convention this requires in the netlist. Each MOSFET element
-/// must still use device letter `'D'` in the netlist text (not `'M'`) — see this crate's
-/// `docs`/journal for why.
+/// ordinary diode, using [`Mosfet::body_diode_for_drain_source_stamping`] (not `body_diode`
+/// directly) — see that method's own doc comment for why: the netlist declares a MOSFET's two
+/// terminals in plain SPICE-conventional `(drain, source)` order, and the mirrored curve is
+/// what makes evaluating it against those nodes as-declared give the physically correct
+/// result. Each MOSFET element must still use device letter `'D'` in the netlist text (not
+/// `'M'`) — see this crate's `docs`/journal for why.
 pub fn solve_dc_with_mosfets(
     source: &str,
     dialect: Dialect,
@@ -558,7 +560,7 @@ fn build_with_mosfets(
         match state {
             GateState::On => options.set_switch(name, GateState::On),
             GateState::Off => {
-                all_diodes.insert(name.clone(), mosfet.body_diode);
+                all_diodes.insert(name.clone(), mosfet.body_diode_for_drain_source_stamping());
             }
         }
     }

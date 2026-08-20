@@ -1,9 +1,9 @@
 //! Hand-derived MOSFET fixtures. Per the model in `pwl_devices::Mosfet`'s doc comment: gated
 //! on is a plain bidirectional `r_on` resistor (an existing, already-tested `elspice-mna`
 //! mechanism); gated off falls back to the intrinsic body diode (the same LCP fold already
-//! verified for ordinary diodes in `two_diode_via_netlist.rs`). Both nodes for a `Mosfet`
-//! element must be declared `(source, drain)` in the netlist for the body diode's polarity to
-//! come out right — see that struct's doc comment for why.
+//! verified for ordinary diodes in `two_diode_via_netlist.rs`), stamped via
+//! `Mosfet::body_diode_for_drain_source_stamping` so that a `Mosfet` element's two nodes are
+//! declared plain SPICE-conventional `(drain, source)` — see that method's doc comment for why.
 
 use std::collections::BTreeMap;
 
@@ -37,8 +37,8 @@ fn gated_on_mosfet_behaves_as_plain_on_resistance() {
     );
 }
 
-/// Gated off, body diode forward-conducting ("natural" commutation): declared (source=b,
-/// drain=a) so V_body = Vb - Va. Vb fixed at 5V by an ideal source; Ra=1 from node a to
+/// Gated off, body diode forward-conducting ("natural" commutation): declared (drain=a,
+/// source=b) so V_body = Vb - Va. Vb fixed at 5V by an ideal source; Ra=1 from node a to
 /// ground. Body diode: v_th=0.7, g_on=1.
 ///
 /// KCL at a: I_diode(Vb - Va) = Va / Ra.
@@ -46,7 +46,7 @@ fn gated_on_mosfet_behaves_as_plain_on_resistance() {
 /// V_body = 5 - 2.15 = 2.85 > 0.7, confirming the forward-conducting guess is self-consistent.
 #[test]
 fn gated_off_mosfet_body_diode_conducts_when_pushed_backward() {
-    let netlist = "Vb b 0 5\nD1 b a mosfetmodel\nRa a 0 1";
+    let netlist = "Vb b 0 5\nD1 a b mosfetmodel\nRa a 0 1";
     let mosfet = Mosfet::new(0.1, Diode::new(0.0, -1e4, 0.0, 0.7, 1.0));
     let mut mosfets = BTreeMap::new();
     mosfets.insert("D1".to_string(), (mosfet, GateState::Off));
@@ -69,7 +69,7 @@ fn gated_off_mosfet_body_diode_conducts_when_pushed_backward() {
 /// forces Va = 0 exactly, which is indeed < 0.7, confirming the blocking guess.
 #[test]
 fn gated_off_mosfet_blocks_with_no_reverse_push() {
-    let netlist = "Vb b 0 0\nD1 b a mosfetmodel\nRa a 0 1";
+    let netlist = "Vb b 0 0\nD1 a b mosfetmodel\nRa a 0 1";
     let mosfet = Mosfet::new(0.1, Diode::new(0.0, -1e4, 0.0, 0.7, 1.0));
     let mut mosfets = BTreeMap::new();
     mosfets.insert("D1".to_string(), (mosfet, GateState::Off));

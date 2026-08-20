@@ -5,7 +5,7 @@
 //! `tanh`-smoothed comparator needed, since gate switching here is just another LCP-resolved
 //! mode, never a Newton-Raphson convergence hazard.
 //!
-//! Circuit: `V1 (10V) -- D1 (MOSFET, source=b, drain=a) -- Rload (10 ohm) -- Cfilt (100uF) --
+//! Circuit: `V1 (10V) -- D1 (MOSFET, drain=a, source=b) -- Rload (10 ohm) -- Cfilt (100uF) --
 //! ground`, `Rload`/`Cfilt` both directly at node `b` (the switched node), driven by a 10 kHz
 //! PWM carrier. Note this is *not* a clean `V_out ~= duty * V_in` relationship: with no
 //! inductor, and `Rload` comparable to `Ron`, the averaged relationship is actually
@@ -36,10 +36,11 @@ use std::collections::BTreeMap;
 
 #[test]
 fn pi_controller_regulates_output_to_reference_at_steady_state() {
-    // D1 nodes reversed (b, a): the body diode's forward direction (b->a) must not match the
-    // normal charging direction (a->b), or it would keep conducting even with the gate off,
-    // defeating the switch (see this crate's journal for the full account of this bug).
-    let netlist = "V1 a 0 10\nD1 b a mosfetmodel\nRload b 0 10\nCfilt b 0 100u";
+    // D1 declared (drain=a, source=b): the body diode's real forward direction (anode=source=
+    // b, cathode=drain=a, i.e. b->a) must not match the normal charging direction (a->b), or
+    // it would keep conducting even with the gate off, defeating the switch (see this crate's
+    // journal for the full account of this bug).
+    let netlist = "V1 a 0 10\nD1 a b mosfetmodel\nRload b 0 10\nCfilt b 0 100u";
     let mosfet = Mosfet::new(0.1, Diode::new(0.0, -100.0, 0.0, 0.5, 5.0));
     let mut mosfets = BTreeMap::new();
     mosfets.insert("D1".to_string(), mosfet);

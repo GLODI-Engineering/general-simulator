@@ -5,7 +5,7 @@
 //! correctly into a *different* RC time constant afterward — checked against a closed-form
 //! solution derived by hand in two phases, before writing this test.
 //!
-//! Circuit: `V1 (10V) -- D1 (a MOSFET, source=a, drain=b) -- R1 (1 ohm) -- C1 (1F) -- ground`.
+//! Circuit: `V1 (10V) -- D1 (a MOSFET, drain=b, source=a) -- R1 (1 ohm) -- C1 (1F) -- ground`.
 //! `D1`'s body diode: `v_th=0.7`, `g_on=1` (same *diode* parameters as
 //! `tests/transient.rs`'s `rc_charging_through_a_forward_biased_diode_matches_hand_derived_solution`
 //! — but that fixture uses a 5V source, this one 10V, so the derived constants below differ;
@@ -31,7 +31,7 @@ use std::collections::BTreeMap;
 
 #[test]
 fn gate_transition_mid_simulation_matches_two_phase_hand_derivation() {
-    let netlist = "V1 a 0 10\nD1 a b mosfetmodel\nR1 b c 1\nC1 c 0 1";
+    let netlist = "V1 a 0 10\nD1 b a mosfetmodel\nR1 b c 1\nC1 c 0 1";
     let mosfet = Mosfet::new(0.1, Diode::new(0.0, -100.0, 0.0, 0.7, 1.0));
     let mut mosfets = BTreeMap::new();
     mosfets.insert("D1".to_string(), mosfet);
