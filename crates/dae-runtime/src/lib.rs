@@ -108,7 +108,7 @@ pub fn solve_dc(
     let system = MnaBuilder::new(dialect)
         .build_fragment(source)
         .map_err(DaeError::Build)?;
-    fold_and_solve(&system, source, dialect, diodes, &Scheme::Dc)
+    fold_and_solve(&system, source, dialect, diodes, &Scheme::Dc, 0.0)
 }
 
 /// Which implicit integration formula a given step of [`simulate_transient`] uses. Both
@@ -150,6 +150,14 @@ enum Scheme<'a> {
     /// analog of "trapezoidal needs consistent initial conditions," and is why
     /// [`simulate_transient`] always starts with backward Euler and falls back to it whenever
     /// a diode's resolved segment changes between consecutive steps.
+    ///
+    /// That "constant, in this crate's scope" assumption about the netlist's own linear
+    /// sources held until [`TransientFunction`](elspice_mna::TransientFunction) support was
+    /// added: for a genuinely time-varying `V`/`I` source, `u_n != u_{n+1}` for that source's
+    /// own column too, not just for diode currents — `fold_and_solve` evaluates `numeric0.u`
+    /// (i.e. `B u_{n+1}`) a second time at `t_n = t_{n+1} - dt` and averages the two, exactly
+    /// mirroring the diode-current averaging already described above, rather than silently
+    /// reusing the same "constant source" shortcut for a source that no longer is one.
     Trapezoidal {
         x_prev: &'a [f64],
         dt: f64,
@@ -217,6 +225,7 @@ pub fn simulate_transient(
                     &prev_diode_raw_ioff,
                     &prev_segments,
                     forced,
+                    t,
                 )?;
                 if used_backward_euler && !forced {
                     ringing_cooldown = RINGING_COOLDOWN_STEPS;
@@ -253,6 +262,7 @@ pub fn simulate_transient(
                     &prev_segments,
                     forced,
                     &config,
+                    t,
                 )?;
                 if used_backward_euler && !forced {
                     ringing_cooldown = RINGING_COOLDOWN_STEPS;
@@ -367,6 +377,7 @@ fn step_with_fallback(
     prev_diode_raw_ioff: &BTreeMap<String, f64>,
     prev_segments: &Option<Vec<Segment>>,
     force_backward_euler: bool,
+    t: f64,
 ) -> Result<(OperatingPoint, bool), DaeError> {
     if force_backward_euler {
         return fold_and_solve(
@@ -375,6 +386,7 @@ fn step_with_fallback(
             dialect,
             diodes,
             &Scheme::BackwardEuler { x_prev, dt },
+            t,
         )
         .map(|point| (point, true));
     }
@@ -388,6 +400,7 @@ fn step_with_fallback(
             dt,
             prev_diode_raw_ioff,
         },
+        t,
     )?;
     let trial_segments = classify_segments(&trial);
     let segments_changed = Some(&trial_segments) != prev_segments.as_ref();
@@ -399,6 +412,7 @@ fn step_with_fallback(
             dialect,
             diodes,
             &Scheme::BackwardEuler { x_prev, dt },
+            t,
         )
         .map(|point| (point, true))
     } else {
@@ -427,7 +441,7 @@ pub fn solve_dc_with_mosfets(
     shared_r_on: f64,
 ) -> Result<OperatingPoint, DaeError> {
     let (system, all_diodes) = build_with_mosfets(source, dialect, diodes, mosfets, shared_r_on)?;
-    fold_and_solve(&system, source, dialect, &all_diodes, &Scheme::Dc)
+    fold_and_solve(&system, source, dialect, &all_diodes, &Scheme::Dc, 0.0)
 }
 
 /// Runs a transient simulation of a netlist containing linear devices, ordinary `D` diodes,
@@ -505,6 +519,7 @@ pub fn simulate_transient_with_mosfets(
             &prev_diode_raw_ioff,
             &prev_segments,
             forced,
+            t,
         )?;
         if used_backward_euler && !forced {
             ringing_cooldown = RINGING_COOLDOWN_STEPS;
@@ -560,16 +575,25 @@ fn fold_and_solve(
     dialect: Dialect,
     diodes: &BTreeMap<String, Diode>,
     scheme: &Scheme,
+    t: f64,
 ) -> Result<OperatingPoint, DaeError> {
     let nodes = topology::diode_nodes(source, dialect);
     let order = system.order();
 
     // Fix every diode's conductance at its canonical reference slope and its Norton current at
-    // zero: this is the "A0"/"u0" the whole LCP fold above is built on.
+    // zero: this is the "A0"/"u0" the whole LCP fold above is built on. Also supply every
+    // time-varying V/I source's own current value at `t` -- `system.transient_sources` is
+    // empty for a netlist with no `SIN`/`PULSE`/`EXP`/`PWL`/`SFFM` source, so this is a no-op
+    // for every existing (plain, static-source) netlist. `t=0.0` for `Scheme::Dc` matches
+    // standard SPICE convention (a DC operating point uses a transient source's own value at
+    // time zero, not its DC-only fallback, when no separate `DC` value was given).
     let mut base_values = BTreeMap::new();
     for (name, diode) in diodes {
         base_values.insert(format!("{name}_G"), diode.g_off);
         base_values.insert(format!("{name}_Ioff"), 0.0);
+    }
+    for (name, transient_fn) in &system.transient_sources {
+        base_values.insert(name.clone(), transient_fn.value_at(t));
     }
     let numeric0 = system.evaluate(&base_values).map_err(DaeError::Evaluate)?;
 
@@ -604,6 +628,25 @@ fn fold_and_solve(
                         a_eff[(row, col)] = a_eff[(row, col)] / 2.0 + numeric0.k[(row, col)] / dt;
                     }
                 }
+                // True trapezoidal RHS uses (B/2)*(u_n + u_{n+1}), not B*u_{n+1} alone (see
+                // Scheme::Trapezoidal's own doc comment) -- correct as-is only because every
+                // netlist source was constant (u_n == u_{n+1}) until time-varying sources
+                // existed. `u_prev` re-evaluates the netlist's own linear sources at `t - dt`;
+                // skipped (and `numeric0.u` cloned directly, exactly the previous behavior)
+                // when there are no transient sources at all, since u_n == u_{n+1} trivially
+                // and a second `evaluate` call would be pure overhead.
+                let u_prev: Vec<f64> = if system.transient_sources.is_empty() {
+                    numeric0.u.clone()
+                } else {
+                    let mut base_values_prev = base_values.clone();
+                    for (name, transient_fn) in &system.transient_sources {
+                        base_values_prev.insert(name.clone(), transient_fn.value_at(t - dt));
+                    }
+                    system
+                        .evaluate(&base_values_prev)
+                        .map_err(DaeError::Evaluate)?
+                        .u
+                };
                 let u_eff: Vec<f64> = (0..order)
                     .map(|row| {
                         let k_x: f64 = (0..order)
@@ -612,7 +655,7 @@ fn fold_and_solve(
                         let a_x: f64 = (0..order)
                             .map(|col| numeric0.a[(row, col)] * x_prev[col])
                             .sum();
-                        numeric0.u[row] + k_x / dt - a_x / 2.0
+                        (numeric0.u[row] + u_prev[row]) / 2.0 + k_x / dt - a_x / 2.0
                     })
                     .collect();
                 (a_eff, u_eff, 0.5)
@@ -766,6 +809,7 @@ mod scheme_tests {
 
         let mut x = vec![0.0; system.order()];
         for step in 0..steps {
+            let t = (step + 1) as f64 * dt;
             let use_be = matches!(kind, Kind::BackwardEuler) || step == 0;
             let point = if use_be {
                 fold_and_solve(
@@ -774,6 +818,7 @@ mod scheme_tests {
                     Dialect::Ngspice,
                     &diodes,
                     &Scheme::BackwardEuler { x_prev: &x, dt },
+                    t,
                 )
             } else {
                 fold_and_solve(
@@ -786,6 +831,7 @@ mod scheme_tests {
                         dt,
                         prev_diode_raw_ioff: &BTreeMap::new(),
                     },
+                    t,
                 )
             }
             .unwrap();

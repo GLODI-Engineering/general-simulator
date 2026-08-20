@@ -127,7 +127,9 @@ pub(crate) fn lte_attempt(
     prev_segments: &Option<Vec<Segment>>,
     force_backward_euler: bool,
     config: &AdaptiveConfig,
+    t_start: f64,
 ) -> Result<LteAttempt, DaeError> {
+    let t = t_start + dt;
     if force_backward_euler {
         let point = fold_and_solve(
             system,
@@ -135,6 +137,7 @@ pub(crate) fn lte_attempt(
             dialect,
             diodes,
             &Scheme::BackwardEuler { x_prev, dt },
+            t,
         )?;
         let suggested_dt_next = (dt * 0.5).clamp(config.dt_min, config.dt_max);
         return Ok(LteAttempt {
@@ -151,6 +154,7 @@ pub(crate) fn lte_attempt(
         dialect,
         diodes,
         &Scheme::BackwardEuler { x_prev, dt },
+        t,
     )?;
     let trap = fold_and_solve(
         system,
@@ -162,6 +166,7 @@ pub(crate) fn lte_attempt(
             dt,
             prev_diode_raw_ioff,
         },
+        t,
     )?;
 
     let trial_segments = classify_segments(&trap);
@@ -227,6 +232,7 @@ pub(crate) fn adaptive_step(
     prev_segments: &Option<Vec<Segment>>,
     force_backward_euler: bool,
     config: &AdaptiveConfig,
+    t_start: f64,
 ) -> Result<(OperatingPoint, bool, f64, f64), DaeError> {
     let mut dt = dt_trial.clamp(config.dt_min, config.dt_max);
     loop {
@@ -242,6 +248,7 @@ pub(crate) fn adaptive_step(
             prev_segments,
             force_backward_euler,
             config,
+            t_start,
         )?;
         if attempt.accept {
             return Ok((

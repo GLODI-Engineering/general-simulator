@@ -590,6 +590,7 @@ pub fn simulate_transient_with_blocks(
                     &prev_diode_raw_ioff,
                     &prev_segments,
                     forced,
+                    t,
                 )?;
                 if used_backward_euler && !forced {
                     ringing_cooldown = RINGING_COOLDOWN_STEPS;
@@ -652,6 +653,7 @@ pub fn simulate_transient_with_blocks(
                         &prev_segments,
                         forced,
                         &config,
+                        t,
                     )?;
 
                     if !attempt.accept {

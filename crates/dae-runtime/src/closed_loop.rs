@@ -104,6 +104,7 @@ pub fn simulate_closed_loop(
         &BTreeMap::new(),
         &None,
         true,
+        0.0,
     )?;
     let mut x_prev_prev: Option<Vec<f64>> =
         Some(std::mem::replace(&mut x_prev, point_prev.x.clone()));
@@ -164,6 +165,7 @@ pub fn simulate_closed_loop(
             &prev_diode_raw_ioff,
             &prev_segments,
             forced,
+            t,
         )?;
         if used_backward_euler && !forced {
             ringing_cooldown = RINGING_COOLDOWN_STEPS;
