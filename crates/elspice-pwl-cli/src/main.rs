@@ -40,8 +40,11 @@
 //! **There is no separate "closed-loop mode."** `--mode transient` always resolves every
 //! MOSFET's gate the same way, every step, whether that gate is a fixed state, a fixed-
 //! frequency/fixed-duty PWM schedule, or driven by a graph of `continuous-blocks` blocks the
-//! device file wires together — `const`, `pwl` (piecewise-constant source, e.g. a reference
-//! schedule), `sum` (an error junction with explicit `+`/`-` signs), `gain`, `pid`,
+//! device file wires together — `const`, `time` (zero-input, outputs the current step's own
+//! simulated time — the standard "clock" source, needed to build a `sin(2*pi*f*t)`-style
+//! signal via `MathFn1`/`Gain` since no block otherwise sees `t` directly), `pwl`
+//! (piecewise-constant source, e.g. a reference schedule), `sum` (an error junction with
+//! explicit `+`/`-` signs), `gain`, `pid`,
 //! `statespace` (arbitrary `(A,B,C,D)`), `tf` (a rational `N(s)/D(s)`), `vco`. Whether that
 //! graph happens to read the circuit's own state back (`meas:<node>`, making it what's
 //! conventionally called "closed-loop") is just a property of how the blocks are wired, the
@@ -713,6 +716,11 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
             "const" => Kind::Block(BlockInstance {
                 name: name.to_string(),
                 kind: BlockKind::Const(get("value")?),
+                inputs: Vec::new(),
+            }),
+            "time" => Kind::Block(BlockInstance {
+                name: name.to_string(),
+                kind: BlockKind::Time,
                 inputs: Vec::new(),
             }),
             "pwl" => {

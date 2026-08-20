@@ -56,6 +56,11 @@ pub enum Signal {
 pub enum BlockKind {
     /// A fixed value, ignoring time — e.g. a nominal frequency or a fixed setpoint.
     Const(f64),
+    /// The current step's own simulated time (seconds), zero inputs — the standard
+    /// block-diagram "clock" source, needed to build a genuine `sin(2*pi*f*t)`-style time
+    /// varying signal out of `MathFn1`/`Gain` blocks (there's otherwise no way for a block to
+    /// see `t` directly; `Pwl`'s own use of it is internal to that block alone).
+    Time,
     /// A piecewise-constant function of time: the value from the last point at or before `t`
     /// (the first point's value for `t` before it). Used for reference schedules, including
     /// step tests (two points is a step at the second point's time).
@@ -306,6 +311,7 @@ fn evaluate_blocks(
 
         let value = match (&block.kind, state) {
             (BlockKind::Const(v), _) => *v,
+            (BlockKind::Time, _) => t,
             (BlockKind::Pwl(points), _) => {
                 let mut v = points.first().map(|(_, v)| *v).unwrap_or(0.0);
                 for &(t_i, v_i) in points {
@@ -445,8 +451,20 @@ pub fn simulate_transient_with_blocks(
     t_final: f64,
     step: TimeStep,
 ) -> Result<Vec<TransientWithBlocksStep>, DaeError> {
-    let block_names: std::collections::BTreeSet<&str> =
-        blocks.iter().map(|b| b.name.as_str()).collect();
+    // A CScript block's own `.name` is only its *primary* output alias; `outputs=` may also
+    // register extra named outputs (see evaluate_blocks' CScript arm) that a gate binding is
+    // just as free to reference directly -- both need to count as "known" here, or a valid
+    // netlist referencing one of those extra names gets rejected before it ever runs.
+    let block_names: std::collections::BTreeSet<&str> = blocks
+        .iter()
+        .flat_map(|b| {
+            let extra: &[String] = match &b.kind {
+                BlockKind::CScript { output_names, .. } => output_names,
+                _ => &[],
+            };
+            std::iter::once(b.name.as_str()).chain(extra.iter().map(String::as_str))
+        })
+        .collect();
     for binding in gates.values() {
         for needed in binding.source_blocks().into_iter().flatten() {
             if !block_names.contains(needed) {
