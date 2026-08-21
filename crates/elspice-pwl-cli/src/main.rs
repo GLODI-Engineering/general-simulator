@@ -53,12 +53,39 @@
 //! output, and a frequency-modulated PWM carrier is `sum -> pid -> sum -> vco`, not one fused
 //! "closed-loop controller" that bakes a specific topology together.** Each block is declared
 //! with `kind=<block>`, its own parameters, and `in=<signal>` (single-input blocks) or
-//! `inputs=<signal>,<signal>,...` (`sum`, one per `signs=` entry). A `<signal>` is either
-//! another block's name (its output this same step) or `meas:<node>` (the circuit's own
-//! previous-step measurement, e.g. `meas:vout` for `V(vout)`). **Blocks are evaluated in the
-//! order they appear in the file** — every signal must reference a block declared *earlier* (or
-//! a `meas:` signal, which has no ordering constraint) — so declare sources first and sinks
-//! last, same as you'd read a signal-flow diagram left to right.
+//! `inputs=<signal>,<signal>,...` (`sum`, one per `signs=` entry). A `<signal>` is another
+//! block's name (its output this same step), `meas:<node>` (the circuit's own previous-step
+//! measurement, e.g. `meas:vout` for `V(vout)`), or `prev:<block>` (that — or any — named
+//! block's own output from the *previous* step, `0.0` before the first step): needed to close a
+//! loop *around a block itself* rather than around the circuit — a current controller
+//! regulating a `kind=pmsm`'s own `id`/`iq` outputs, or a PLL's angle estimate feeding the very
+//! `kind=park` block that produced its own error signal, would otherwise be a same-step
+//! algebraic loop; `prev:` is the one-sample delay every real digital controller reading its own
+//! last output already has. **Blocks are *not* evaluated in file order** — each step's actual
+//! evaluation order is derived automatically from the `in=`/`inputs=` dependency graph itself
+//! (`dae_runtime::block_graph::topological_order`), so a block may name another declared
+//! anywhere in the file, before or after it; only `prev:`/`meas:` were ever exempt from an
+//! ordering rule before, and now nothing needs one, since there's no longer a file-position rule
+//! to be exempt from. A genuine same-step cycle among `in=`/`inputs=` references (however
+//! indirect, including a block naming itself) is rejected before any step runs, reported as the
+//! exact path that closes it (`dae_runtime::DaeError::AlgebraicLoop`) — fix it by routing one
+//! edge in the cycle through `prev:` instead, the sanctioned way to turn a same-step loop into a
+//! legitimate one-sample-delayed feedback path. Declaring sources before sinks, left-to-right
+//! like a signal-flow diagram, remains good practice for a human reading the file — it's just no
+//! longer a correctness requirement.
+//!
+//! `kind=pid kp=<f64> ki=<f64> kd=<f64> n=<f64> in=<signal>` plus either `clamp_lo=<f64>
+//! clamp_hi=<f64>` (a fixed anti-windup bound, the common case) or `clamp_lo_in=<signal>
+//! clamp_hi_in=<signal>` (a *dynamic* bound, read fresh every step like any other input,
+//! exactly mutually exclusive with the fixed form) declares a PID with two-sided
+//! conditional-integration anti-windup. The dynamic form exists for a controller whose
+//! achievable output range genuinely depends on other, still-evolving state — e.g. a
+//! current-loop PID commanding a pole voltage that can't physically exceed roughly half the DC
+//! bus voltage, itself still rising during a soft-start ramp: a *fixed* bound sized for the
+//! final steady-state range is badly oversized early on, so the PID's own anti-windup never
+//! actually engages even though the real plant is already saturated far below that fixed
+//! bound — a real, previously hard-to-diagnose failure mode this dynamic form fixes directly
+//! (see `dae_runtime::PidClamp`'s own doc comment for the worked example this was built for).
 //!
 //! `kind=statespace a=<row>;<row>;... b=<v0,v1,...> c=<v0,v1,...> [d=<scalar>]` declares an
 //! arbitrary single-input single-output block directly from its own matrices (`a`'s rows
@@ -81,7 +108,10 @@
 //! a real-valued scalar function (`cos`, `sin`, `tan`, `exp`, `ln`, `log10`, `sqrt`, `abs`,
 //! `sinh`/`cosh`/`tanh`, `asin`/`acos`/`atan`, `asinh`/`acosh`/`atanh`, `floor`/`ceil`/`round`/
 //! `int`, `sgn`, `u`/`uramp` (unit step / ramp), `buf`/`inv` (threshold at 0.5) — each with
-//! `in=<signal>`; `atan2`/`hypot`/`pow`/`pwr`/`pwrs`/`min`/`max` — each with `in1=`/`in2=`;
+//! `in=<signal>`; `atan2`/`angle_wrapped`/`hypot`/`pow`/`pwr`/`pwrs`/`min`/`max` — each with
+//! `in1=`/`in2=` (`angle_wrapped(alpha, beta)` is `atan2` wrapped to `[0, 2*pi)` — the
+//! angle-tracking half of a synchronous-reference-frame PLL, feeding a `kind=park`/
+//! `kind=clarkepark` block's `theta` input);
 //! `if`/`limit` — each with `in1=`/`in2=`/`in3=`) resolves to that function as a block, no
 //! separate `kind=` list to maintain — see `continuous_blocks::waveform_arithmetic` for the
 //! full set and exactly what was left out (a derivative, noise/random generators, complex-data
@@ -110,6 +140,30 @@
 //! full C-side contract, why loading and calling into a shared library is unsafe by
 //! construction, and what is and isn't checked.
 //!
+//! `kind=clarke inputs=<a>,<b>,<c>` / `kind=clarkeinv inputs=<alpha>,<beta>,<zero>` / `kind=park
+//! inputs=<alpha>,<beta>,<zero>,<theta>` / `kind=parkinv inputs=<d>,<q>,<zero>,<theta>` /
+//! `kind=clarkepark inputs=<a>,<b>,<c>,<theta>` / `kind=clarkeparkinv
+//! inputs=<d>,<q>,<zero>,<theta>` are the six Clarke/Park coordinate transforms (see
+//! `continuous_blocks::coordinate_transforms`) — the standard change of basis between a
+//! three-phase `abc` quantity, its stationary `alpha`/`beta`/zero-sequence projection, and a
+//! `d`/`q`/zero-sequence frame rotating at a given angle `theta` (radians), used to regulate a
+//! three-phase grid or motor-drive quantity with an ordinary `pid` on a DC-like `d`/`q` value
+//! instead of chasing a sine wave directly. Each is multi-output (3 outputs, same convention as
+//! `kind=cscript`'s `outputs=`): the block's own name aliases the first (primary) output,
+//! `outputs=<name>,<name>,<name>` names all three explicitly, or omit it entirely for
+//! auto-generated names built from this transform's own conventional output names (e.g.
+//! `kind=clarke` without `outputs=` on a block named `PLL` gives `PLL` (alpha), `PLL_beta`,
+//! `PLL_zero`).
+//!
+//! `kind=pmsm r_s=<ohm> l_d=<H> l_q=<H> lambda_pm=<Wb> pole_pairs=<n> inertia=<kg*m^2>
+//! friction=<N*m*s/rad> inputs=<vd>,<vq>,<t_load>` is a permanent-magnet synchronous motor in
+//! the rotor `d`/`q` frame (see `continuous_blocks::Pmsm`) — genuinely nonlinear (bilinear
+//! speed/current coupling), integrated with its own RK4 stepper rather than compiled to a
+//! `statespace`. Four outputs, same `outputs=`/default-naming convention as `kind=clarke`
+//! above: `id`, `iq` (A), `omega_m` (mechanical speed, rad/s), `theta_e` (electrical angle,
+//! already wrapped to `[0, 2*pi)` — feed directly into a `kind=park`/`kind=clarkepark` block's
+//! `theta` input). Starts at rest (`id=iq=omega_m=theta_e=0`).
+//!
 //! A MOSFET's gate can reference a controller block by name instead of a fixed/`pwm` spec, two
 //! ways:
 //! - `gate=vco ctrl=<vco-block-name> phase=<0..1> duty=<0..1>` — frequency modulation (LLC-
@@ -119,6 +173,14 @@
 //! - `gate=dutyctrl ctrl=<block-name> freq=<hz>` — duty modulation at a fixed carrier frequency
 //!   (buck/boost-style), with the duty *command* coming from anywhere in the graph instead of
 //!   being a fixed value.
+//! - `gate=dutyctrlcomplement ctrl=<block-name> freq=<hz>` — the exact logical complement of
+//!   `gate=dutyctrl`: on while the carrier is *at or above* the named duty command, instead of
+//!   below. Naming the *same* `ctrl`/`freq` as a `gate=dutyctrl` device drives a half-bridge
+//!   leg's two switches from one shared duty command with no gap and no overlap (both read the
+//!   identical carrier value every step, since it's a pure function of `t`/`freq`) — the
+//!   standard way to build an actively-switched leg (a three-phase bridge's pole, a
+//!   synchronous-rectifier buck), as opposed to the single-active-switch-plus-diode topologies
+//!   `gate=dutyctrl` alone was previously used for in this repo's own experiments.
 //! - `gate=block ctrl=<block-name>` — direct on/off control, on while the named block's output
 //!   is `>= 0.5`, no carrier at all. Meant for a `kind=hysteresis` block (bang-bang current-mode
 //!   control has no fixed switching frequency to compare against), but works with any block.
@@ -162,10 +224,10 @@ use std::env;
 use std::fs;
 use std::process::ExitCode;
 
-use continuous_blocks::{Hysteresis, Pid, StateSpace, TransferFunction, Vco};
+use continuous_blocks::{CoordinateTransform, Hysteresis, Pid, StateSpace, TransferFunction, Vco};
 use dae_runtime::{
     simulate_transient, simulate_transient_with_blocks, solve_dc, solve_dc_with_mosfets,
-    AdaptiveConfig, BlockInstance, BlockKind, GateBinding, GateState, Signal, TimeStep,
+    AdaptiveConfig, BlockInstance, BlockKind, GateBinding, GateState, PidClamp, Signal, TimeStep,
 };
 use pwl_devices::{Diode, Mosfet};
 use spice_core::Dialect;
@@ -196,6 +258,10 @@ enum GateSpec {
         ctrl: String,
         freq_hz: f64,
     },
+    DutyCtrlComplement {
+        ctrl: String,
+        freq_hz: f64,
+    },
     Block {
         ctrl: String,
     },
@@ -220,6 +286,10 @@ impl GateSpec {
                 duty: *duty,
             },
             GateSpec::DutyCtrl { ctrl, freq_hz } => GateBinding::Pwm {
+                duty: ctrl.clone(),
+                freq_hz: *freq_hz,
+            },
+            GateSpec::DutyCtrlComplement { ctrl, freq_hz } => GateBinding::PwmComplement {
                 duty: ctrl.clone(),
                 freq_hz: *freq_hz,
             },
@@ -435,12 +505,13 @@ fn fixed_gate_states(
                 }
                 GateSpec::Vco { .. }
                 | GateSpec::DutyCtrl { .. }
+                | GateSpec::DutyCtrlComplement { .. }
                 | GateSpec::Block { .. }
                 | GateSpec::VcoPhase { .. } => {
                     return Err(format!(
-                        "device '{name}': gate=vco/dutyctrl/block/vcophase needs --mode \
-                         transient, not 'dc' (a DC operating point has no notion of a block's \
-                         time-stepped \
+                        "device '{name}': gate=vco/dutyctrl/dutyctrlcomplement/block/vcophase \
+                         needs --mode transient, not 'dc' (a DC operating point has no notion \
+                         of a block's time-stepped \
                          state)"
                     ))
                 }
@@ -485,14 +556,19 @@ fn run_transient_with_mosfets(
     )
     .map_err(|e| format!("{e:?}"))?;
 
-    // A cscript block with `outputs=` naming more than one signal registers extra named
-    // outputs beyond its own block name (see block_graph::evaluate_blocks) -- list those too,
-    // so they show up as their own CSV columns instead of only being reachable via
-    // Signal::Block from another declared block.
+    // A cscript, coordinate-transform, or pmsm block registers extra named outputs beyond its
+    // own block name (see block_graph::evaluate_blocks) -- list those too, so they show up as
+    // their own CSV columns instead of only being reachable via Signal::Block from another
+    // declared block.
     let mut block_names: Vec<String> = blocks.iter().map(|b| b.name.clone()).collect();
     for block in blocks {
-        if let BlockKind::CScript { output_names, .. } = &block.kind {
-            block_names.extend(output_names.iter().skip(1).cloned());
+        match &block.kind {
+            BlockKind::CScript { output_names, .. }
+            | BlockKind::CoordinateTransform { output_names, .. }
+            | BlockKind::Pmsm { output_names, .. } => {
+                block_names.extend(output_names.iter().skip(1).cloned());
+            }
+            _ => {}
         }
     }
     if let Some((_, first, _)) = trace.first() {
@@ -527,12 +603,19 @@ fn print_row(t: f64, point: &dae_runtime::OperatingPoint) {
     println!("{t},{}", values.join(","));
 }
 
-/// Parses a `<signal>` field value: `meas:<node>` for a circuit measurement, anything else is
-/// another block's name.
+/// Parses a `<signal>` field value: `meas:<node>` for a circuit measurement, `prev:<block>` for
+/// a named block's own output from the *previous* step (`0.0` before the first step) — needed
+/// to close a loop around a block itself (a controller regulating a `kind=pmsm`'s own `id`/`iq`
+/// outputs, or a PLL's angle estimate feeding the very `kind=park` block that produced its own
+/// error signal), where a same-step reference would be a genuine algebraic loop. Anything else
+/// is another block's name (this same step's output).
 fn parse_signal(text: &str) -> Signal {
-    match text.strip_prefix("meas:") {
-        Some(node) => Signal::Measure(node.to_string()),
-        None => Signal::Block(text.to_string()),
+    if let Some(node) = text.strip_prefix("meas:") {
+        Signal::Measure(node.to_string())
+    } else if let Some(name) = text.strip_prefix("prev:") {
+        Signal::BlockPrev(name.to_string())
+    } else {
+        Signal::Block(text.to_string())
     }
 }
 
@@ -692,6 +775,10 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                         ctrl: get_str("ctrl")?,
                         freq_hz: get("freq")?,
                     },
+                    Some("dutyctrlcomplement") => GateSpec::DutyCtrlComplement {
+                        ctrl: get_str("ctrl")?,
+                        freq_hz: get("freq")?,
+                    },
                     Some("block") => GateSpec::Block {
                         ctrl: get_str("ctrl")?,
                     },
@@ -767,11 +854,29 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
             }),
             "pid" => {
                 let pid = Pid::new(get("kp")?, get("ki")?, get("kd")?, get("n")?);
-                let clamp = (get("clamp_lo")?, get("clamp_hi")?);
+                let error_input = parse_signal(&get_str("in")?);
+                let (clamp, inputs) = match (fields.get("clamp_lo_in"), fields.get("clamp_hi_in")) {
+                    (Some(lo), Some(hi)) => (
+                        PidClamp::Dynamic,
+                        vec![error_input, parse_signal(lo), parse_signal(hi)],
+                    ),
+                    (None, None) => (
+                        PidClamp::Fixed(get("clamp_lo")?, get("clamp_hi")?),
+                        vec![error_input],
+                    ),
+                    _ => {
+                        return Err(format!(
+                            "line {}: device '{name}': 'clamp_lo_in'/'clamp_hi_in' must both be \
+                             given together (dynamic clamp) or both omitted (fixed clamp= \
+                             clamp_lo/clamp_hi)",
+                            line_number + 1
+                        ))
+                    }
+                };
                 Kind::Block(BlockInstance {
                     name: name.to_string(),
                     kind: BlockKind::Pid { pid, clamp },
-                    inputs: vec![parse_signal(&get_str("in")?)],
+                    inputs,
                 })
             }
             "vco" => {
@@ -884,6 +989,105 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                     name: name.to_string(),
                     kind: BlockKind::Table(points),
                     inputs: vec![parse_signal(&get_str("in")?)],
+                })
+            }
+            "clarke" | "clarkeinv" | "park" | "parkinv" | "clarkepark" | "clarkeparkinv" => {
+                let ct = match kind {
+                    "clarke" => CoordinateTransform::Clarke,
+                    "clarkeinv" => CoordinateTransform::ClarkeInv,
+                    "park" => CoordinateTransform::Park,
+                    "parkinv" => CoordinateTransform::ParkInv,
+                    "clarkepark" => CoordinateTransform::ClarkePark,
+                    "clarkeparkinv" => CoordinateTransform::ClarkeParkInv,
+                    _ => unreachable!("matched above"),
+                };
+                let inputs: Vec<Signal> = get_str("inputs")?.split(',').map(parse_signal).collect();
+                if inputs.len() != ct.input_count() {
+                    return Err(format!(
+                        "line {}: device '{name}' kind='{kind}' needs {} inputs (got {})",
+                        line_number + 1,
+                        ct.input_count(),
+                        inputs.len()
+                    ));
+                }
+                let output_names = match fields.get("outputs") {
+                    Some(names) => {
+                        let names: Vec<String> = names.split(',').map(str::to_string).collect();
+                        if names.len() != 3 {
+                            return Err(format!(
+                                "line {}: device '{name}': 'outputs' needs exactly 3 entries \
+                                 (got {})",
+                                line_number + 1,
+                                names.len()
+                            ));
+                        }
+                        names
+                    }
+                    // Default: block's own name aliases the first (primary) output, same as
+                    // `kind=cscript`'s default; the other two get readable auto-generated names
+                    // from this transform's own conventional output names (e.g. `<name>_beta`).
+                    None => {
+                        let suffixes = ct.output_names();
+                        std::iter::once(name.to_string())
+                            .chain(suffixes[1..].iter().map(|s| format!("{name}_{s}")))
+                            .collect()
+                    }
+                };
+                Kind::Block(BlockInstance {
+                    name: name.to_string(),
+                    kind: BlockKind::CoordinateTransform {
+                        kind: ct,
+                        output_names,
+                    },
+                    inputs,
+                })
+            }
+            "pmsm" => {
+                let pmsm = continuous_blocks::Pmsm::new(
+                    get("r_s")?,
+                    get("l_d")?,
+                    get("l_q")?,
+                    get("lambda_pm")?,
+                    get("pole_pairs")?,
+                    get("inertia")?,
+                    get("friction")?,
+                );
+                let inputs: Vec<Signal> = get_str("inputs")?.split(',').map(parse_signal).collect();
+                if inputs.len() != 3 {
+                    return Err(format!(
+                        "line {}: device '{name}' kind='pmsm' needs 3 inputs (vd,vq,t_load; \
+                         got {})",
+                        line_number + 1,
+                        inputs.len()
+                    ));
+                }
+                let output_names = match fields.get("outputs") {
+                    Some(names) => {
+                        let names: Vec<String> = names.split(',').map(str::to_string).collect();
+                        if names.len() != 4 {
+                            return Err(format!(
+                                "line {}: device '{name}': 'outputs' needs exactly 4 entries \
+                                 (got {})",
+                                line_number + 1,
+                                names.len()
+                            ));
+                        }
+                        names
+                    }
+                    // Default: block's own name aliases the first (primary) output (`id`), same
+                    // convention as `kind=cscript`/`kind=clarke`; the other three get readable
+                    // auto-generated names.
+                    None => {
+                        let suffixes = ["id", "iq", "omega_m", "theta_e"];
+                        std::iter::once(name.to_string())
+                            .chain(suffixes[1..].iter().map(|s| format!("{name}_{s}")))
+                            .collect()
+                    }
+                };
+                Kind::Block(BlockInstance {
+                    name: name.to_string(),
+                    kind: BlockKind::Pmsm { pmsm, output_names },
+                    inputs,
                 })
             }
             other => {

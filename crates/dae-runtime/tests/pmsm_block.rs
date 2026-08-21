@@ -1,0 +1,100 @@
+//! `BlockKind::Pmsm` wired through the real block graph (not just `continuous-blocks`' own
+//! standalone unit tests) — checks the `output_names` convention it shares with `CScript`/
+//! `CoordinateTransform`, and reuses the same hand-derived decoupled-R-L-circuit case
+//! `continuous_blocks::pmsm`'s own unit tests verify: `vq=0`, `iq(0)=0` keeps `iq` and
+//! `omega_m` at exactly zero for all time, leaving `id(t) = (vd/R)*(1 - exp(-t*R/Ld))`, an
+//! independent closed-form result. The circuit itself is irrelevant (a bare resistor across a
+//! fixed source) — this test is about the block graph, not circuit behavior.
+
+use std::collections::BTreeMap;
+
+use dae_runtime::{simulate_transient_with_blocks, BlockInstance, BlockKind, Signal, TimeStep};
+use pwl_devices::{Diode, Mosfet};
+use spice_core::Dialect;
+
+#[test]
+fn pmsm_block_matches_hand_derived_rl_circuit_when_decoupled() {
+    let netlist = "V1 a 0 5\nR1 a 0 1k";
+    let mosfets: BTreeMap<String, Mosfet> = BTreeMap::new();
+    let diodes: BTreeMap<String, Diode> = BTreeMap::new();
+    let gates = BTreeMap::new();
+
+    let (r, l, vd) = (2.0, 5e-3, 10.0);
+    let pmsm = continuous_blocks::Pmsm::new(r, l, l, 0.05, 4.0, 1e-4, 0.0);
+
+    let blocks = vec![
+        BlockInstance {
+            name: "VD".to_string(),
+            kind: BlockKind::Const(vd),
+            inputs: vec![],
+        },
+        BlockInstance {
+            name: "VQ".to_string(),
+            kind: BlockKind::Const(0.0),
+            inputs: vec![],
+        },
+        BlockInstance {
+            name: "TLOAD".to_string(),
+            kind: BlockKind::Const(0.0),
+            inputs: vec![],
+        },
+        BlockInstance {
+            name: "M1".to_string(),
+            kind: BlockKind::Pmsm {
+                pmsm,
+                output_names: vec![
+                    "M1".to_string(),
+                    "M1_iq".to_string(),
+                    "M1_omega".to_string(),
+                    "M1_theta".to_string(),
+                ],
+            },
+            inputs: vec![
+                Signal::Block("VD".to_string()),
+                Signal::Block("VQ".to_string()),
+                Signal::Block("TLOAD".to_string()),
+            ],
+        },
+    ];
+
+    let tau = l / r;
+    let dt = tau / 200.0;
+    let steps = 400;
+    let t_final = dt * steps as f64;
+
+    let trace = simulate_transient_with_blocks(
+        netlist,
+        Dialect::Ngspice,
+        &diodes,
+        &mosfets,
+        &blocks,
+        &gates,
+        0.1,
+        None,
+        t_final,
+        TimeStep::Fixed(dt),
+    )
+    .unwrap();
+
+    let (t_last, _, outputs) = trace.last().unwrap();
+    let expected_id = (vd / r) * (1.0 - (-t_last * r / l).exp());
+
+    let tol = 1e-6;
+    assert!(
+        (outputs["M1"] - expected_id).abs() < tol,
+        "id={}, expected={}",
+        outputs["M1"],
+        expected_id
+    );
+    assert!(outputs["M1_iq"].abs() < tol, "iq={}", outputs["M1_iq"]);
+    assert!(
+        outputs["M1_omega"].abs() < tol,
+        "omega_m={}",
+        outputs["M1_omega"]
+    );
+    assert!(
+        outputs["M1_theta"].abs() < tol,
+        "theta_e={}",
+        outputs["M1_theta"]
+    );
+}

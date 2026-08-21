@@ -122,8 +122,16 @@ regulation on the identical circuit spec — see `crates/dae-runtime/tests/close
 comparator) — the right shape for the common buck/boost case, but not general. `dae_runtime::
 block_graph::simulate_transient_with_blocks` generalizes this: gates are resolved from a graph
 of named, independently reusable `continuous-blocks` blocks (`Const`, `Pwl`, `Sum`, `Gain`,
-`Pid`, `StateSpace`, `TransferFunction`, `Vco`, `Hysteresis`, `Product`, `Saturation`, `Table`, and the whole
-real-valued scalar function library in `continuous_blocks::waveform_arithmetic` — trig,
+`Pid`, `StateSpace`, `TransferFunction`, `Vco`, `Hysteresis`, `Product`, `Saturation`, `Table`,
+`CoordinateTransform` (the six Clarke/Park `abc`/`alpha-beta-0`/`d-q-0` change-of-basis
+transforms a three-phase grid or motor-drive controller needs, plus the wrapped-angle PLL
+utility — see `continuous_blocks::coordinate_transforms`; multi-output, so it reuses
+`BlockKind::CScript`'s `output_names` convention below rather than needing a new mechanism),
+`Pmsm` (a permanent-magnet synchronous motor in the rotor `d`/`q` frame — see
+`continuous_blocks::Pmsm`; like `Vco`, genuinely nonlinear (bilinear speed/current coupling) and
+so carries its own state and RK4 `step()` rather than compiling to a `StateSpace`; also
+multi-output via the same `output_names` convention), and
+the whole real-valued scalar function library in `continuous_blocks::waveform_arithmetic` — trig,
 exponential/log, sign, min/max, select/clamp) wired together by the caller, evaluated once
 per circuit step in declaration order — the same discipline a real block-diagram tool
 uses. An error signal is a `Sum` block's own output (explicit `+`/`-` signs),

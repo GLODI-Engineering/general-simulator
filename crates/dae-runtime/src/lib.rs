@@ -31,7 +31,7 @@ mod step_control;
 mod topology;
 
 pub use block_graph::{
-    simulate_transient_with_blocks, BlockInstance, BlockKind, GateBinding, Signal,
+    simulate_transient_with_blocks, BlockInstance, BlockKind, GateBinding, PidClamp, Signal,
     TransientWithBlocksStep,
 };
 pub use closed_loop::{sawtooth_carrier, simulate_closed_loop};
@@ -78,11 +78,24 @@ pub enum DaeError {
     Linear(SingularMatrix),
     Lcp(LcpError),
     UnknownDiodeInput(String),
-    /// A [`block_graph::BlockInstance`]'s input, or a [`block_graph::GateBinding`], refers to
-    /// a block name that either doesn't exist or hasn't been declared yet (block graph
-    /// evaluation is a single forward pass in declaration order, so every input must name an
-    /// earlier block, a circuit measurement, or itself be a source block with no inputs).
+    /// A [`block_graph::BlockInstance`]'s input, or a [`block_graph::GateBinding`], names a
+    /// block that doesn't exist anywhere in the graph (a typo, or a genuinely undeclared name)
+    /// — declaration *position* is no longer a possible cause: [`block_graph::topological_order`]
+    /// derives each step's evaluation order from the `Signal::Block` dependency graph itself, so
+    /// a block may reference another declared anywhere in the same slice, before or after it.
     UnknownBlockInput(String),
+    /// The `Signal::Block` dependency graph among a [`block_graph::BlockInstance`] slice
+    /// contains a genuine same-step cycle — computed once, upfront, by
+    /// [`block_graph::topological_order`] (a DFS-based topological sort; a cycle shows up as a
+    /// back-edge into a node still on the current recursion path) before any step is solved.
+    /// `cycle` is the exact closing path, block names in dependency order with the first name
+    /// repeated at the end to show the loop closing (e.g. `["A", "B", "C", "A"]`); a
+    /// self-referencing block reports `["A", "A"]`. Fix by inserting a `Signal::BlockPrev`
+    /// somewhere in the cycle — the one-sample delay that turns a same-step algebraic loop into
+    /// a legitimate sampled-data feedback path.
+    AlgebraicLoop {
+        cycle: Vec<String>,
+    },
     /// Loading or resolving symbols in a [`block_graph::BlockKind::CScript`]'s shared library
     /// failed — see [`cscript_ffi::CScriptError`].
     CScript(cscript_ffi::CScriptError),

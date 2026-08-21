@@ -1,7 +1,9 @@
 //! Resolves every MOSFET's gate state, each transient step, from a graph of named,
 //! independently reusable `continuous-blocks` blocks (`Const`, `Pwl`, `Sum`, `Gain`, `Pid`,
-//! `StateSpace`, `TransferFunction`, `Vco`, `Hysteresis`, `CScript`) wired together by the
-//! caller — the same discipline a real block-diagram tool uses: an error signal is a `Sum`
+//! `StateSpace`, `TransferFunction`, `Vco`, `Hysteresis`, `CoordinateTransform`, `Pmsm`,
+//! `CScript`) wired together by the caller — the same discipline a real block-diagram tool uses:
+//! an error
+//! signal is a `Sum`
 //! block's output, a filtered-derivative PID compensator is a `TransferFunction` given its own
 //! `N(s)/D(s)` coefficients, and a frequency-modulated PWM carrier is `Pid -> Gain -> Vco`, not
 //! a single function that bakes a specific topology together.
@@ -19,9 +21,11 @@
 //! *this* function is analysis-specific.
 //!
 //! Sampled-data co-simulation: every block reads the *previous* circuit step's measurement,
-//! the whole graph is evaluated once per circuit step (in declaration order — see
-//! [`BlockInstance`]), and the result decides gate states before the circuit step itself is
-//! solved. [`crate::simulate_closed_loop`] (a single fixed `Sum`-then-`Pid`-then-duty-
+//! the whole graph is evaluated once per circuit step (in the causal order [`topological_order`]
+//! derives from the graph's own `Signal::Block` dependencies — declaration order is not the
+//! evaluation order; see that function and [`BlockInstance`]), and the result decides gate
+//! states before the circuit step itself is solved. [`crate::simulate_closed_loop`] (a single
+//! fixed `Sum`-then-`Pid`-then-duty-
 //! comparator topology, named for the one case it was first built for) remains as a lighter
 //! Rust-level convenience for simple direct callers; this module is the general one, used by
 //! `elspice-pwl-cli` unconditionally for every MOSFET-containing transient run.
@@ -29,7 +33,8 @@
 use std::collections::BTreeMap;
 
 use continuous_blocks::{
-    math_ops, Hysteresis, MathFn1, MathFn2, MathFn3, Pid, StateSpace, TransferFunction, Vco,
+    math_ops, CoordinateTransform, Hysteresis, MathFn1, MathFn2, MathFn3, Pid, Pmsm, StateSpace,
+    TransferFunction, Vco,
 };
 use cscript_ffi::CScriptRegistry;
 use pwl_devices::{Diode, Mosfet};
@@ -40,13 +45,52 @@ use crate::{
     OperatingPoint, Segment, TimeStep, RINGING_COOLDOWN_STEPS,
 };
 
-/// Where a block's input value comes from: another block's output this same step, or the
-/// circuit's own previous-step operating point (`V(node)` or `I(branch)`, anything
-/// [`OperatingPoint::value`] accepts).
+/// Where a block's input value comes from: another block's output this same step, that (or
+/// any) block's own output from the *previous* step, or the circuit's own previous-step
+/// operating point (`V(node)` or `I(branch)`, anything [`OperatingPoint::value`] accepts).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Signal {
+    /// Another block's output *this* step — may name any block in the same slice, declared
+    /// before or after this one: [`topological_order`] derives each step's actual evaluation
+    /// order from the full `Signal::Block` dependency graph, not declaration position, so
+    /// "before/after" in the source text no longer has to match causal order (see that
+    /// function). A genuine same-step cycle among these edges (`A` depends on `B` depends on
+    /// `A`, however indirectly, including a block naming itself) is a model error reported as
+    /// `DaeError::AlgebraicLoop` before any step is solved — see [`BlockInstance`]'s own doc
+    /// comment.
     Block(String),
+    /// A named block's own output from the *previous* step (`0.0` before the first step,
+    /// matching every dynamic block's own "starts at rest" convention) — the block-graph
+    /// counterpart to [`Signal::Measure`]'s "read the circuit's previous state." Unlike
+    /// `Signal::Block`, this is not a same-step dependency at all — it reads state fixed before
+    /// this step even starts — so it never contributes an edge to the dependency graph
+    /// [`topological_order`] builds, and is consequently the *sanctioned* way to close what
+    /// would otherwise be a same-step cycle (e.g. a current controller regulating a
+    /// [`BlockKind::Pmsm`]'s own `id`/`iq` outputs, or a PLL's angle estimate feeding the very
+    /// [`BlockKind::CoordinateTransform`] `Park` block that produced its own error signal): the
+    /// one-sample delay every real digital controller reading its own last output already has.
+    BlockPrev(String),
     Measure(String),
+}
+
+/// A [`BlockKind::Pid`]'s anti-windup bound: fixed at model-build time, or read fresh from the
+/// graph every step. `Fixed` is every existing use of `Pid` before this variant existed —
+/// unchanged behavior, one input (the error signal) as always. `Dynamic` is for a controller
+/// whose *achievable* output range genuinely depends on other, still-evolving state (e.g. a
+/// current-loop PID commanding a pole voltage that can't physically exceed roughly half the
+/// DC bus voltage, itself still rising during a soft-start ramp) — a `Fixed` bound sized for
+/// the final steady-state range is badly oversized early on, so the PID's own anti-windup never
+/// engages even though the real plant is already saturated far below that fixed bound,
+/// producing sustained, hard-to-diagnose windup-driven oscillation (worked example: an
+/// `elspice-pwl-pfc-three-phase-vsc` experiment's own three-phase active-front-end current loop,
+/// in the sibling `internal-archive` repo). `Dynamic` reads two *extra* inputs beyond
+/// the error signal, in order `(clamp_lo, clamp_hi)`, evaluated fresh every step exactly like
+/// any other block input — see [`BlockInstance`]'s own doc comment for the resulting input
+/// count.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PidClamp {
+    Fixed(f64, f64),
+    Dynamic,
 }
 
 /// One block's behavior. `Const`/`Pwl` are sources (zero inputs); `Sum`/`Gain` are stateless
@@ -69,13 +113,14 @@ pub enum BlockKind {
     Sum(Vec<f64>),
     /// Scales its single input.
     Gain(f64),
-    /// A compiled PID with two-sided conditional-integration anti-windup against
-    /// `clamp = (lo, hi)` — see [`crate::simulate_closed_loop`]'s doc comment for why
-    /// two-sided anti-windup matters; the mechanism here is identical, just attached to this
-    /// block instead of baked into a whole controller function. `clamp` is this PID's own
-    /// notion of "my output is saturated," independent of whatever downstream `Gain`/`Vco`
-    /// blocks do to it after — same as a real PID block's own configured output limits.
-    Pid { pid: Pid, clamp: (f64, f64) },
+    /// A compiled PID with two-sided conditional-integration anti-windup against `clamp` — see
+    /// [`crate::simulate_closed_loop`]'s doc comment for why two-sided anti-windup matters; the
+    /// mechanism here is identical, just attached to this block instead of baked into a whole
+    /// controller function. `clamp` is this PID's own notion of "my output is saturated,"
+    /// independent of whatever downstream `Gain`/`Vco` blocks do to it after — same as a real
+    /// PID block's own configured output limits. See [`PidClamp`] for the fixed-vs-dynamic
+    /// choice and what it changes about this block's own input count.
+    Pid { pid: Pid, clamp: PidClamp },
     /// An arbitrary single-input single-output continuous-time block given directly as its own
     /// `(A, B, C, D)` matrices — a compensator/filter that doesn't already have a named
     /// convenience constructor, e.g. a low-pass filter placed ahead of a `Pid` to damp a
@@ -137,14 +182,55 @@ pub enum BlockKind {
         output_names: Vec<String>,
         sample_time: Option<f64>,
     },
+    /// One of the six Clarke/Park coordinate transforms (see
+    /// [`continuous_blocks::CoordinateTransform`]) — the standard `abc`/`alpha-beta-0`/`d-q-0`
+    /// change of basis used to regulate a three-phase quantity (grid-tied PFC, motor drive) with
+    /// a `Pid` on a DC-like `d`/`q` value instead of chasing a sine wave directly. Stateless and
+    /// multi-output, following exactly the same `output_names` convention [`BlockKind::CScript`]
+    /// established: `inputs` supplies `kind.input_count()` values in the order
+    /// [`CoordinateTransform::call`] expects, `output_names.len()` must equal 3 (this family's
+    /// output count — see [`CoordinateTransform::output_names`] for the conventional per-
+    /// transform names, e.g. `["alpha", "beta", "zero"]` for `Clarke`), the block's own `.name`
+    /// binds to the first (primary) output, and the remaining two are inserted under their own
+    /// `output_names` entries so a downstream block can reference them directly via
+    /// `Signal::Block(name)`.
+    CoordinateTransform {
+        kind: CoordinateTransform,
+        output_names: Vec<String>,
+    },
+    /// A permanent-magnet synchronous motor (see [`continuous_blocks::Pmsm`]) — genuinely
+    /// nonlinear (bilinear speed/current coupling), so like [`BlockKind::Vco`] it carries its
+    /// own state and is integrated via its own `step()` (RK4) rather than compiled to a
+    /// [`StateSpace`]. Three inputs, in order: `vd`, `vq` (rotor-frame stator voltage commands,
+    /// V — typically a `ClarkeParkInv`'s output, or a `CoordinateTransform` intermediate wired
+    /// through a `Pid`), and `t_load` (N*m, the mechanical load torque). Four outputs, same
+    /// `output_names` convention as [`BlockKind::CoordinateTransform`]/[`BlockKind::CScript`]
+    /// (`output_names.len()` must be 4, the block's own name aliases the first/primary output):
+    /// `id`, `iq` (A), `omega_m` (mechanical speed, rad/s), and `theta_e` (electrical angle,
+    /// already wrapped to `[0, 2*pi)` via [`continuous_blocks::Pmsm::theta_e_wrapped`] — ready
+    /// to feed a [`BlockKind::CoordinateTransform`] `Park`/`ClarkePark` block directly). Starts
+    /// at rest (`id = iq = omega_m = theta_e = 0`) — no initial-condition override, matching
+    /// every other dynamic block in this graph.
+    Pmsm {
+        pmsm: Pmsm,
+        output_names: Vec<String>,
+    },
 }
 
 /// One named block instance and where its inputs (if any) come from. `Const`/`Pwl` blocks
-/// must have zero inputs; `Sum`/`Product` need one input per sign/factor; `Gain`/`Pid`/
+/// must have zero inputs; `Sum`/`Product` need one input per sign/factor; `Gain`/
 /// `StateSpace`/`TransferFunction`/`Vco`/`Saturation`/`Table`/`MathFn1` each need exactly one;
-/// `MathFn2` needs two; `MathFn3` needs three. Evaluated in the order given in the slice
-/// passed to [`simulate_transient_with_blocks`] — every input must reference a `Measure` or a
-/// block *earlier* in that same slice (source blocks, naturally, need none).
+/// `Pid` needs exactly one (the error signal) when its `clamp` is `PidClamp::Fixed`, or exactly
+/// three (`error, clamp_lo, clamp_hi`, in that order) when `PidClamp::Dynamic`; `MathFn2` needs
+/// two; `MathFn3` needs three; `CoordinateTransform` needs `kind.input_count()` (3 for
+/// `Clarke`/`ClarkeInv`, 4 for the others — see
+/// [`continuous_blocks::CoordinateTransform::input_count`]); `Pmsm` needs exactly three (`vd`,
+/// `vq`, `t_load`, in that order). Evaluated once per step in the causal order
+/// [`topological_order`] derives from the slice's own `Signal::Block` dependency graph — *not*
+/// the order the slice happens to be given in; a `Signal::Block` input may name any block in
+/// the same slice regardless of declared position (source blocks, naturally, need none, and a
+/// genuine cycle among these edges is rejected as `DaeError::AlgebraicLoop` before any step
+/// runs — see `topological_order`'s own doc comment for how).
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlockInstance {
     pub name: String,
@@ -194,6 +280,19 @@ pub enum GateBinding {
         phase: String,
         duty: f64,
     },
+    /// The exact logical complement of [`GateBinding::Pwm`]: on while
+    /// [`sawtooth_carrier`]`(t, freq_hz)` is *at or above* the named block's current output
+    /// (clamped to `[0, 1]`), instead of below. The standard way to drive a half-bridge leg's
+    /// two switches from one shared duty command with no gap and no overlap: a
+    /// `GateBinding::Pwm` on the leg's top switch and a `GateBinding::PwmComplement` on its
+    /// bottom switch, both naming the *same* duty block and `freq_hz` — since
+    /// [`sawtooth_carrier`] is a pure function of `(t, freq_hz)` with no block state of its own,
+    /// both gates evaluate the identical carrier value every step, so "below" and "at or above"
+    /// partition `[0, 1)` exactly, the two switches are never simultaneously on (no
+    /// shoot-through) and never simultaneously off (no dead time — this is the ideal-switching
+    /// case; a caller wanting dead time would shrink one leg's own duty command, not something
+    /// this type needs to know about).
+    PwmComplement { duty: String, freq_hz: f64 },
 }
 
 impl GateBinding {
@@ -203,7 +302,9 @@ impl GateBinding {
         match self {
             GateBinding::Fixed(_) | GateBinding::PwmFixed { .. } => [None, None],
             GateBinding::Vco { vco, .. } => [Some(vco), None],
-            GateBinding::Pwm { duty, .. } => [Some(duty), None],
+            GateBinding::Pwm { duty, .. } | GateBinding::PwmComplement { duty, .. } => {
+                [Some(duty), None]
+            }
             GateBinding::Block(name) => [Some(name), None],
             GateBinding::VcoPhase { vco, phase, .. } => [Some(vco), Some(phase)],
         }
@@ -220,6 +321,10 @@ impl GateBinding {
             GateBinding::Pwm { duty, freq_hz } => {
                 let source = outputs[duty.as_str()];
                 sawtooth_carrier(t, *freq_hz) < source.clamp(0.0, 1.0)
+            }
+            GateBinding::PwmComplement { duty, freq_hz } => {
+                let source = outputs[duty.as_str()];
+                sawtooth_carrier(t, *freq_hz) >= source.clamp(0.0, 1.0)
             }
             GateBinding::Block(name) => outputs[name.as_str()] >= 0.5,
             GateBinding::VcoPhase { vco, phase, duty } => {
@@ -250,6 +355,10 @@ enum BlockState {
         vco: Vco,
         phase: f64,
     },
+    Pmsm {
+        pmsm: Pmsm,
+        x: [f64; 4],
+    },
     Hysteresis {
         hysteresis: Hysteresis,
         on: bool,
@@ -277,15 +386,118 @@ enum BlockState {
 /// the run used no blocks at all (every gate `Fixed`/`PwmFixed`).
 pub type TransientWithBlocksStep = (f64, OperatingPoint, BTreeMap<String, f64>);
 
-/// Evaluates every block once (in declaration order), advancing `block_states` in place at
-/// step size `dt` and reading any [`Signal::Measure`] from `point_prev` — the one piece of
+/// Name -> block index, including a [`BlockKind::CScript`]/[`BlockKind::CoordinateTransform`]/
+/// [`BlockKind::Pmsm`]'s extra `output_names` (aliasing the index of the block that declared
+/// them) — the one piece of bookkeeping both [`topological_order`] and the upfront gate-name
+/// validation in [`simulate_transient_with_blocks`] need identically.
+fn block_index_by_name(blocks: &[BlockInstance]) -> BTreeMap<&str, usize> {
+    let mut index_of = BTreeMap::new();
+    for (i, b) in blocks.iter().enumerate() {
+        index_of.insert(b.name.as_str(), i);
+        let extra: &[String] = match &b.kind {
+            BlockKind::CScript { output_names, .. }
+            | BlockKind::CoordinateTransform { output_names, .. }
+            | BlockKind::Pmsm { output_names, .. } => output_names,
+            _ => &[],
+        };
+        for name in extra.iter().skip(1) {
+            index_of.insert(name.as_str(), i);
+        }
+    }
+    index_of
+}
+
+/// Derives the causal evaluation order for `blocks` from their own `Signal::Block` dependencies
+/// — a topological sort of the same-step dependency graph — instead of relying on declaration
+/// order: a block may name another declared anywhere in the same slice, before or after it.
+/// `Signal::Measure`/`Signal::BlockPrev` inputs never contribute a dependency edge here — both
+/// read state from strictly before this step (the circuit's own previous point, or any block's
+/// own previous output), so neither can ever participate in a same-step cycle by construction —
+/// exactly the reason those two variants exist. A name that doesn't resolve to any block is not
+/// this function's concern; it's reported at evaluation time instead (`DaeError::
+/// UnknownBlockInput`, from `evaluate_blocks`' own `resolve` closure), so a typo and a
+/// deliberately external reference are diagnosed the same way regardless of graph shape.
+///
+/// Implementation: classic DFS-based topological sort with three-color marking (white/gray/
+/// black), chosen over Kahn's algorithm specifically because a discovered cycle can be reported
+/// as the *exact path* that closes it (`["A", "B", "C", "A"]`, read as "A depends on B depends
+/// on C depends on A") rather than just the set of nodes Kahn's leaves stranded with nonzero
+/// in-degree when it gets stuck.
+fn topological_order(blocks: &[BlockInstance]) -> Result<Vec<usize>, DaeError> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Color {
+        White,
+        Gray,
+        Black,
+    }
+
+    fn visit(
+        i: usize,
+        blocks: &[BlockInstance],
+        index_of: &BTreeMap<&str, usize>,
+        color: &mut [Color],
+        stack: &mut Vec<usize>,
+        order: &mut Vec<usize>,
+    ) -> Result<(), DaeError> {
+        match color[i] {
+            Color::Black => return Ok(()),
+            Color::Gray => {
+                // A back-edge into a node already on the current DFS path: the cycle is that
+                // node onward through the rest of the path, with it repeated at the end to show
+                // the loop closing.
+                let start = stack.iter().position(|&s| s == i).expect(
+                    "a Gray node is always still on the stack by this function's own invariant",
+                );
+                let mut cycle: Vec<String> = stack[start..]
+                    .iter()
+                    .map(|&idx| blocks[idx].name.clone())
+                    .collect();
+                cycle.push(blocks[i].name.clone());
+                return Err(DaeError::AlgebraicLoop { cycle });
+            }
+            Color::White => {}
+        }
+        color[i] = Color::Gray;
+        stack.push(i);
+        for signal in &blocks[i].inputs {
+            if let Signal::Block(name) = signal {
+                if let Some(&dep) = index_of.get(name.as_str()) {
+                    visit(dep, blocks, index_of, color, stack, order)?;
+                }
+            }
+        }
+        stack.pop();
+        color[i] = Color::Black;
+        order.push(i);
+        Ok(())
+    }
+
+    let index_of = block_index_by_name(blocks);
+    let mut color = vec![Color::White; blocks.len()];
+    let mut order = Vec::with_capacity(blocks.len());
+    let mut stack = Vec::new();
+    for i in 0..blocks.len() {
+        if color[i] == Color::White {
+            visit(i, blocks, &index_of, &mut color, &mut stack, &mut order)?;
+        }
+    }
+    Ok(order)
+}
+
+/// Evaluates every block once, in the causal `order` [`topological_order`] derived from the
+/// graph's own `Signal::Block` dependencies (not declaration order), advancing `block_states`
+/// in place at step size `dt`, reading any [`Signal::Measure`] from `point_prev` and any
+/// [`Signal::BlockPrev`] from `prev_outputs` (the previous call's returned map; an empty map on
+/// the very first step, so every `BlockPrev` reference is `0.0` there) — the one piece of
 /// per-step work both [`TimeStep::Fixed`] and [`TimeStep::Adaptive`] need identically, factored
 /// out so the adaptive loop below can re-run it (against a *cloned* `block_states`) once per
 /// retry at a shrinking trial `dt`, without duplicating the block-dispatch match arms.
 fn evaluate_blocks(
     blocks: &[BlockInstance],
+    order: &[usize],
     block_states: &mut [BlockState],
     point_prev: &OperatingPoint,
+    prev_outputs: &BTreeMap<String, f64>,
     t: f64,
     dt: f64,
 ) -> Result<BTreeMap<String, f64>, DaeError> {
@@ -296,13 +508,16 @@ fn evaluate_blocks(
                 .get(name)
                 .copied()
                 .ok_or_else(|| DaeError::UnknownBlockInput(name.clone())),
+            Signal::BlockPrev(name) => Ok(prev_outputs.get(name).copied().unwrap_or(0.0)),
             Signal::Measure(node) => Ok(point_prev
                 .value(&format!("V({node})"))
                 .unwrap_or_else(|| point_prev.value(node).unwrap_or(0.0))),
         }
     };
 
-    for (block, state) in blocks.iter().zip(block_states.iter_mut()) {
+    for &i in order {
+        let block = &blocks[i];
+        let state = &mut block_states[i];
         let input_vals: Vec<f64> = block
             .inputs
             .iter()
@@ -333,8 +548,21 @@ fn evaluate_blocks(
             (BlockKind::MathFn1(f), _) => f.call(input_vals[0]),
             (BlockKind::MathFn2(f), _) => f.call(input_vals[0], input_vals[1]),
             (BlockKind::MathFn3(f), _) => f.call(input_vals[0], input_vals[1], input_vals[2]),
+            (BlockKind::CoordinateTransform { kind, output_names }, _) => {
+                let outs = kind.call(&input_vals);
+                // Same convention as BlockKind::CScript below: the block's own name is bound to
+                // the primary (first) output, any remaining output_names are inserted directly
+                // under their own names.
+                for (name, v) in output_names.iter().zip(outs.iter()).skip(1) {
+                    outputs.insert(name.clone(), *v);
+                }
+                outs[0]
+            }
             (BlockKind::Pid { clamp, .. }, BlockState::Dynamic { state_space, x }) => {
-                let (lo, hi) = *clamp;
+                let (lo, hi) = match clamp {
+                    PidClamp::Fixed(lo, hi) => (*lo, *hi),
+                    PidClamp::Dynamic => (input_vals[1], input_vals[2]),
+                };
                 let error = [input_vals[0]];
                 let tentative_x = state_space.rk4_step(x, &error, dt);
                 let tentative_output = state_space.output(&tentative_x, &error)[0];
@@ -358,6 +586,15 @@ fn evaluate_blocks(
             (BlockKind::Vco(_), BlockState::Vco { vco, phase }) => {
                 *phase = vco.step(*phase, input_vals[0], dt);
                 *phase
+            }
+            (BlockKind::Pmsm { output_names, .. }, BlockState::Pmsm { pmsm, x }) => {
+                *x = pmsm.step(*x, input_vals[0], input_vals[1], input_vals[2], dt);
+                let [id, iq, omega_m, theta_e] = *x;
+                let full = [id, iq, omega_m, Pmsm::theta_e_wrapped(theta_e)];
+                for (name, v) in output_names.iter().zip(full.iter()).skip(1) {
+                    outputs.insert(name.clone(), *v);
+                }
+                full[0]
             }
             (BlockKind::Hysteresis(_), BlockState::Hysteresis { hysteresis, on }) => {
                 *on = hysteresis.step(*on, input_vals[0]);
@@ -451,27 +688,25 @@ pub fn simulate_transient_with_blocks(
     t_final: f64,
     step: TimeStep,
 ) -> Result<Vec<TransientWithBlocksStep>, DaeError> {
-    // A CScript block's own `.name` is only its *primary* output alias; `outputs=` may also
-    // register extra named outputs (see evaluate_blocks' CScript arm) that a gate binding is
-    // just as free to reference directly -- both need to count as "known" here, or a valid
-    // netlist referencing one of those extra names gets rejected before it ever runs.
-    let block_names: std::collections::BTreeSet<&str> = blocks
-        .iter()
-        .flat_map(|b| {
-            let extra: &[String] = match &b.kind {
-                BlockKind::CScript { output_names, .. } => output_names,
-                _ => &[],
-            };
-            std::iter::once(b.name.as_str()).chain(extra.iter().map(String::as_str))
-        })
-        .collect();
+    // A CScript, CoordinateTransform, or Pmsm block's own `.name` is only its *primary* output
+    // alias; `output_names` may also register extra named outputs (see evaluate_blocks' arms
+    // for all three) that a gate binding is just as free to reference directly -- all need to
+    // count as "known" here, or a valid netlist referencing one of those extra names gets
+    // rejected before it ever runs.
+    let block_names = block_index_by_name(blocks);
     for binding in gates.values() {
         for needed in binding.source_blocks().into_iter().flatten() {
-            if !block_names.contains(needed) {
+            if !block_names.contains_key(needed) {
                 return Err(DaeError::UnknownBlockInput(needed.to_string()));
             }
         }
     }
+
+    // Derive this step's (every step's -- the graph's shape never changes mid-run) causal
+    // evaluation order up front, before any block state or circuit system is built: a cycle is
+    // a model error the caller should hear about immediately, not partway through a possibly
+    // long transient.
+    let order = topological_order(blocks)?;
 
     // Only used to learn the system's `unknowns` ordering/count for the pre-first-step
     // `point_prev` below and the default `x_initial` — no step is solved with it. Solving one
@@ -513,6 +748,10 @@ pub fn simulate_transient_with_blocks(
                 vco: *vco,
                 phase: 0.0,
             },
+            BlockKind::Pmsm { pmsm, .. } => BlockState::Pmsm {
+                pmsm: *pmsm,
+                x: [0.0; 4],
+            },
             BlockKind::Hysteresis(hysteresis) => BlockState::Hysteresis {
                 hysteresis: *hysteresis,
                 on: false,
@@ -552,6 +791,10 @@ pub fn simulate_transient_with_blocks(
     let mut prev_segments: Option<Vec<Segment>> = None;
     let mut prev_gate_states: Option<BTreeMap<String, GateState>> = None;
     let mut ringing_cooldown: u32 = 0;
+    // Empty on the first step, matching every dynamic block's own "starts at rest" convention
+    // -- any Signal::BlockPrev reference resolves to 0.0 before any block has ever produced an
+    // output.
+    let mut prev_outputs: BTreeMap<String, f64> = BTreeMap::new();
 
     let mut trace = Vec::new();
     let mut t = 0.0;
@@ -563,7 +806,15 @@ pub fn simulate_transient_with_blocks(
             for step_index in 0..steps {
                 t += dt;
 
-                let outputs = evaluate_blocks(blocks, &mut block_states, &point_prev, t, dt)?;
+                let outputs = evaluate_blocks(
+                    blocks,
+                    &order,
+                    &mut block_states,
+                    &point_prev,
+                    &prev_outputs,
+                    t,
+                    dt,
+                )?;
                 let gate_states = resolve_gates(gates, &outputs, t);
                 let states: BTreeMap<String, (Mosfet, GateState)> = mosfets
                     .iter()
@@ -608,6 +859,7 @@ pub fn simulate_transient_with_blocks(
                     .collect();
                 x_prev_prev = Some(std::mem::replace(&mut x_prev, point.x.clone()));
                 point_prev = point.clone();
+                prev_outputs = outputs.clone();
                 trace.push((t, point, outputs));
             }
         }
@@ -621,8 +873,10 @@ pub fn simulate_transient_with_blocks(
                     let t_candidate = t + dt;
                     let outputs = evaluate_blocks(
                         blocks,
+                        &order,
                         &mut trial_block_states,
                         &point_prev,
+                        &prev_outputs,
                         t_candidate,
                         dt,
                     )?;
@@ -670,6 +924,7 @@ pub fn simulate_transient_with_blocks(
                     block_states = trial_block_states;
                     t = t_candidate;
                     dt_next = attempt.suggested_dt_next;
+                    prev_outputs = outputs.clone();
                     prev_segments = Some(classify_segments(&attempt.point));
                     prev_gate_states = Some(gate_states);
                     prev_diode_raw_ioff = attempt

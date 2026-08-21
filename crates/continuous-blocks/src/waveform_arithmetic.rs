@@ -225,6 +225,14 @@ impl MathFn1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MathFn2 {
     Atan2,
+    /// `(alpha, beta) -> theta`, wrapped to `[0, 2*pi)` — see
+    /// [`crate::coordinate_transforms::angle_wrapped`], the angle-tracking half of a
+    /// synchronous-reference-frame PLL. Grouped here rather than with the other Clarke/Park
+    /// transforms since, unlike those, it is single-output — an ordinary two-argument function
+    /// like every other [`MathFn2`], just implemented in `coordinate_transforms` because it's
+    /// conceptually paired with [`crate::coordinate_transforms::park`]/
+    /// [`crate::coordinate_transforms::clarke_park`], which consume its output.
+    AngleWrapped,
     Hypot,
     Max,
     Min,
@@ -238,6 +246,7 @@ impl MathFn2 {
         use MathFn2::*;
         Some(match name {
             "atan2" => Atan2,
+            "angle_wrapped" => AngleWrapped,
             "hypot" => Hypot,
             "max" => Max,
             "min" => Min,
@@ -252,6 +261,7 @@ impl MathFn2 {
         use MathFn2::*;
         match self {
             Atan2 => x.atan2(y),
+            AngleWrapped => crate::coordinate_transforms::angle_wrapped(x, y),
             Hypot => x.hypot(y),
             Max => x.max(y),
             Min => x.min(y),
@@ -356,6 +366,18 @@ mod tests {
         assert!((MathFn2::Atan2.call(1.0, 1.0) - PI / 4.0).abs() < 1e-12);
         // hypot(3,4) = 5, the textbook 3-4-5 triangle
         assert!((MathFn2::Hypot.call(3.0, 4.0) - 5.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn angle_wrapped_dispatch_matches_direct_call() {
+        assert_eq!(
+            MathFn2::AngleWrapped.call(-1.0, -1.0),
+            crate::coordinate_transforms::angle_wrapped(-1.0, -1.0)
+        );
+        assert_eq!(
+            MathFn2::from_name("angle_wrapped"),
+            Some(MathFn2::AngleWrapped)
+        );
     }
 
     #[test]

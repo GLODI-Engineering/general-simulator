@@ -24,18 +24,22 @@
 //! global descriptor system, and stateless [`math_ops`] blocks into its per-timestep
 //! assembly, is a later milestone.
 
+pub mod coordinate_transforms;
 pub mod dynamics;
 mod hysteresis;
 pub mod math_ops;
 mod pid;
+mod pmsm;
 mod state_space;
 mod transfer_function;
 mod vco;
 pub mod waveform_arithmetic;
 
+pub use coordinate_transforms::CoordinateTransform;
 pub use dynamics::{derivative_filtered, integrator};
 pub use hysteresis::Hysteresis;
 pub use pid::Pid;
+pub use pmsm::Pmsm;
 pub use state_space::{SingularMatrix, StateSpace};
 pub use transfer_function::{TransferFunction, TransferFunctionError};
 pub use vco::Vco;

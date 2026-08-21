@@ -1,2 +1,7 @@
 /target
 *.csv
+
+# mdBook build output (regenerate with `mdbook build` in each book/*/ directory)
+/book/*/book/
+# Generated PDFs (regenerate with book/build-pdf.sh)
+/book/*.pdf
