@@ -1,11 +1,9 @@
 # Dynamic blocks: one RK4 per block, wired by causality
 
-*(Skeleton — outline below; not yet written. This chapter answers a question not yet asked in
-the doc-planning conversation as of this skeleton's creation — check whether it was answered
-in a later turn before writing, and pull that answer directly if so, the same way the previous
-two chapters did.)*
+*(Skeleton — outline below; not yet written — but a full draft already exists in the journal,
+see below.)*
 
-## What goes here (best current understanding, to verify against that answer before publishing)
+## What goes here
 - Each dynamic block (`Pid`/`StateSpace`/`TransferFunction` via `StateSpace::rk4_step`; `Pmsm`
   via its own bespoke `step()`) integrates *independently*, once per circuit step, with its own
   state carried in `BlockState` — there is no single fused ODE/RK4 across the whole graph.
@@ -26,9 +24,10 @@ two chapters did.)*
   reading the other's *previous* result, not one jointly-solved continuous system.
 
 ## Source material to adapt from
+- **`docs/journal/2026-08.md`, entry "Robustness Q&A, Q6: per-block RK4 vs. one fused ODE"
+  (2026-08-21 14:21)** — a full draft answer already written there, close to publication
+  quality.
 - `crates/continuous-blocks/src/state_space.rs`'s `rk4_step`.
 - `crates/continuous-blocks/src/pmsm.rs` module doc comment (the bilinear-coupling/RK4-stages
   argument is already written there in detail).
 - `crates/dae-runtime/src/block_graph.rs` module doc comment, "Sampled-data co-simulation."
-- Whatever answer this question actually received later in the doc-planning conversation —
-  check first; don't re-derive if it's already been given.
