@@ -1,0 +1,88 @@
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "book/**"
+      - "crates/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install mdbook and mdbook-katex
+        run: |
+          cargo install mdbook --locked
+          cargo install mdbook-katex --locked
+
+      - name: Install Pandoc and LaTeX (for PDFs)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pandoc texlive-xetex texlive-latex-extra
+
+      - name: Build user guide (HTML)
+        run: mdbook build book/user-guide
+
+      - name: Build dev guide (HTML)
+        run: mdbook build book/dev-guide
+
+      - name: Build PDFs
+        run: |
+          book/build-pdf.sh user-guide
+          book/build-pdf.sh dev-guide
+
+      - name: Build API reference (cargo doc)
+        run: cargo doc --workspace --no-deps
+
+      - name: Assemble site
+        run: |
+          set -euo pipefail
+          rm -rf public
+          mkdir -p public
+          cp book/index.html public/index.html
+          cp -r book/user-guide/book public/user-guide
+          cp -r book/dev-guide/book public/dev-guide
+          cp -r target/doc public/api
+          cp book/user-guide.pdf public/user-guide.pdf
+          cp book/dev-guide.pdf public/dev-guide.pdf
+          # cargo doc has no index.html at the workspace root by default; redirect to a crate.
+          if [ ! -f public/api/index.html ]; then
+            printf '<meta http-equiv="refresh" content="0; url=dae_runtime/index.html">' \
+              > public/api/index.html
+          fi
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

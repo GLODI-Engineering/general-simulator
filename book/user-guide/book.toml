@@ -1,0 +1,20 @@
+[book]
+title = "elspice-pwl User Guide"
+description = "Educational piecewise-linear circuit and block-diagram simulator: netlist grammar, block library, and worked examples."
+authors = ["elspice-pwl contributors"]
+language = "en"
+src = "src"
+
+[output.html]
+git-repository-url = "https://github.com/REPLACE_ME/elspice-pwl"
+edit-url-template = "https://github.com/REPLACE_ME/elspice-pwl/edit/main/book/user-guide/{path}"
+site-url = "/elspice-pwl/user-guide/"
+default-theme = "light"
+preferred-dark-theme = "navy"
+
+[output.html.fold]
+enable = true
+level = 1
+
+[preprocessor.katex]
+after = ["links"]

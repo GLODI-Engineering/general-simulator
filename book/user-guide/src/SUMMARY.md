@@ -1,0 +1,42 @@
+# Summary
+
+[Introduction](introduction.md)
+
+# Getting started
+
+- [Installing and building](getting-started.md)
+- [Your first netlist](first-netlist.md)
+- [Reading the CSV output](reading-output.md)
+
+# The netlist and device-file grammar
+
+- [Grammar overview](netlist-grammar.md)
+- [PWL devices: diodes and MOSFETs](pwl-devices.md)
+- [Gate bindings (fixed, PWM, block-driven)](gate-bindings.md)
+- [Signals: `meas:`, `prev:`, and same-step references](signals.md)
+
+# The continuous-block library
+
+- [Block library overview](block-library.md)
+- [Sources and math operations](sources-and-math.md)
+- [Dynamic blocks (PID, state-space, transfer function)](dynamic-blocks.md)
+- [Coordinate transforms (Clarke/Park) and PLL](coordinate-transforms.md)
+- [The PMSM block](pmsm.md)
+- [The CScript escape hatch](cscript.md)
+
+# CLI reference
+
+- [Command-line flags](cli-reference.md)
+- [Fixed vs. adaptive time stepping](time-stepping.md)
+
+# Worked examples
+
+- [Buck converter (open-loop and PID)](examples/buck.md)
+- [Boost/LLC resonant converter](examples/boost-llc.md)
+- [Three-phase PFC active front end](examples/pfc.md)
+- [PMSM field-oriented-control drive](examples/pmsm-drive.md)
+
+# Reference
+
+- [Troubleshooting and gotchas](gotchas.md)
+- [FAQ](faq.md)

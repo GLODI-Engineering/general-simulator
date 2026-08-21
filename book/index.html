@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>elspice-pwl documentation</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    max-width: 40rem;
+    margin: 4rem auto;
+    padding: 0 1.5rem;
+    line-height: 1.6;
+  }
+  h1 { margin-bottom: 0.25rem; }
+  .tagline { color: #666; margin-top: 0; }
+  .card {
+    display: block;
+    border: 1px solid #ddd;
+    border-radius: 0.5rem;
+    padding: 1rem 1.25rem;
+    margin: 1rem 0;
+    text-decoration: none;
+    color: inherit;
+  }
+  .card:hover { border-color: #888; }
+  .card h2 { margin: 0 0 0.25rem 0; font-size: 1.1rem; }
+  .card p { margin: 0; color: #555; }
+  .pdf-links { margin-top: 2rem; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<h1>elspice-pwl</h1>
+<p class="tagline">An educational Rust simulator for piecewise-linear circuits and mixed
+circuit/block-diagram systems — no Newton-Raphson, no voltage limiting.</p>
+
+<a class="card" href="user-guide/">
+  <h2>User Guide</h2>
+  <p>Netlist grammar, the block library, CLI reference, worked examples.</p>
+</a>
+
+<a class="card" href="dev-guide/">
+  <h2>Developer Guide</h2>
+  <p>The LCP/DAE math, the switch model and its rationale, block-graph internals, a
+  crate-by-crate tour, and contributing conventions.</p>
+</a>
+
+<a class="card" href="api/">
+  <h2>API Reference</h2>
+  <p><code>cargo doc</code> output for every crate in the workspace.</p>
+</a>
+
+<p class="pdf-links">
+  PDF versions:
+  <a href="user-guide.pdf">User Guide</a> ·
+  <a href="dev-guide.pdf">Developer Guide</a>
+</p>
+</body>
+</html>
