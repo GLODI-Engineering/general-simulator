@@ -31,8 +31,8 @@ mod step_control;
 mod topology;
 
 pub use block_graph::{
-    simulate_transient_with_blocks, BlockInstance, BlockKind, GateBinding, PidClamp, Signal,
-    TransientWithBlocksStep,
+    simulate_transient_with_blocks, BlockInstance, BlockKind, GateBinding, PidClamp, ProbeTarget,
+    Signal, TransientWithBlocksStep,
 };
 pub use closed_loop::{sawtooth_carrier, simulate_closed_loop};
 pub use step_control::{AdaptiveConfig, TimeStep};
@@ -107,6 +107,28 @@ pub enum DaeError {
     CScriptRequiresCloneForAdaptiveStep {
         block_name: String,
     },
+    /// A [`block_graph::GateBinding`] names a block that exists but isn't a
+    /// [`block_graph::BlockKind::Sig2Gate`] — the enforced physical/signal-domain boundary: any
+    /// signal driving a MOSFET's exogenous gate command must first pass through an explicit
+    /// `Sig2Gate` converter, never a raw `Pid`/`Vco`/`Hysteresis`/etc. block directly. `gate` is
+    /// the MOSFET this binding belongs to; `block` and `found_kind` name the offending target
+    /// and (for a human-readable message) what it actually is.
+    GateTargetNotSig2Gate {
+        gate: String,
+        block: String,
+        found_kind: &'static str,
+    },
+    /// An independent `V`/`I` source's own literal value in the netlist is a bare symbol that
+    /// names a declared block, but that block isn't the matching
+    /// [`block_graph::BlockKind::Sig2Voltage`]/[`block_graph::BlockKind::Sig2Current`] converter
+    /// (`V` needs `Sig2Voltage`, `I` needs `Sig2Current`) — the enforced Signal-to-PS boundary
+    /// for driving a source's own magnitude from the block graph.
+    SourceNotSig2PhysicalConverter {
+        source: String,
+        block: String,
+        expected_kind: &'static str,
+        found_kind: &'static str,
+    },
 }
 
 /// Solves the DC operating point of a netlist containing linear devices plus any number of
@@ -121,7 +143,16 @@ pub fn solve_dc(
     let system = MnaBuilder::new(dialect)
         .build_fragment(source)
         .map_err(DaeError::Build)?;
-    fold_and_solve(&system, source, dialect, diodes, &Scheme::Dc, 0.0)
+    fold_and_solve(
+        &system,
+        source,
+        dialect,
+        diodes,
+        &Scheme::Dc,
+        0.0,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
 }
 
 /// Which implicit integration formula a given step of [`simulate_transient`] uses. Both
@@ -239,6 +270,8 @@ pub fn simulate_transient(
                     &prev_segments,
                     forced,
                     t,
+                    &BTreeMap::new(),
+                    &BTreeMap::new(),
                 )?;
                 if used_backward_euler && !forced {
                     ringing_cooldown = RINGING_COOLDOWN_STEPS;
@@ -391,6 +424,8 @@ fn step_with_fallback(
     prev_segments: &Option<Vec<Segment>>,
     force_backward_euler: bool,
     t: f64,
+    extra_values: &BTreeMap<String, f64>,
+    extra_values_prev: &BTreeMap<String, f64>,
 ) -> Result<(OperatingPoint, bool), DaeError> {
     if force_backward_euler {
         return fold_and_solve(
@@ -400,6 +435,8 @@ fn step_with_fallback(
             diodes,
             &Scheme::BackwardEuler { x_prev, dt },
             t,
+            extra_values,
+            extra_values_prev,
         )
         .map(|point| (point, true));
     }
@@ -414,6 +451,8 @@ fn step_with_fallback(
             prev_diode_raw_ioff,
         },
         t,
+        extra_values,
+        extra_values_prev,
     )?;
     let trial_segments = classify_segments(&trial);
     let segments_changed = Some(&trial_segments) != prev_segments.as_ref();
@@ -426,6 +465,8 @@ fn step_with_fallback(
             diodes,
             &Scheme::BackwardEuler { x_prev, dt },
             t,
+            extra_values,
+            extra_values_prev,
         )
         .map(|point| (point, true))
     } else {
@@ -456,7 +497,16 @@ pub fn solve_dc_with_mosfets(
     shared_r_on: f64,
 ) -> Result<OperatingPoint, DaeError> {
     let (system, all_diodes) = build_with_mosfets(source, dialect, diodes, mosfets, shared_r_on)?;
-    fold_and_solve(&system, source, dialect, &all_diodes, &Scheme::Dc, 0.0)
+    fold_and_solve(
+        &system,
+        source,
+        dialect,
+        &all_diodes,
+        &Scheme::Dc,
+        0.0,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
 }
 
 /// Runs a transient simulation of a netlist containing linear devices, ordinary `D` diodes,
@@ -535,6 +585,8 @@ pub fn simulate_transient_with_mosfets(
             &prev_segments,
             forced,
             t,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
         )?;
         if used_backward_euler && !forced {
             ringing_cooldown = RINGING_COOLDOWN_STEPS;
@@ -584,6 +636,7 @@ fn build_with_mosfets(
     Ok((system, all_diodes))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fold_and_solve(
     system: &MnaSystem,
     source: &str,
@@ -591,6 +644,8 @@ fn fold_and_solve(
     diodes: &BTreeMap<String, Diode>,
     scheme: &Scheme,
     t: f64,
+    extra_values: &BTreeMap<String, f64>,
+    extra_values_prev: &BTreeMap<String, f64>,
 ) -> Result<OperatingPoint, DaeError> {
     let nodes = topology::diode_nodes(source, dialect);
     let order = system.order();
@@ -601,7 +656,14 @@ fn fold_and_solve(
     // empty for a netlist with no `SIN`/`PULSE`/`EXP`/`PWL`/`SFFM` source, so this is a no-op
     // for every existing (plain, static-source) netlist. `t=0.0` for `Scheme::Dc` matches
     // standard SPICE convention (a DC operating point uses a transient source's own value at
-    // time zero, not its DC-only fallback, when no separate `DC` value was given).
+    // time zero, not its DC-only fallback, when no separate `DC` value was given). `extra_values`
+    // is this step's full block-graph output map (empty for every caller with no block graph at
+    // all) -- `system.evaluate` only ever substitutes a symbol actually present in an
+    // expression tree, so passing every block's output here unconditionally is harmless; the
+    // *only* symbols that can legitimately appear this way are a `BlockKind::Sig2Voltage`/
+    // `Sig2Current` converter's own name, since `simulate_transient_with_blocks` already
+    // rejects any other block name appearing as a bare V/I source literal before any step runs
+    // (see `DaeError::SourceNotSig2PhysicalConverter`).
     let mut base_values = BTreeMap::new();
     for (name, diode) in diodes {
         base_values.insert(format!("{name}_G"), diode.g_off);
@@ -609,6 +671,9 @@ fn fold_and_solve(
     }
     for (name, transient_fn) in &system.transient_sources {
         base_values.insert(name.clone(), transient_fn.value_at(t));
+    }
+    for (name, value) in extra_values {
+        base_values.insert(name.clone(), *value);
     }
     let numeric0 = system.evaluate(&base_values).map_err(DaeError::Evaluate)?;
 
@@ -646,22 +711,32 @@ fn fold_and_solve(
                 // True trapezoidal RHS uses (B/2)*(u_n + u_{n+1}), not B*u_{n+1} alone (see
                 // Scheme::Trapezoidal's own doc comment) -- correct as-is only because every
                 // netlist source was constant (u_n == u_{n+1}) until time-varying sources
-                // existed. `u_prev` re-evaluates the netlist's own linear sources at `t - dt`;
-                // skipped (and `numeric0.u` cloned directly, exactly the previous behavior)
-                // when there are no transient sources at all, since u_n == u_{n+1} trivially
-                // and a second `evaluate` call would be pure overhead.
-                let u_prev: Vec<f64> = if system.transient_sources.is_empty() {
-                    numeric0.u.clone()
-                } else {
-                    let mut base_values_prev = base_values.clone();
-                    for (name, transient_fn) in &system.transient_sources {
-                        base_values_prev.insert(name.clone(), transient_fn.value_at(t - dt));
-                    }
-                    system
-                        .evaluate(&base_values_prev)
-                        .map_err(DaeError::Evaluate)?
-                        .u
-                };
+                // existed. `u_prev` re-evaluates the netlist's own linear sources at `t - dt`
+                // for a `TransientFunction` source (an analytic, re-evaluatable function of
+                // time), and substitutes `extra_values_prev` (the *previous* step's already-
+                // computed block outputs -- a block-driven source has no analytic form to
+                // re-evaluate, only the discrete sample already used last step, zero-order-held
+                // for that step, exactly the sampled-data convention this whole block graph
+                // uses) for a `Sig2Voltage`/`Sig2Current`-driven one. Skipped (and `numeric0.u`
+                // cloned directly, exactly the previous behavior) only when there are neither,
+                // since u_n == u_{n+1} trivially and a second `evaluate` call would be pure
+                // overhead.
+                let u_prev: Vec<f64> =
+                    if system.transient_sources.is_empty() && extra_values_prev.is_empty() {
+                        numeric0.u.clone()
+                    } else {
+                        let mut base_values_prev = base_values.clone();
+                        for (name, transient_fn) in &system.transient_sources {
+                            base_values_prev.insert(name.clone(), transient_fn.value_at(t - dt));
+                        }
+                        for (name, value) in extra_values_prev {
+                            base_values_prev.insert(name.clone(), *value);
+                        }
+                        system
+                            .evaluate(&base_values_prev)
+                            .map_err(DaeError::Evaluate)?
+                            .u
+                    };
                 let u_eff: Vec<f64> = (0..order)
                     .map(|row| {
                         let k_x: f64 = (0..order)
@@ -834,6 +909,8 @@ mod scheme_tests {
                     &diodes,
                     &Scheme::BackwardEuler { x_prev: &x, dt },
                     t,
+                    &BTreeMap::new(),
+                    &BTreeMap::new(),
                 )
             } else {
                 fold_and_solve(
@@ -847,6 +924,8 @@ mod scheme_tests {
                         prev_diode_raw_ioff: &BTreeMap::new(),
                     },
                     t,
+                    &BTreeMap::new(),
+                    &BTreeMap::new(),
                 )
             }
             .unwrap();

@@ -46,33 +46,64 @@
 //! (piecewise-constant source, e.g. a reference schedule), `sum` (an error junction with
 //! explicit `+`/`-` signs), `gain`, `pid`,
 //! `statespace` (arbitrary `(A,B,C,D)`), `tf` (a rational `N(s)/D(s)`), `vco`. Whether that
-//! graph happens to read the circuit's own state back (`meas:<node>`, making it what's
-//! conventionally called "closed-loop") is just a property of how the blocks are wired, the
-//! same as it would be in any real block-diagram simulation tool — the solver doesn't need to be told which case it
-//! is, because it resolves both exactly the same way: **the error signal is a `sum` block's own
-//! output, and a frequency-modulated PWM carrier is `sum -> pid -> sum -> vco`, not one fused
-//! "closed-loop controller" that bakes a specific topology together.** Each block is declared
-//! with `kind=<block>`, its own parameters, and `in=<signal>` (single-input blocks) or
-//! `inputs=<signal>,<signal>,...` (`sum`, one per `signs=` entry). A `<signal>` is another
-//! block's name (its output this same step), `meas:<node>` (the circuit's own previous-step
-//! measurement, e.g. `meas:vout` for `V(vout)`), or `prev:<block>` (that — or any — named
-//! block's own output from the *previous* step, `0.0` before the first step): needed to close a
-//! loop *around a block itself* rather than around the circuit — a current controller
-//! regulating a `kind=pmsm`'s own `id`/`iq` outputs, or a PLL's angle estimate feeding the very
-//! `kind=park` block that produced its own error signal, would otherwise be a same-step
-//! algebraic loop; `prev:` is the one-sample delay every real digital controller reading its own
-//! last output already has. **Blocks are *not* evaluated in file order** — each step's actual
-//! evaluation order is derived automatically from the `in=`/`inputs=` dependency graph itself
-//! (`dae_runtime::block_graph::topological_order`), so a block may name another declared
-//! anywhere in the file, before or after it; only `prev:`/`meas:` were ever exempt from an
-//! ordering rule before, and now nothing needs one, since there's no longer a file-position rule
-//! to be exempt from. A genuine same-step cycle among `in=`/`inputs=` references (however
-//! indirect, including a block naming itself) is rejected before any step runs, reported as the
-//! exact path that closes it (`dae_runtime::DaeError::AlgebraicLoop`) — fix it by routing one
-//! edge in the cycle through `prev:` instead, the sanctioned way to turn a same-step loop into a
-//! legitimate one-sample-delayed feedback path. Declaring sources before sinks, left-to-right
-//! like a signal-flow diagram, remains good practice for a human reading the file — it's just no
-//! longer a correctness requirement.
+//! graph happens to read the circuit's own state back (through a `kind=probe`, see below,
+//! making it what's conventionally called "closed-loop") is just a property of how the blocks
+//! are wired, the same as it would be in any real block-diagram simulation tool — the solver
+//! doesn't need to be told which case it is, because it resolves both exactly the same way:
+//! **the error signal is a `sum` block's own output, and a frequency-modulated PWM carrier is
+//! `sum -> pid -> sum -> vco`, not one fused "closed-loop controller" that bakes a specific
+//! topology together.** Each block is declared with `kind=<block>`, its own parameters, and
+//! `in=<signal>` (single-input blocks) or `inputs=<signal>,<signal>,...` (`sum`, one per
+//! `signs=` entry). A `<signal>` is another block's name (its output this same step) or
+//! `prev:<block>` (that — or any — named block's own output from the *previous* step, `0.0`
+//! before the first step): needed to close a loop *around a block itself* rather than around
+//! the circuit — a current controller regulating a `kind=pmsm`'s own `id`/`iq` outputs, or a
+//! PLL's angle estimate feeding the very `kind=park` block that produced its own error signal,
+//! would otherwise be a same-step algebraic loop; `prev:` is the one-sample delay every real
+//! digital controller reading its own last output already has. **Blocks are *not* evaluated in
+//! file order** — each step's actual evaluation order is derived automatically from the
+//! `in=`/`inputs=` dependency graph itself (`dae_runtime::block_graph::topological_order`), so
+//! a block may name another declared anywhere in the file, before or after it; only `prev:` was
+//! ever exempt from an ordering rule before, and now nothing needs one, since there's no longer
+//! a file-position rule to be exempt from. A genuine same-step cycle among `in=`/`inputs=`
+//! references (however indirect, including a block naming itself) is rejected before any step
+//! runs, reported as the exact path that closes it (`dae_runtime::DaeError::AlgebraicLoop`) —
+//! fix it by routing one edge in the cycle through `prev:` instead, the sanctioned way to turn a
+//! same-step loop into a legitimate one-sample-delayed feedback path. Declaring sources before
+//! sinks, left-to-right like a signal-flow diagram, remains good practice for a human reading
+//! the file — it's just no longer a correctness requirement.
+//!
+//! ## Physical/signal-domain converters (enforced)
+//!
+//! A circuit quantity (a node voltage, a branch current) and a signal-domain block's output are
+//! **not the same kind of thing** and cannot be wired together directly — the same rule
+//! a reference tool/Simscape enforces with its own PS-a reference tool Converter / a reference tool-PS Converter
+//! blocks, applied here at the netlist level (a companion UI is intended to enforce the same
+//! rule visually later; this grammar is the ground truth). There are three converters, one per
+//! crossing:
+//!
+//! - `kind=probe node=<name>` (reads `V(node)`) or `kind=probe branch=<name>` (reads
+//!   `I(branch)`, mutually exclusive with `node=`) is the **only** way a circuit quantity enters
+//!   the signal domain. Zero inputs (a source block, like `const`/`time`); reference its output
+//!   afterward exactly like any other block's, e.g. `ERR kind=sum inputs=REF,VOUT_PROBE
+//!   signs=1,-1` where `VOUT_PROBE kind=probe node=vout` was declared earlier.
+//! - `kind=sig2gate in=<signal>` is the **only** legal target for a `gate=` field naming a
+//!   block (`ctrl=`/`vco=`/`phase=` below) — every existing `gate=` variant still takes the same
+//!   field names, but the named block must now be a `sig2gate` converter, not a raw
+//!   `pid`/`vco`/`hysteresis`/etc. block directly (`dae_runtime::DaeError::
+//!   GateTargetNotSig2Gate` otherwise). Purely an identity pass-through numerically — its whole
+//!   purpose is marking, in the netlist text, exactly where a signal stops being "a number a
+//!   controller computed" and starts being "a command that actuates a physical switch."
+//! - `kind=sig2v in=<signal>` / `kind=sig2i in=<signal>` are the **only** legal way a
+//!   signal-domain block drives an independent voltage/current source's own magnitude — name
+//!   the converter block directly as that source's own literal value in the netlist, e.g. `V1 a
+//!   0 VDRV` where `VDRV kind=sig2v in=CTRL` was declared earlier (`elspice-mna` already accepts
+//!   a bare symbol there; no change was needed on that side). `V` sources need `sig2v`, `I`
+//!   sources need `sig2i` — a mismatch, or naming any other kind of block, is rejected
+//!   (`dae_runtime::DaeError::SourceNotSig2PhysicalConverter`) before any step runs. This closes
+//!   a real, previously-open gap: without it, a block could only ever *observe* the circuit
+//!   (via `kind=probe`), never load or drive it — see `elspice-pwl-buck-dc-motor-cascade` in the
+//!   sibling `internal-archive` repo for the concrete limitation this fixes.
 //!
 //! `kind=pid kp=<f64> ki=<f64> kd=<f64> n=<f64> in=<signal>` plus either `clamp_lo=<f64>
 //! clamp_hi=<f64>` (a fixed anti-windup bound, the common case) or `clamp_lo_in=<signal>
@@ -165,15 +196,18 @@
 //! `theta` input). Starts at rest (`id=iq=omega_m=theta_e=0`).
 //!
 //! A MOSFET's gate can reference a controller block by name instead of a fixed/`pwm` spec, two
-//! ways:
-//! - `gate=vco ctrl=<vco-block-name> phase=<0..1> duty=<0..1>` — frequency modulation (LLC-
-//!   family converters). Several gates naming the same `vco` share one oscillator with
-//!   different phase offsets (a half-bridge's two complementary switches) rather than needing
-//!   a separate oscillator per gate.
-//! - `gate=dutyctrl ctrl=<block-name> freq=<hz>` — duty modulation at a fixed carrier frequency
-//!   (buck/boost-style), with the duty *command* coming from anywhere in the graph instead of
-//!   being a fixed value.
-//! - `gate=dutyctrlcomplement ctrl=<block-name> freq=<hz>` — the exact logical complement of
+//! ways — **every block name below must resolve to a `kind=sig2gate` converter** (see
+//! "Physical/signal-domain converters" above), not the raw `vco`/`pid`/`hysteresis`/etc. block
+//! directly:
+//! - `gate=vco ctrl=<sig2gate-name> phase=<0..1> duty=<0..1>` — frequency modulation (LLC-
+//!   family converters); `ctrl` names a `sig2gate` wrapping the oscillator's own ramp output.
+//!   Several gates naming the same wrapped `vco` share one oscillator with different phase
+//!   offsets (a half-bridge's two complementary switches) rather than needing a separate
+//!   oscillator per gate.
+//! - `gate=dutyctrl ctrl=<sig2gate-name> freq=<hz>` — duty modulation at a fixed carrier
+//!   frequency (buck/boost-style), with the duty *command* coming from anywhere in the graph
+//!   instead of being a fixed value.
+//! - `gate=dutyctrlcomplement ctrl=<sig2gate-name> freq=<hz>` — the exact logical complement of
 //!   `gate=dutyctrl`: on while the carrier is *at or above* the named duty command, instead of
 //!   below. Naming the *same* `ctrl`/`freq` as a `gate=dutyctrl` device drives a half-bridge
 //!   leg's two switches from one shared duty command with no gap and no overlap (both read the
@@ -181,13 +215,14 @@
 //!   standard way to build an actively-switched leg (a three-phase bridge's pole, a
 //!   synchronous-rectifier buck), as opposed to the single-active-switch-plus-diode topologies
 //!   `gate=dutyctrl` alone was previously used for in this repo's own experiments.
-//! - `gate=block ctrl=<block-name>` — direct on/off control, on while the named block's output
-//!   is `>= 0.5`, no carrier at all. Meant for a `kind=hysteresis` block (bang-bang current-mode
-//!   control has no fixed switching frequency to compare against), but works with any block.
-//! - `gate=vcophase vco=<vco-block-name> phase=<phase-block-name> duty=<0..1>` — like
-//!   `gate=vco`, but `phase` is itself a named block's current output rather than a fixed
-//!   number, read fresh every step. Needed for modulation schemes where the phase offset is a
-//!   controller output recomputed periodically (e.g. a dual-active-bridge converter's
+//! - `gate=block ctrl=<sig2gate-name>` — direct on/off control, on while the named block's
+//!   output is `>= 0.5`, no carrier at all. Meant for a `kind=hysteresis` block wrapped in a
+//!   `sig2gate` (bang-bang current-mode control has no fixed switching frequency to compare
+//!   against), but works with any block.
+//! - `gate=vcophase vco=<sig2gate-name> phase=<sig2gate-name> duty=<0..1>` — like `gate=vco`,
+//!   but `phase` is itself a named (`sig2gate`-wrapped) block's current output rather than a
+//!   fixed number, read fresh every step. Needed for modulation schemes where the phase offset
+//!   is a controller output recomputed periodically (e.g. a dual-active-bridge converter's
 //!   secondary-leg phase shift), not a netlist-time constant.
 //!
 //! Example — a frequency-modulated half-bridge PID (LLC-family converters regulate by
@@ -196,15 +231,17 @@
 //!
 //! ```text
 //! V1 vin 0 400
-//! * D1 kind=mosfet r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=vco ctrl=VCO1 phase=0 duty=0.48
-//! * D2 kind=mosfet r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=vco ctrl=VCO1 phase=0.5 duty=0.48
+//! * D1 kind=mosfet r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=vco ctrl=VCO1G phase=0 duty=0.48
+//! * D2 kind=mosfet r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=vco ctrl=VCO1G phase=0.5 duty=0.48
 //! ... (Lr, Cr, transformer, rectifier, Cout, Rout -- ordinary SPICE elements)
+//! * VOUT_PROBE kind=probe node=vout
 //! * REF    kind=pwl points=0:20,0.014:17
-//! * ERR    kind=sum inputs=REF,meas:vout signs=1,-1
+//! * ERR    kind=sum inputs=REF,VOUT_PROBE signs=1,-1
 //! * PID1   kind=pid kp=800 ki=4e6 kd=0 n=1000 clamp_lo=-15000 clamp_hi=15000 in=ERR
 //! * FNOM   kind=const value=115000
 //! * FREQ   kind=sum inputs=FNOM,PID1 signs=1,-1
 //! * VCO1   kind=vco f_min=100000 f_max=130000 in=FREQ
+//! * VCO1G  kind=sig2gate in=VCO1
 //! ```
 //!
 //! A real SPICE tool opening this file sees seven ordinary comment lines and an otherwise
@@ -227,7 +264,8 @@ use std::process::ExitCode;
 use continuous_blocks::{CoordinateTransform, Hysteresis, Pid, StateSpace, TransferFunction, Vco};
 use dae_runtime::{
     simulate_transient, simulate_transient_with_blocks, solve_dc, solve_dc_with_mosfets,
-    AdaptiveConfig, BlockInstance, BlockKind, GateBinding, GateState, PidClamp, Signal, TimeStep,
+    AdaptiveConfig, BlockInstance, BlockKind, GateBinding, GateState, PidClamp, ProbeTarget,
+    Signal, TimeStep,
 };
 use pwl_devices::{Diode, Mosfet};
 use spice_core::Dialect;
@@ -603,19 +641,21 @@ fn print_row(t: f64, point: &dae_runtime::OperatingPoint) {
     println!("{t},{}", values.join(","));
 }
 
-/// Parses a `<signal>` field value: `meas:<node>` for a circuit measurement, `prev:<block>` for
-/// a named block's own output from the *previous* step (`0.0` before the first step) — needed
-/// to close a loop around a block itself (a controller regulating a `kind=pmsm`'s own `id`/`iq`
-/// outputs, or a PLL's angle estimate feeding the very `kind=park` block that produced its own
-/// error signal), where a same-step reference would be a genuine algebraic loop. Anything else
-/// is another block's name (this same step's output).
+/// Parses a `<signal>` field value: `prev:<block>` for a named block's own output from the
+/// *previous* step (`0.0` before the first step) — needed to close a loop around a block itself
+/// (a controller regulating a `kind=pmsm`'s own `id`/`iq` outputs, or a PLL's angle estimate
+/// feeding the very `kind=park` block that produced its own error signal), where a same-step
+/// reference would be a genuine algebraic loop. Anything else is another block's name (this
+/// same step's output) — including a `kind=probe` block, the *only* legal way to read a circuit
+/// quantity into the signal domain (there is deliberately no `meas:`-style inline shortcut
+/// anymore; see `kind=probe`'s own doc section above). A stray `meas:<node>` left over from
+/// before this convention was enforced is simply treated as an ordinary (and therefore unknown)
+/// block name, surfacing as a clear `UnknownBlockInput` error rather than silently reading the
+/// circuit.
 fn parse_signal(text: &str) -> Signal {
-    if let Some(node) = text.strip_prefix("meas:") {
-        Signal::Measure(node.to_string())
-    } else if let Some(name) = text.strip_prefix("prev:") {
-        Signal::BlockPrev(name.to_string())
-    } else {
-        Signal::Block(text.to_string())
+    match text.strip_prefix("prev:") {
+        Some(name) => Signal::BlockPrev(name.to_string()),
+        None => Signal::Block(text.to_string()),
     }
 }
 
@@ -991,6 +1031,47 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                     inputs: vec![parse_signal(&get_str("in")?)],
                 })
             }
+            "probe" => {
+                let target = match (fields.get("node"), fields.get("branch")) {
+                    (Some(node), None) => ProbeTarget::Voltage(node.clone()),
+                    (None, Some(branch)) => ProbeTarget::Current(branch.clone()),
+                    (Some(_), Some(_)) => {
+                        return Err(format!(
+                            "line {}: device '{name}': 'node' and 'branch' are mutually \
+                             exclusive (a probe reads either a node voltage or a branch \
+                             current, never both)",
+                            line_number + 1
+                        ))
+                    }
+                    (None, None) => {
+                        return Err(format!(
+                            "line {}: device '{name}' kind='probe' needs 'node=<name>' (reads \
+                             V(node)) or 'branch=<name>' (reads I(branch))",
+                            line_number + 1
+                        ))
+                    }
+                };
+                Kind::Block(BlockInstance {
+                    name: name.to_string(),
+                    kind: BlockKind::Probe(target),
+                    inputs: Vec::new(),
+                })
+            }
+            "sig2gate" => Kind::Block(BlockInstance {
+                name: name.to_string(),
+                kind: BlockKind::Sig2Gate,
+                inputs: vec![parse_signal(&get_str("in")?)],
+            }),
+            "sig2v" => Kind::Block(BlockInstance {
+                name: name.to_string(),
+                kind: BlockKind::Sig2Voltage,
+                inputs: vec![parse_signal(&get_str("in")?)],
+            }),
+            "sig2i" => Kind::Block(BlockInstance {
+                name: name.to_string(),
+                kind: BlockKind::Sig2Current,
+                inputs: vec![parse_signal(&get_str("in")?)],
+            }),
             "clarke" | "clarkeinv" | "park" | "parkinv" | "clarkepark" | "clarkeparkinv" => {
                 let ct = match kind {
                     "clarke" => CoordinateTransform::Clarke,

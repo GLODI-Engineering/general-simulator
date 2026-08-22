@@ -11,7 +11,7 @@
 //! **There is no separate "closed-loop mode."** A [`GateBinding`] can be a plain fixed state or
 //! fixed-frequency/fixed-duty PWM (no block involved at all — the historically "open-loop"
 //! case) just as easily as a block whose input chain happens to trace back to a
-//! [`Signal::Measure`] of the circuit's own state (the historically "closed-loop" case) — both
+//! [`BlockKind::Probe`] of the circuit's own state (the historically "closed-loop" case) — both
 //! are resolved by exactly the same code, every step, because from the solver's point of view
 //! they're the same kind of question: "what's this device's terminal condition right now,"
 //! answered from whatever the netlist and device file actually say. A real circuit simulator
@@ -45,9 +45,14 @@ use crate::{
     OperatingPoint, Segment, TimeStep, RINGING_COOLDOWN_STEPS,
 };
 
-/// Where a block's input value comes from: another block's output this same step, that (or
-/// any) block's own output from the *previous* step, or the circuit's own previous-step
-/// operating point (`V(node)` or `I(branch)`, anything [`OperatingPoint::value`] accepts).
+/// Where a block's input value comes from: another block's output this same step, or that (or
+/// any) block's own output from the *previous* step. There is deliberately **no** variant that
+/// reads a circuit quantity (`V(node)`/`I(branch)`) directly — that crossing from the physical
+/// domain into the signal domain must go through an explicit, named [`BlockKind::Probe`] block
+/// instead (referenced afterward like any other block, via `Signal::Block`). See
+/// [`BlockKind::Probe`]'s own doc comment for why this boundary is enforced rather than
+/// implicit, the same way a reference tool/Simscape requires an explicit PS-a reference tool Converter block
+/// between a physical port and a signal port instead of wiring them together directly.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Signal {
     /// Another block's output *this* step — may name any block in the same slice, declared
@@ -60,17 +65,24 @@ pub enum Signal {
     /// comment.
     Block(String),
     /// A named block's own output from the *previous* step (`0.0` before the first step,
-    /// matching every dynamic block's own "starts at rest" convention) — the block-graph
-    /// counterpart to [`Signal::Measure`]'s "read the circuit's previous state." Unlike
-    /// `Signal::Block`, this is not a same-step dependency at all — it reads state fixed before
-    /// this step even starts — so it never contributes an edge to the dependency graph
-    /// [`topological_order`] builds, and is consequently the *sanctioned* way to close what
-    /// would otherwise be a same-step cycle (e.g. a current controller regulating a
-    /// [`BlockKind::Pmsm`]'s own `id`/`iq` outputs, or a PLL's angle estimate feeding the very
+    /// matching every dynamic block's own "starts at rest" convention). Unlike `Signal::Block`,
+    /// this is not a same-step dependency at all — it reads state fixed before this step even
+    /// starts — so it never contributes an edge to the dependency graph [`topological_order`]
+    /// builds, and is consequently the *sanctioned* way to close what would otherwise be a
+    /// same-step cycle (e.g. a current controller regulating a [`BlockKind::Pmsm`]'s own
+    /// `id`/`iq` outputs, or a PLL's angle estimate feeding the very
     /// [`BlockKind::CoordinateTransform`] `Park` block that produced its own error signal): the
     /// one-sample delay every real digital controller reading its own last output already has.
     BlockPrev(String),
-    Measure(String),
+}
+
+/// What a [`BlockKind::Probe`] reads from the circuit's own previous-step operating point —
+/// `V(node)` or `I(branch)`, anything [`OperatingPoint::value`] accepts, keyed by exactly the
+/// same `V(...)`/`I(...)` naming convention `elspice-mna` itself uses for MNA unknowns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProbeTarget {
+    Voltage(String),
+    Current(String),
 }
 
 /// A [`BlockKind::Pid`]'s anti-windup bound: fixed at model-build time, or read fresh from the
@@ -215,17 +227,57 @@ pub enum BlockKind {
         pmsm: Pmsm,
         output_names: Vec<String>,
     },
+    /// The **PS-to-Signal** converter: the *only* way a circuit quantity (`V(node)`/
+    /// `I(branch)`) enters the signal domain. Zero block-graph inputs (it reads the circuit's
+    /// own previous-step operating point directly, the same `point_prev` lookup a bare
+    /// `meas:`-style reference used to do before this was enforced) — its value is then an
+    /// ordinary block output, read by any downstream block via `Signal::Block(this_block's_name)`
+    /// exactly like any other source block (`Const`/`Pwl`/`Time`). Modeled directly on
+    /// a reference tool/Simscape's own PS-a reference tool Converter: a physical port and a signal port are
+    /// type-distinct there and cannot be wired together without one of these in between: this
+    /// is the same rule, enforced the same way, at the netlist level instead of a GUI's wiring
+    /// canvas (a future UI enforcing the same rule visually is the intended companion, not a
+    /// replacement for this).
+    Probe(ProbeTarget),
+    /// The **Signal-to-PS** converter for a discrete physical actuation: the *only* legal
+    /// target for any [`GateBinding`] field that names a block (`duty`/`vco`/`phase`/the
+    /// direct-block variant) — `dae-runtime` rejects a `GateBinding` naming anything else with
+    /// `DaeError::GateTargetNotSig2Gate`. Purely an identity pass-through numerically (`value =
+    /// input`); its entire purpose is marking, at the netlist level, exactly where a signal
+    /// stops being "just a number a controller computed" and starts being "a command that
+    /// actuates a physical switch" — the discrete-actuation counterpart to
+    /// [`BlockKind::Sig2Voltage`]/[`BlockKind::Sig2Current`]'s continuous case below. One input.
+    Sig2Gate,
+    /// The **Signal-to-PS** converter for a continuous quantity, closing the write-direction
+    /// gap [`BlockKind::Probe`] doesn't (a probe only ever reads): the *only* legal way a
+    /// signal-domain block's output drives an independent voltage source's own magnitude. A `V`
+    /// element's own literal value field in the netlist names this block directly (e.g. `V1 a 0
+    /// VDRV`, where `VDRV` is a declared `Sig2Voltage` block) — `elspice-mna`'s own
+    /// `Expression::parse_scalar` already accepts a bare symbol there with no change needed on
+    /// that side; `dae-runtime` requires, at validation time, that any such symbol naming a
+    /// declared block resolve to exactly this kind (see
+    /// `DaeError::SourceNotSig2PhysicalConverter`), and every step, substitutes this block's own
+    /// just-computed output value into the circuit solve in that symbol's place — a real,
+    /// bidirectional physical/control coupling `Signal::Measure`'s read-only predecessor could
+    /// never express (see `elspice-pwl-buck-dc-motor-cascade`'s own README for the concrete gap
+    /// this closes: a block could observe a circuit's voltage but never load it). Purely an
+    /// identity pass-through numerically, same as [`BlockKind::Sig2Gate`]; the type-distinct
+    /// name is what the enforcement (and, later, a UI) keys on. One input.
+    Sig2Voltage,
+    /// The [`BlockKind::Sig2Voltage`] counterpart for an `I` (independent current source)
+    /// element's own literal value field. One input.
+    Sig2Current,
 }
 
-/// One named block instance and where its inputs (if any) come from. `Const`/`Pwl` blocks
-/// must have zero inputs; `Sum`/`Product` need one input per sign/factor; `Gain`/
-/// `StateSpace`/`TransferFunction`/`Vco`/`Saturation`/`Table`/`MathFn1` each need exactly one;
-/// `Pid` needs exactly one (the error signal) when its `clamp` is `PidClamp::Fixed`, or exactly
-/// three (`error, clamp_lo, clamp_hi`, in that order) when `PidClamp::Dynamic`; `MathFn2` needs
-/// two; `MathFn3` needs three; `CoordinateTransform` needs `kind.input_count()` (3 for
-/// `Clarke`/`ClarkeInv`, 4 for the others — see
-/// [`continuous_blocks::CoordinateTransform::input_count`]); `Pmsm` needs exactly three (`vd`,
-/// `vq`, `t_load`, in that order). Evaluated once per step in the causal order
+/// One named block instance and where its inputs (if any) come from. `Const`/`Pwl`/`Probe`
+/// blocks must have zero inputs; `Sum`/`Product` need one input per sign/factor; `Gain`/
+/// `StateSpace`/`TransferFunction`/`Vco`/`Saturation`/`Table`/`MathFn1`/`Sig2Gate`/
+/// `Sig2Voltage`/`Sig2Current` each need exactly one; `Pid` needs exactly one (the error signal)
+/// when its `clamp` is `PidClamp::Fixed`, or exactly three (`error, clamp_lo, clamp_hi`, in that
+/// order) when `PidClamp::Dynamic`; `MathFn2` needs two; `MathFn3` needs three;
+/// `CoordinateTransform` needs `kind.input_count()` (3 for `Clarke`/`ClarkeInv`, 4 for the
+/// others — see [`continuous_blocks::CoordinateTransform::input_count`]); `Pmsm` needs exactly
+/// three (`vd`, `vq`, `t_load`, in that order). Evaluated once per step in the causal order
 /// [`topological_order`] derives from the slice's own `Signal::Block` dependency graph — *not*
 /// the order the slice happens to be given in; a `Signal::Block` input may name any block in
 /// the same slice regardless of declared position (source blocks, naturally, need none, and a
@@ -407,13 +459,45 @@ fn block_index_by_name(blocks: &[BlockInstance]) -> BTreeMap<&str, usize> {
     index_of
 }
 
+/// A short, human-readable name for a `BlockKind`, for error messages that need to say what a
+/// mistargeted block actually is (e.g. `DaeError::GateTargetNotSig2Gate`/
+/// `SourceNotSig2PhysicalConverter`) without dumping its full parameter set.
+fn block_kind_name(kind: &BlockKind) -> &'static str {
+    match kind {
+        BlockKind::Const(_) => "const",
+        BlockKind::Time => "time",
+        BlockKind::Pwl(_) => "pwl",
+        BlockKind::Sum(_) => "sum",
+        BlockKind::Gain(_) => "gain",
+        BlockKind::Pid { .. } => "pid",
+        BlockKind::StateSpace(_) => "statespace",
+        BlockKind::TransferFunction(_) => "tf",
+        BlockKind::Vco(_) => "vco",
+        BlockKind::Product => "product",
+        BlockKind::Saturation(_) => "saturation",
+        BlockKind::Table(_) => "table",
+        BlockKind::MathFn1(_) => "mathfn1",
+        BlockKind::MathFn2(_) => "mathfn2",
+        BlockKind::MathFn3(_) => "mathfn3",
+        BlockKind::Hysteresis(_) => "hysteresis",
+        BlockKind::CScript { .. } => "cscript",
+        BlockKind::CoordinateTransform { .. } => "coordinate_transform",
+        BlockKind::Pmsm { .. } => "pmsm",
+        BlockKind::Probe(_) => "probe",
+        BlockKind::Sig2Gate => "sig2gate",
+        BlockKind::Sig2Voltage => "sig2v",
+        BlockKind::Sig2Current => "sig2i",
+    }
+}
+
 /// Derives the causal evaluation order for `blocks` from their own `Signal::Block` dependencies
 /// — a topological sort of the same-step dependency graph — instead of relying on declaration
 /// order: a block may name another declared anywhere in the same slice, before or after it.
-/// `Signal::Measure`/`Signal::BlockPrev` inputs never contribute a dependency edge here — both
-/// read state from strictly before this step (the circuit's own previous point, or any block's
-/// own previous output), so neither can ever participate in a same-step cycle by construction —
-/// exactly the reason those two variants exist. A name that doesn't resolve to any block is not
+/// `BlockKind::Probe`/`Signal::BlockPrev` inputs never contribute a dependency edge here —
+/// `Probe` has zero inputs (a source block, like `Const`/`Time`) and `BlockPrev` reads state
+/// from strictly before this step (any block's own previous output), so neither can ever
+/// participate in a same-step cycle by construction — exactly the reason `BlockPrev` exists. A
+/// name that doesn't resolve to any block is not
 /// this function's concern; it's reported at evaluation time instead (`DaeError::
 /// UnknownBlockInput`, from `evaluate_blocks`' own `resolve` closure), so a typo and a
 /// deliberately external reference are diagnosed the same way regardless of graph shape.
@@ -486,7 +570,7 @@ fn topological_order(blocks: &[BlockInstance]) -> Result<Vec<usize>, DaeError> {
 
 /// Evaluates every block once, in the causal `order` [`topological_order`] derived from the
 /// graph's own `Signal::Block` dependencies (not declaration order), advancing `block_states`
-/// in place at step size `dt`, reading any [`Signal::Measure`] from `point_prev` and any
+/// in place at step size `dt`, reading any [`BlockKind::Probe`] from `point_prev` and any
 /// [`Signal::BlockPrev`] from `prev_outputs` (the previous call's returned map; an empty map on
 /// the very first step, so every `BlockPrev` reference is `0.0` there) — the one piece of
 /// per-step work both [`TimeStep::Fixed`] and [`TimeStep::Adaptive`] need identically, factored
@@ -509,9 +593,6 @@ fn evaluate_blocks(
                 .copied()
                 .ok_or_else(|| DaeError::UnknownBlockInput(name.clone())),
             Signal::BlockPrev(name) => Ok(prev_outputs.get(name).copied().unwrap_or(0.0)),
-            Signal::Measure(node) => Ok(point_prev
-                .value(&format!("V({node})"))
-                .unwrap_or_else(|| point_prev.value(node).unwrap_or(0.0))),
         }
     };
 
@@ -527,6 +608,17 @@ fn evaluate_blocks(
         let value = match (&block.kind, state) {
             (BlockKind::Const(v), _) => *v,
             (BlockKind::Time, _) => t,
+            (BlockKind::Probe(target), _) => match target {
+                ProbeTarget::Voltage(node) => {
+                    point_prev.value(&format!("V({node})")).unwrap_or(0.0)
+                }
+                ProbeTarget::Current(branch) => {
+                    point_prev.value(&format!("I({branch})")).unwrap_or(0.0)
+                }
+            },
+            (BlockKind::Sig2Gate | BlockKind::Sig2Voltage | BlockKind::Sig2Current, _) => {
+                input_vals[0]
+            }
             (BlockKind::Pwl(points), _) => {
                 let mut v = points.first().map(|(_, v)| *v).unwrap_or(0.0);
                 for &(t_i, v_i) in points {
@@ -668,8 +760,8 @@ fn resolve_gates(
 /// Runs a transient with every MOSFET's gate resolved from a [`GateBinding`] each step — see
 /// this module's doc comment for why there's no separate "closed-loop" entry point: a
 /// `GateBinding::Fixed`/`PwmFixed` device and a `GateBinding::Vco`/`Pwm` device driven by a
-/// `Sum`-`Pid`-`Vco` chain that happens to read [`Signal::Measure`] are resolved by exactly the
-/// same loop below. `blocks` may be empty if every gate is `Fixed`/`PwmFixed`. `step` picks
+/// `Sum`-`Pid`-`Vco` chain that happens to read a [`BlockKind::Probe`] are resolved by exactly
+/// the same loop below. `blocks` may be empty if every gate is `Fixed`/`PwmFixed`. `step` picks
 /// fixed or adaptive timing — see [`TimeStep`]/[`AdaptiveConfig`]. Adaptive mode here can't
 /// reuse [`step_control::adaptive_step`] directly (that assumes a `dt`-independent `system`):
 /// this circuit's gate states, and so its `system`, are themselves a function of `dt` through
@@ -694,10 +786,23 @@ pub fn simulate_transient_with_blocks(
     // count as "known" here, or a valid netlist referencing one of those extra names gets
     // rejected before it ever runs.
     let block_names = block_index_by_name(blocks);
-    for binding in gates.values() {
+    for (mosfet_name, binding) in gates {
         for needed in binding.source_blocks().into_iter().flatten() {
-            if !block_names.contains_key(needed) {
+            let Some(&idx) = block_names.get(needed) else {
                 return Err(DaeError::UnknownBlockInput(needed.to_string()));
+            };
+            // A GateBinding's target must be an explicit Sig2Gate converter, never a raw
+            // control block directly -- the enforced Signal-to-PS boundary for a discrete
+            // physical actuation (see BlockKind::Sig2Gate's own doc comment). This also
+            // correctly rejects naming a CScript/CoordinateTransform/Pmsm block's own *extra*
+            // output alias directly (block_names maps those to the same index, whose kind is
+            // never Sig2Gate), so no separate check is needed for that case.
+            if !matches!(blocks[idx].kind, BlockKind::Sig2Gate) {
+                return Err(DaeError::GateTargetNotSig2Gate {
+                    gate: mosfet_name.clone(),
+                    block: needed.to_string(),
+                    found_kind: block_kind_name(&blocks[idx].kind),
+                });
             }
         }
     }
@@ -713,13 +818,50 @@ pub fn simulate_transient_with_blocks(
     // would perturb `x_prev` away from `x_initial` before the real first step even runs, a
     // real behavioral difference from `simulate_transient_with_mosfets` for the plain
     // fixed/PWM case (caught by exactly that mismatch: this function must reduce to identical
-    // numbers as that one whenever no block reads a `Signal::Measure`).
+    // numbers as that one whenever no block reads a `BlockKind::Probe`).
     let initial_states: BTreeMap<String, (Mosfet, GateState)> = mosfets
         .iter()
         .map(|(name, m)| (name.clone(), (*m, GateState::Off)))
         .collect();
     let (system0, _) =
         crate::build_with_mosfets(source, dialect, diodes, &initial_states, shared_r_on)?;
+
+    // Signal-to-PS enforcement for a `V`/`I` source's own literal value: `elspice-mna` already
+    // accepts a bare symbol there (`Expression::Symbol`), stamped verbatim into that source's
+    // own `input_values` entry -- a genuinely time-varying `TransientFunction` source uses this
+    // too, with the symbol set to the source's *own* element name (`sym == name`, resolved via
+    // `system.transient_sources`, an entirely separate mechanism this check must not confuse
+    // with a block-driven source). Any *other* symbol is a block-driven source candidate: it
+    // must name a declared block, and that block must be the matching `Sig2Voltage`/
+    // `Sig2Current` converter (never a raw control block directly) -- source element names are
+    // always their own SPICE device letter (`V`/`I`) by construction, which is what picks the
+    // expected converter kind below. V/I source stamps never depend on switch state, so
+    // checking `system0` once here is representative of every later per-step rebuild.
+    for (name, expr) in system0.inputs.iter().zip(&system0.input_values) {
+        let elspice_mna::Expression::Symbol(sym) = expr else {
+            continue;
+        };
+        if sym == name || system0.transient_sources.contains_key(name) {
+            continue;
+        }
+        let Some(&idx) = block_names.get(sym.as_str()) else {
+            continue;
+        };
+        let expected = match name.chars().next() {
+            Some('V') | Some('v') => (BlockKind::Sig2Voltage, "sig2v"),
+            Some('I') | Some('i') => (BlockKind::Sig2Current, "sig2i"),
+            _ => continue,
+        };
+        if blocks[idx].kind != expected.0 {
+            return Err(DaeError::SourceNotSig2PhysicalConverter {
+                source: name.clone(),
+                block: sym.clone(),
+                expected_kind: expected.1,
+                found_kind: block_kind_name(&blocks[idx].kind),
+            });
+        }
+    }
+
     let mut x_prev = match x_initial {
         Some(x) => x.to_vec(),
         None => vec![0.0; system0.order()],
@@ -842,6 +984,8 @@ pub fn simulate_transient_with_blocks(
                     &prev_segments,
                     forced,
                     t,
+                    &outputs,
+                    &prev_outputs,
                 )?;
                 if used_backward_euler && !forced {
                     ringing_cooldown = RINGING_COOLDOWN_STEPS;
@@ -908,6 +1052,8 @@ pub fn simulate_transient_with_blocks(
                         forced,
                         &config,
                         t,
+                        &outputs,
+                        &prev_outputs,
                     )?;
 
                     if !attempt.accept {

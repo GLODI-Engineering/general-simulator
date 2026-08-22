@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use dae_runtime::{
-    simulate_transient_with_blocks, BlockInstance, BlockKind, GateBinding, TimeStep,
+    simulate_transient_with_blocks, BlockInstance, BlockKind, GateBinding, Signal, TimeStep,
 };
 use pwl_devices::{Diode, Mosfet};
 use spice_core::Dialect;
@@ -27,24 +27,31 @@ fn pwm_complement_is_mutually_exclusive_with_pwm_at_shared_duty_and_freq() {
     mosfets.insert("D2".to_string(), mosfet_bot);
     let diodes = BTreeMap::new();
 
-    let blocks = vec![BlockInstance {
-        name: "DUTY".to_string(),
-        kind: BlockKind::Const(0.3),
-        inputs: vec![],
-    }];
+    let blocks = vec![
+        BlockInstance {
+            name: "DUTY".to_string(),
+            kind: BlockKind::Const(0.3),
+            inputs: vec![],
+        },
+        BlockInstance {
+            name: "DUTY_GATE".to_string(),
+            kind: BlockKind::Sig2Gate,
+            inputs: vec![Signal::Block("DUTY".to_string())],
+        },
+    ];
 
     let mut gates = BTreeMap::new();
     gates.insert(
         "D1".to_string(),
         GateBinding::Pwm {
-            duty: "DUTY".to_string(),
+            duty: "DUTY_GATE".to_string(),
             freq_hz: 100_000.0,
         },
     );
     gates.insert(
         "D2".to_string(),
         GateBinding::PwmComplement {
-            duty: "DUTY".to_string(),
+            duty: "DUTY_GATE".to_string(),
             freq_hz: 100_000.0,
         },
     );

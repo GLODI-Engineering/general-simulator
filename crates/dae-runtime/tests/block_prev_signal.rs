@@ -1,5 +1,5 @@
 //! `Signal::BlockPrev` — reading a named block's own output from the *previous* step, the
-//! block-graph counterpart to `Signal::Measure`'s "read the circuit's previous state." Added
+//! block-graph counterpart to `BlockKind::Probe`'s "read the circuit's previous state." Added
 //! specifically to close a loop *around a block itself* (a controller regulating a `Pmsm`'s own
 //! `id`/`iq`, or a PLL's angle feeding the very `Park` block that produced its error), where a
 //! same-step self-reference is a genuine algebraic loop no feedforward declaration order can

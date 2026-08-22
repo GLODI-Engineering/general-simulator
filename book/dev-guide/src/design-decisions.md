@@ -18,6 +18,14 @@
   - Bench-scale vs. mains-scale for the PFC switching demo, and *not* forcing a "unify MOSFET
     switching" fix under time pressure — decisions made explicitly, not silently, worth
     recording as decisions even when the underlying problem stayed open.
+  - **Enforced physical/signal-domain converters, implemented 2026-08-21** (`BlockKind::Probe`/
+    `Sig2Gate`/`Sig2Voltage`/`Sig2Current`, `docs/journal/2026-08.md` for the full account) —
+    no longer an open question, this entry is now `## Physical/signal-domain converters` proper
+    (not just a pointer), since the decision and its rationale are settled: user-requested,
+    modeled directly on a reference tool/Simscape's PS-a reference tool/a reference tool-PS Converter split, enforced at
+    the netlist/`dae-runtime` level (not just a UI convention) so a violation is a build-time
+    error (`DaeError::GateTargetNotSig2Gate`/`SourceNotSig2PhysicalConverter`) regardless of
+    which tool produced the netlist.
 - Format: one entry per decision, `## <short title>`, `**Considered:**`, `**Chose:**`,
   `**Because:**`, `**Revisit if:**` (conditions that would reopen the question).
 

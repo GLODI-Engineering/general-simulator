@@ -48,14 +48,24 @@ fn vco_phase_gate_matches_hand_computed_switching_instants() {
             kind: BlockKind::Const(0.25),
             inputs: vec![],
         },
+        BlockInstance {
+            name: "VCO1_GATE".to_string(),
+            kind: BlockKind::Sig2Gate,
+            inputs: vec![Signal::Block("VCO1".to_string())],
+        },
+        BlockInstance {
+            name: "PHASE_GATE".to_string(),
+            kind: BlockKind::Sig2Gate,
+            inputs: vec![Signal::Block("PHASE".to_string())],
+        },
     ];
 
     let mut gates = BTreeMap::new();
     gates.insert(
         "D1".to_string(),
         GateBinding::VcoPhase {
-            vco: "VCO1".to_string(),
-            phase: "PHASE".to_string(),
+            vco: "VCO1_GATE".to_string(),
+            phase: "PHASE_GATE".to_string(),
             duty: 0.5,
         },
     );

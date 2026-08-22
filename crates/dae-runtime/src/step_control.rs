@@ -128,6 +128,8 @@ pub(crate) fn lte_attempt(
     force_backward_euler: bool,
     config: &AdaptiveConfig,
     t_start: f64,
+    extra_values: &BTreeMap<String, f64>,
+    extra_values_prev: &BTreeMap<String, f64>,
 ) -> Result<LteAttempt, DaeError> {
     let t = t_start + dt;
     if force_backward_euler {
@@ -138,6 +140,8 @@ pub(crate) fn lte_attempt(
             diodes,
             &Scheme::BackwardEuler { x_prev, dt },
             t,
+            extra_values,
+            extra_values_prev,
         )?;
         let suggested_dt_next = (dt * 0.5).clamp(config.dt_min, config.dt_max);
         return Ok(LteAttempt {
@@ -155,6 +159,8 @@ pub(crate) fn lte_attempt(
         diodes,
         &Scheme::BackwardEuler { x_prev, dt },
         t,
+        extra_values,
+        extra_values_prev,
     )?;
     let trap = fold_and_solve(
         system,
@@ -167,6 +173,8 @@ pub(crate) fn lte_attempt(
             prev_diode_raw_ioff,
         },
         t,
+        extra_values,
+        extra_values_prev,
     )?;
 
     let trial_segments = classify_segments(&trap);
@@ -235,6 +243,7 @@ pub(crate) fn adaptive_step(
     t_start: f64,
 ) -> Result<(OperatingPoint, bool, f64, f64), DaeError> {
     let mut dt = dt_trial.clamp(config.dt_min, config.dt_max);
+    let empty = BTreeMap::new();
     loop {
         let attempt = lte_attempt(
             system,
@@ -249,6 +258,8 @@ pub(crate) fn adaptive_step(
             force_backward_euler,
             config,
             t_start,
+            &empty,
+            &empty,
         )?;
         if attempt.accept {
             return Ok((
