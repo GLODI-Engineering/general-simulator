@@ -32,7 +32,9 @@ fn run(args: &[&str]) -> std::process::Output {
 /// real one). See `elspice-pwl-cli`'s own `cscript.rs` test for the general convention, and
 /// `regulators.cir` (`internal-archive` repo) for this exact isolated-dummy variant.
 const DUMMY_MOSFET: &str = "DDUMMY dummy_a dummy_b mosfetmodel\n\
-     * DDUMMY kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 gate=off\n\
+     * DOFFVAL kind=const value=0\n\
+     * DOFFGATE kind=sig2gate in=DOFFVAL\n\
+     * DDUMMY kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 gate=block ctrl=DOFFGATE\n\
      Rdummy_a dummy_a 0 1e9\nRdummy_b dummy_b 0 1e9\n";
 
 fn column(stdout: &str, name: &str) -> (Vec<f64>, Vec<f64>) {

@@ -2,7 +2,8 @@
 //! the `.c` fixtures in `tests/fixtures/` into real shared libraries at test time (via the
 //! system `cc`) -- an end-to-end check through the real CLI parser and `dae-runtime`'s block
 //! graph, not just `cscript-ffi`'s own lower-level unit tests. Both fixture netlists use a
-//! dummy always-off MOSFET (`gate=off`) purely so `simulate_transient_with_blocks`'s code path
+//! dummy always-off MOSFET (`gate=block` reading a `Const(0)` wrapped in `sig2gate`) purely so
+//! `simulate_transient_with_blocks`'s code path
 //! is reached at all -- `elspice-pwl-cli` only evaluates the block graph when at least one
 //! MOSFET is declared (see `main.rs`'s `run()`); the MOSFET being off never affects R1/the
 //! observed cscript output.
@@ -53,7 +54,9 @@ fn run(args: &[&str]) -> std::process::Output {
 fn cscript_gain_reproduces_a_hand_known_result_every_step() {
     let lib = compile_fixture("cscript_gain");
     let devices = write_devices_file(&format!(
-        "D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=off\n\
+        "OFFVAL kind=const value=0\n\
+         OFFGATE kind=sig2gate in=OFFVAL\n\
+         D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
          SRC kind=const value=5\n\
          CG kind=cscript lib={} in=SRC\n",
         lib.display()
@@ -89,7 +92,9 @@ fn cscript_sample_time_holds_between_samples_zero_order() {
     let lib = compile_fixture("cscript_counter");
     // dt=0.0001, ts=0.0005 -> the counter should only increment once every 5 rows.
     let devices = write_devices_file(&format!(
-        "D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=off\n\
+        "OFFVAL kind=const value=0\n\
+         OFFGATE kind=sig2gate in=OFFVAL\n\
+         D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
          SRC kind=const value=0\n\
          CNT kind=cscript lib={} in=SRC ts=0.0005\n",
         lib.display()
@@ -161,7 +166,9 @@ fn cscript_sample_time_holds_between_samples_zero_order() {
 fn cscript_without_clone_is_rejected_under_adaptive_step_not_silently_wrong() {
     let lib = compile_fixture("cscript_gain"); // exports no cscript_clone
     let devices = write_devices_file(&format!(
-        "D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=off\n\
+        "OFFVAL kind=const value=0\n\
+         OFFGATE kind=sig2gate in=OFFVAL\n\
+         D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
          SRC kind=const value=5\n\
          CG kind=cscript lib={} in=SRC\n",
         lib.display()

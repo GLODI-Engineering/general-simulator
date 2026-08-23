@@ -35,7 +35,9 @@ fn run(args: &[&str]) -> std::process::Output {
 fn probe_reads_a_node_voltage_through_the_real_parser() {
     let netlist = fixture("cscript_gain.cir"); // V1 a 0 5 / D1 a b mosfetmodel / R1 b 0 1000
     let devices = write_devices_file(
-        "D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 gate=off\n\
+        "OFFVAL kind=const value=0\n\
+         OFFGATE kind=sig2gate in=OFFVAL\n\
+         D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 gate=block ctrl=OFFGATE\n\
          VMEAS kind=probe node=b\n",
     );
 
@@ -83,7 +85,7 @@ fn a_gate_naming_a_raw_block_instead_of_sig2gate_is_rejected_with_a_clear_error(
     let devices = write_devices_file(
         "DUTY kind=const value=0.3\n\
          D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 \
-         gate=dutyctrl ctrl=DUTY freq=5000\n",
+         gate=block ctrl=DUTY\n",
     );
 
     let output = run(&[
@@ -106,13 +108,13 @@ fn a_gate_naming_a_raw_block_instead_of_sig2gate_is_rejected_with_a_clear_error(
 }
 
 #[test]
-fn sig2gate_wrapper_makes_dutyctrl_work() {
+fn sig2gate_wrapper_makes_gate_block_work() {
     let netlist = fixture("cscript_gain.cir");
     let devices = write_devices_file(
         "DUTY kind=const value=0.3\n\
          DUTY_GATE kind=sig2gate in=DUTY\n\
          D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 \
-         gate=dutyctrl ctrl=DUTY_GATE freq=5000\n",
+         gate=block ctrl=DUTY_GATE\n",
     );
 
     let output = run(&[
@@ -139,7 +141,9 @@ fn sig2v_drives_a_voltage_source_via_its_own_literal_value_field() {
     // driving V1's own magnitude directly, checked against Ohm's law on a pure resistive
     // divider (V(a) must equal CMD's own commanded value exactly).
     let devices = write_devices_file(
-        "D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 gate=off\n\
+        "OFFVAL kind=const value=0\n\
+         OFFGATE kind=sig2gate in=OFFVAL\n\
+         D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 gate=block ctrl=OFFGATE\n\
          CMD kind=const value=7\n\
          CMD_V kind=sig2v in=CMD\n",
     );

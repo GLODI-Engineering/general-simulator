@@ -37,10 +37,8 @@ fn naming_a_raw_block_directly_is_rejected_before_any_step_runs() {
     let mut gates = BTreeMap::new();
     gates.insert(
         "D1".to_string(),
-        GateBinding::Pwm {
-            duty: "DUTY".to_string(), // raw Const, not wrapped in Sig2Gate -- must be rejected
-            freq_hz: 100_000.0,
-        },
+        // raw Const, not wrapped in Sig2Gate -- must be rejected
+        GateBinding::Block("DUTY".to_string()),
     );
 
     let err = simulate_transient_with_blocks(
@@ -92,10 +90,7 @@ fn wrapping_the_same_block_in_sig2gate_makes_it_work() {
     let mut gates = BTreeMap::new();
     gates.insert(
         "D1".to_string(),
-        GateBinding::Pwm {
-            duty: "DUTY_GATE".to_string(),
-            freq_hz: 100_000.0,
-        },
+        GateBinding::Block("DUTY_GATE".to_string()),
     );
 
     // Should simply succeed -- correctness of the resulting switching is already covered by

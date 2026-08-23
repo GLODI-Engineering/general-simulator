@@ -1,6 +1,7 @@
-//! `GateBinding::VcoPhase` (phase read from a named block, not a fixed `f64` like
-//! `GateBinding::Vco`) — checked against hand-computed switching instants, the way every other
-//! gate-timing behavior in this crate is verified, not just "it ran."
+//! `BlockKind::PhaseShiftPwm` (PWM Modulator 2: the fusion of the old `GateBinding::Vco`/
+//! `VcoPhase` plus a block-driven duty neither had) — checked against hand-computed switching
+//! instants, the way every other gate-timing behavior in this crate is verified, not just "it
+//! ran."
 //!
 //! Circuit: `V1 (10V) -- D1 (MOSFET, drain=a, source=b, plain SPICE node order) -- R1 (1k) --
 //! ground`. Chosen deliberately (not just "the natural declaration") so the body diode's real
@@ -8,13 +9,13 @@
 //! normal charging direction (`a -> b`) — otherwise the body diode would keep conducting even
 //! with the gate off, masking the OFF state (same bug already documented in this crate's own
 //! `closed_loop_pi_regulator.rs` test).
-//! `VCO1` fixed at `100kHz` (`f_min=f_max=100000`, driven by a `Const` input so its output
-//! ramps linearly), `PHASE` a `Const(0.25)` block, `duty=0.5`. On while
-//! `(ramp + phase).rem_euclid(1.0) < duty`, i.e. `ramp` in `[-0.25, 0.25) mod 1 = [0, 0.25) ∪
-//! [0.75, 1.0)`. At `100kHz` (`10µs` period): ON for `t` in `[0, 2.5µs)`, OFF `[2.5, 7.5µs)`, ON
-//! `[7.5, 10µs)`, repeating. Sampled at `t=1µs` (expect ON, `V(b) ≈ 10*R1/(R1+Ron) ≈ 9.999V`),
-//! `t=5µs` (expect OFF, `V(b) ≈ 0V`, only the MOSFET's own tiny leakage conductance), `t=9µs`
-//! (expect ON again).
+//! `FREQ` fixed at `100kHz` (a `Const`, clamped internally to `[f_min, f_max]=[100000,
+//! 100000]`, so the internal oscillator ramps linearly), `PHASE` a `Const(0.25)` block,
+//! `DUTY` a `Const(0.5)` block, zero dead time. `main` on while `(ramp + phase).rem_euclid(1.0)
+//! < duty`, i.e. `ramp` in `[-0.25, 0.25) mod 1 = [0, 0.25) ∪ [0.75, 1.0)`. At `100kHz` (`10µs`
+//! period): ON for `t` in `[0, 2.5µs)`, OFF `[2.5, 7.5µs)`, ON `[7.5, 10µs)`, repeating. Sampled
+//! at `t=1µs` (expect ON, `V(b) ≈ 10*R1/(R1+Ron) ≈ 9.999V`), `t=5µs` (expect OFF, `V(b) ≈ 0V`,
+//! only the MOSFET's own tiny leakage conductance), `t=9µs` (expect ON again).
 
 use std::collections::BTreeMap;
 
@@ -25,7 +26,7 @@ use pwl_devices::{Diode, Mosfet};
 use spice_core::Dialect;
 
 #[test]
-fn vco_phase_gate_matches_hand_computed_switching_instants() {
+fn phase_shift_pwm_gate_matches_hand_computed_switching_instants() {
     let netlist = "V1 a 0 10\nD1 a b mosfetmodel\nR1 b 0 1k";
     let mosfet = Mosfet::new(0.1, Diode::new(0.0, -100.0, 0.0, 0.7, 1.0));
     let mut mosfets = BTreeMap::new();
@@ -39,35 +40,42 @@ fn vco_phase_gate_matches_hand_computed_switching_instants() {
             inputs: vec![],
         },
         BlockInstance {
-            name: "VCO1".to_string(),
-            kind: BlockKind::Vco(continuous_blocks::Vco::new(100_000.0, 100_000.0)),
-            inputs: vec![Signal::Block("FREQ".to_string())],
-        },
-        BlockInstance {
             name: "PHASE".to_string(),
             kind: BlockKind::Const(0.25),
             inputs: vec![],
         },
         BlockInstance {
-            name: "VCO1_GATE".to_string(),
-            kind: BlockKind::Sig2Gate,
-            inputs: vec![Signal::Block("VCO1".to_string())],
+            name: "DUTY".to_string(),
+            kind: BlockKind::Const(0.5),
+            inputs: vec![],
         },
         BlockInstance {
-            name: "PHASE_GATE".to_string(),
+            name: "MOD".to_string(),
+            kind: BlockKind::PhaseShiftPwm {
+                osc: continuous_blocks::Vco::new(100_000.0, 100_000.0),
+                red: 0.0,
+                fed: 0.0,
+                output_names: vec!["MOD".to_string(), "MOD_COMP".to_string()],
+            },
+            inputs: vec![
+                Signal::Block("FREQ".to_string()),
+                Signal::Block("PHASE".to_string()),
+                Signal::Block("DUTY".to_string()),
+            ],
+        },
+        BlockInstance {
+            name: "MOD_MAIN_GATE".to_string(),
             kind: BlockKind::Sig2Gate,
-            inputs: vec![Signal::Block("PHASE".to_string())],
+            // The primary output is always bound to the block's own name ("MOD"), not
+            // output_names[0] -- see evaluate_blocks' own `outputs.insert(block.name...)`.
+            inputs: vec![Signal::Block("MOD".to_string())],
         },
     ];
 
     let mut gates = BTreeMap::new();
     gates.insert(
         "D1".to_string(),
-        GateBinding::VcoPhase {
-            vco: "VCO1_GATE".to_string(),
-            phase: "PHASE_GATE".to_string(),
-            duty: 0.5,
-        },
+        GateBinding::Block("MOD_MAIN_GATE".to_string()),
     );
 
     let trace = simulate_transient_with_blocks(

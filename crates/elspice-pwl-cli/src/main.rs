@@ -16,8 +16,13 @@
 //!
 //! ```text
 //! * D1 kind=diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1
-//! * D2 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=on
-//! * D3 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=pwm freq=10000 duty=0.6
+//! * ONVAL kind=const value=1
+//! * ONGATE kind=sig2gate in=ONVAL
+//! * D2 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=block ctrl=ONGATE
+//! * DUTY kind=const value=0.6
+//! * PWM1 kind=pwm freq=10000 in=DUTY outputs=PWM1_ON,PWM1_OFF
+//! * PWM1G kind=sig2gate in=PWM1_ON
+//! * D3 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=block ctrl=PWM1G
 //! ```
 //!
 //! Any other tool — a real SPICE simulator, a text editor, a diff — sees exactly what a `*`
@@ -37,22 +42,28 @@
 //!
 //! ## Wiring a controller into a gate
 //!
-//! **There is no separate "closed-loop mode."** `--mode transient` always resolves every
-//! MOSFET's gate the same way, every step, whether that gate is a fixed state, a fixed-
-//! frequency/fixed-duty PWM schedule, or driven by a graph of `continuous-blocks` blocks the
-//! device file wires together — `const`, `time` (zero-input, outputs the current step's own
-//! simulated time — the standard "clock" source, needed to build a `sin(2*pi*f*t)`-style
-//! signal via `MathFn1`/`Gain` since no block otherwise sees `t` directly), `pwl`
-//! (piecewise-constant source, e.g. a reference schedule), `sum` (an error junction with
-//! explicit `+`/`-` signs), `gain`, `pid`,
-//! `statespace` (arbitrary `(A,B,C,D)`), `tf` (a rational `N(s)/D(s)`), `vco`. Whether that
-//! graph happens to read the circuit's own state back (through a `kind=probe`, see below,
+//! **There is no separate "closed-loop mode," and no non-block-driven gate at all.** Every
+//! MOSFET's gate is `gate=block ctrl=<sig2gate-name>` — always resolved the same way, every
+//! step, by reading the named block's current output (`>= 0.5` means on). Even a permanently-on
+//! or permanently-off gate is an ordinary block (`kind=const value=1`, wrapped in a
+//! `kind=sig2gate` like any other gate target), not a special fixed-state escape hatch — see
+//! "Physical/signal-domain converters" below for why every `ctrl=` target must specifically be a
+//! `sig2gate` converter. `continuous-blocks` supplies the vocabulary the device file wires
+//! together — `const`, `time` (zero-input, outputs the current step's own simulated time — the
+//! standard "clock" source, needed to build a `sin(2*pi*f*t)`-style signal via `MathFn1`/`Gain`
+//! since no block otherwise sees `t` directly), `pwc`/`pwl` (piecewise-constant/-linear
+//! sources, e.g. a reference schedule), `sum` (an error junction with explicit `+`/`-` signs),
+//! `gain`, `pid`, `statespace` (arbitrary `(A,B,C,D)`), `tf` (a rational `N(s)/D(s)`), `vco` (a
+//! bare oscillator ramp), and the two PWM modulators this vocabulary is ultimately *for* —
+//! `pwm`/`pspwm`, see their own section below. Whether a graph happens to read the circuit's own
+//! state back (through a `kind=probe`, see below,
 //! making it what's conventionally called "closed-loop") is just a property of how the blocks
 //! are wired, the same as it would be in any real block-diagram simulation tool — the solver
 //! doesn't need to be told which case it is, because it resolves both exactly the same way:
 //! **the error signal is a `sum` block's own output, and a frequency-modulated PWM carrier is
-//! `sum -> pid -> sum -> vco`, not one fused "closed-loop controller" that bakes a specific
-//! topology together.** Each block is declared with `kind=<block>`, its own parameters, and
+//! `sum -> pid -> sum -> pspwm` (PWM Modulator 2), not one fused "closed-loop controller" that
+//! bakes a specific topology together.** Each block is declared with `kind=<block>`, its own
+//! parameters, and
 //! `in=<signal>` (single-input blocks) or `inputs=<signal>,<signal>,...` (`sum`, one per
 //! `signs=` entry). A `<signal>` is another block's name (its output this same step) or
 //! `prev:<block>` (that — or any — named block's own output from the *previous* step, `0.0`
@@ -87,13 +98,12 @@
 //!   the signal domain. Zero inputs (a source block, like `const`/`time`); reference its output
 //!   afterward exactly like any other block's, e.g. `ERR kind=sum inputs=REF,VOUT_PROBE
 //!   signs=1,-1` where `VOUT_PROBE kind=probe node=vout` was declared earlier.
-//! - `kind=sig2gate in=<signal>` is the **only** legal target for a `gate=` field naming a
-//!   block (`ctrl=`/`vco=`/`phase=` below) — every existing `gate=` variant still takes the same
-//!   field names, but the named block must now be a `sig2gate` converter, not a raw
-//!   `pid`/`vco`/`hysteresis`/etc. block directly (`dae_runtime::DaeError::
-//!   GateTargetNotSig2Gate` otherwise). Purely an identity pass-through numerically — its whole
-//!   purpose is marking, in the netlist text, exactly where a signal stops being "a number a
-//!   controller computed" and starts being "a command that actuates a physical switch."
+//! - `kind=sig2gate in=<signal>` is the **only** legal target for a `gate=block ctrl=` field —
+//!   the named block must be a `sig2gate` converter, not a raw `pid`/`vco`/`pwm`/`hysteresis`/
+//!   etc. block directly (`dae_runtime::DaeError::GateTargetNotSig2Gate` otherwise). Purely an
+//!   identity pass-through numerically — its whole purpose is marking, in the netlist text,
+//!   exactly where a signal stops being "a number a controller computed" and starts being "a
+//!   command that actuates a physical switch."
 //! - `kind=sig2v in=<signal>` / `kind=sig2i in=<signal>` are the **only** legal way a
 //!   signal-domain block drives an independent voltage/current source's own magnitude — name
 //!   the converter block directly as that source's own literal value in the netlist, e.g. `V1 a
@@ -195,35 +205,45 @@
 //! already wrapped to `[0, 2*pi)` — feed directly into a `kind=park`/`kind=clarkepark` block's
 //! `theta` input). Starts at rest (`id=iq=omega_m=theta_e=0`).
 //!
-//! A MOSFET's gate can reference a controller block by name instead of a fixed/`pwm` spec, two
-//! ways — **every block name below must resolve to a `kind=sig2gate` converter** (see
-//! "Physical/signal-domain converters" above), not the raw `vco`/`pid`/`hysteresis`/etc. block
-//! directly:
-//! - `gate=vco ctrl=<sig2gate-name> phase=<0..1> duty=<0..1>` — frequency modulation (LLC-
-//!   family converters); `ctrl` names a `sig2gate` wrapping the oscillator's own ramp output.
-//!   Several gates naming the same wrapped `vco` share one oscillator with different phase
-//!   offsets (a half-bridge's two complementary switches) rather than needing a separate
-//!   oscillator per gate.
-//! - `gate=dutyctrl ctrl=<sig2gate-name> freq=<hz>` — duty modulation at a fixed carrier
-//!   frequency (buck/boost-style), with the duty *command* coming from anywhere in the graph
-//!   instead of being a fixed value.
-//! - `gate=dutyctrlcomplement ctrl=<sig2gate-name> freq=<hz>` — the exact logical complement of
-//!   `gate=dutyctrl`: on while the carrier is *at or above* the named duty command, instead of
-//!   below. Naming the *same* `ctrl`/`freq` as a `gate=dutyctrl` device drives a half-bridge
-//!   leg's two switches from one shared duty command with no gap and no overlap (both read the
-//!   identical carrier value every step, since it's a pure function of `t`/`freq`) — the
-//!   standard way to build an actively-switched leg (a three-phase bridge's pole, a
-//!   synchronous-rectifier buck), as opposed to the single-active-switch-plus-diode topologies
-//!   `gate=dutyctrl` alone was previously used for in this repo's own experiments.
-//! - `gate=block ctrl=<sig2gate-name>` — direct on/off control, on while the named block's
-//!   output is `>= 0.5`, no carrier at all. Meant for a `kind=hysteresis` block wrapped in a
-//!   `sig2gate` (bang-bang current-mode control has no fixed switching frequency to compare
-//!   against), but works with any block.
-//! - `gate=vcophase vco=<sig2gate-name> phase=<sig2gate-name> duty=<0..1>` — like `gate=vco`,
-//!   but `phase` is itself a named (`sig2gate`-wrapped) block's current output rather than a
-//!   fixed number, read fresh every step. Needed for modulation schemes where the phase offset
-//!   is a controller output recomputed periodically (e.g. a dual-active-bridge converter's
-//!   secondary-leg phase shift), not a netlist-time constant.
+//! ## The two PWM modulators
+//!
+//! Every gate-driving PWM waveform in this crate is built from one of exactly two block kinds
+//! — both **active-high complementary** (two outputs, `main` and `complement`, `complement`
+//! being the exact logical NOT of `main`, never an inverted-logic-level signal) with
+//! independent per-edge dead time, sharing one implementation
+//! (`continuous_blocks::math_ops::complementary_pwm_with_deadtime`) so "how dead time is
+//! inserted" has exactly one answer regardless of which modulator produced the pair. Dead time
+//! delays only the two *rising* (turn-on) edges — `red` delays `main`'s own turn-on, `fed`
+//! delays `complement`'s own turn-on — never a falling edge, which is what guarantees both
+//! outputs are provably low during the gap (whichever switch was conducting always turns off
+//! exactly on schedule; only the *other* one is held off a little longer before it's allowed to
+//! turn on). `red=fed=0.0` (the default for both) recovers the ideal, gap-free, overlap-free
+//! pair exactly.
+//!
+//! - **PWM Modulator 1** — `kind=pwm freq=<hz> in=<duty-signal> [red=<seconds>] [fed=<seconds>]
+//!   [outputs=<main>,<complement>]` — fixed carrier frequency, block-driven duty (the standard
+//!   buck/boost-style comparator). `outputs=` defaults to `<name>,<name>_comp`.
+//! - **PWM Modulator 2** — `kind=pspwm f_min=<hz> f_max=<hz>
+//!   inputs=<freq-signal>,<phase-signal>,<duty-signal> [red=<seconds>] [fed=<seconds>]
+//!   [outputs=<main>,<complement>]` — frequency, phase, *and* duty all block-driven
+//!   ("phase-shift PWM," the standard term for exactly the modulation scheme a
+//!   dual-active-bridge/phase-shifted-full-bridge converter uses). Owns its own frequency-
+//!   integration state directly (not a variant of `kind=vco`, though it reuses the same
+//!   clamp-and-integrate math internally) — two `pspwm` instances fed the *same* `freq` input
+//!   stay phase-synchronized (deterministic integration, same `dt`, same starting phase `0.0`),
+//!   the way a bridge's two legs need to be, without a separately-declared shared oscillator
+//!   block in between. `red`/`fed` are converted to a phase fraction using *this step's own*
+//!   resolved frequency (not a fixed constant), since the same absolute dead time eats a larger
+//!   fraction of the period at higher switching frequency — a real effect on a
+//!   variable-frequency converter's own ZVS margin, not just bookkeeping. `outputs=` defaults
+//!   the same way as PWM Modulator 1.
+//!
+//! Both feed `gate=block ctrl=<sig2gate-name>` on each switch — one `sig2gate` wrapping
+//! `main`, another wrapping `complement`, for a true half-bridge leg's two switches; a topology
+//! with only one actively-driven switch (a buck's own high-side, freewheeling through a diode)
+//! just leaves the `complement` output unwired. **Every `ctrl=` target must resolve to a
+//! `kind=sig2gate` converter** (see "Physical/signal-domain converters" above), never the raw
+//! `pwm`/`pspwm`/`hysteresis`/etc. block directly.
 //!
 //! Example — a frequency-modulated half-bridge PID (LLC-family converters regulate by
 //! switching frequency, not PWM duty, unlike buck/boost) with a reference step test, as it
@@ -231,26 +251,29 @@
 //!
 //! ```text
 //! V1 vin 0 400
-//! * D1 kind=mosfet r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=vco ctrl=VCO1G phase=0 duty=0.48
-//! * D2 kind=mosfet r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=vco ctrl=VCO1G phase=0.5 duty=0.48
+//! * D1 kind=mosfet r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=block ctrl=LEG_MAIN_G
+//! * D2 kind=mosfet r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=block ctrl=LEG_COMP_G
 //! ... (Lr, Cr, transformer, rectifier, Cout, Rout -- ordinary SPICE elements)
 //! * VOUT_PROBE kind=probe node=vout
-//! * REF    kind=pwc points=0:20,0.014:17
-//! * ERR    kind=sum inputs=REF,VOUT_PROBE signs=1,-1
-//! * PID1   kind=pid kp=800 ki=4e6 kd=0 n=1000 clamp_lo=-15000 clamp_hi=15000 in=ERR
-//! * FNOM   kind=const value=115000
-//! * FREQ   kind=sum inputs=FNOM,PID1 signs=1,-1
-//! * VCO1   kind=vco f_min=100000 f_max=130000 in=FREQ
-//! * VCO1G  kind=sig2gate in=VCO1
+//! * REF     kind=pwc points=0:20,0.014:17
+//! * ERR     kind=sum inputs=REF,VOUT_PROBE signs=1,-1
+//! * PID1    kind=pid kp=800 ki=4e6 kd=0 n=1000 clamp_lo=-15000 clamp_hi=15000 in=ERR
+//! * FNOM    kind=const value=115000
+//! * FREQ    kind=sum inputs=FNOM,PID1 signs=1,-1
+//! * ZEROPH  kind=const value=0
+//! * HALFDUTY kind=const value=0.48
+//! * LEG     kind=pspwm f_min=100000 f_max=130000 inputs=FREQ,ZEROPH,HALFDUTY outputs=LEG_MAIN,LEG_COMP
+//! * LEG_MAIN_G kind=sig2gate in=LEG_MAIN
+//! * LEG_COMP_G kind=sig2gate in=LEG_COMP
 //! ```
 //!
-//! A real SPICE tool opening this file sees seven ordinary comment lines and an otherwise
+//! A real SPICE tool opening this file sees eleven ordinary comment lines and an otherwise
 //! unremarkable LLC deck. `elspice-pwl-cli some.cir --mode transient` (no `--devices`) sees the
 //! complete closed loop.
 //!
-//! `--mode dc` cannot resolve a block-driven gate (`gate=vco`/`gate=dutyctrl`/`gate=block`): a DC operating
-//! point has no notion of the time-stepped state a `Pid`/`Vco` block carries, so those gate
-//! kinds need `--mode transient`.
+//! `--mode dc` cannot resolve any gate at all now that every gate is block-driven: a DC
+//! operating point has no notion of the time-stepped state a `Pid`/`Vco`/`Pwm`/`PhaseShiftPwm`
+//! block carries, so any netlist with a MOSFET needs `--mode transient`.
 //!
 //! See `internal-archive/experiments/elspice-pwl-llc-closed-loop-vs-xyce-ngspice/`
 //! and `experiments/elspice-pwl-buck-underdamped-resonance-filter/` for full worked examples
@@ -263,9 +286,8 @@ use std::process::ExitCode;
 
 use continuous_blocks::{CoordinateTransform, Hysteresis, Pid, StateSpace, TransferFunction, Vco};
 use dae_runtime::{
-    simulate_transient, simulate_transient_with_blocks, solve_dc, solve_dc_with_mosfets,
-    AdaptiveConfig, BlockInstance, BlockKind, GateBinding, GateState, PidClamp, ProbeTarget,
-    Signal, TimeStep, TransientFunction,
+    simulate_transient, simulate_transient_with_blocks, solve_dc, AdaptiveConfig, BlockInstance,
+    BlockKind, GateBinding, PidClamp, ProbeTarget, Signal, TimeStep, TransientFunction,
 };
 use pwl_devices::{Diode, Mosfet};
 use spice_core::Dialect;
@@ -280,64 +302,17 @@ enum Kind {
     Block(BlockInstance),
 }
 
+/// Every gate is block-driven — see `dae_runtime::GateBinding`'s own doc comment for why there
+/// is no non-block-driven variant left (a permanently-off gate is an explicit `Const(0.0)`
+/// wired through `kind=sig2gate`, the same as any other gate).
 #[derive(Clone)]
-enum GateSpec {
-    Fixed(GateState),
-    Pwm {
-        freq_hz: f64,
-        duty: f64,
-    },
-    Vco {
-        ctrl: String,
-        phase: f64,
-        duty: f64,
-    },
-    DutyCtrl {
-        ctrl: String,
-        freq_hz: f64,
-    },
-    DutyCtrlComplement {
-        ctrl: String,
-        freq_hz: f64,
-    },
-    Block {
-        ctrl: String,
-    },
-    VcoPhase {
-        vco: String,
-        phase: String,
-        duty: f64,
-    },
+struct GateSpec {
+    ctrl: String,
 }
 
 impl GateSpec {
     fn to_binding(&self) -> GateBinding {
-        match self {
-            GateSpec::Fixed(state) => GateBinding::Fixed(*state),
-            GateSpec::Pwm { freq_hz, duty } => GateBinding::PwmFixed {
-                freq_hz: *freq_hz,
-                duty: *duty,
-            },
-            GateSpec::Vco { ctrl, phase, duty } => GateBinding::Vco {
-                vco: ctrl.clone(),
-                phase: *phase,
-                duty: *duty,
-            },
-            GateSpec::DutyCtrl { ctrl, freq_hz } => GateBinding::Pwm {
-                duty: ctrl.clone(),
-                freq_hz: *freq_hz,
-            },
-            GateSpec::DutyCtrlComplement { ctrl, freq_hz } => GateBinding::PwmComplement {
-                duty: ctrl.clone(),
-                freq_hz: *freq_hz,
-            },
-            GateSpec::Block { ctrl } => GateBinding::Block(ctrl.clone()),
-            GateSpec::VcoPhase { vco, phase, duty } => GateBinding::VcoPhase {
-                vco: vco.clone(),
-                phase: phase.clone(),
-                duty: *duty,
-            },
-        }
+        GateBinding::Block(self.ctrl.clone())
     }
 }
 
@@ -486,9 +461,14 @@ fn run() -> Result<(), String> {
         let point = if mosfets.is_empty() {
             solve_dc(&netlist, dialect, &diodes).map_err(|e| format!("{e:?}"))?
         } else {
-            let mosfets_fixed = fixed_gate_states(&mosfets, 0.0)?;
-            solve_dc_with_mosfets(&netlist, dialect, &diodes, &mosfets_fixed, shared_r_on)
-                .map_err(|e| format!("{e:?}"))?
+            // Every gate is block-driven (gate=block) -- a DC operating point has no notion of
+            // a block's time-stepped state, so any MOSFET at all makes --mode dc unsupported.
+            let name = mosfets.keys().next().expect("mosfets is non-empty here");
+            return Err(format!(
+                "device '{name}': every gate is block-driven (gate=block), which needs \
+                 --mode transient, not 'dc' (a DC operating point has no notion of a block's \
+                 time-stepped state)"
+            ));
         };
         print_header(&point.unknowns);
         print_row(0.0, &point);
@@ -523,45 +503,13 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
-fn fixed_gate_states(
-    mosfets: &BTreeMap<String, (Mosfet, GateSpec)>,
-    t: f64,
-) -> Result<BTreeMap<String, (Mosfet, GateState)>, String> {
-    mosfets
-        .iter()
-        .map(|(name, (m, gate))| {
-            let state = match gate {
-                GateSpec::Fixed(s) => *s,
-                GateSpec::Pwm { freq_hz, duty } => {
-                    let phase = t * freq_hz;
-                    let carrier = phase - phase.floor();
-                    if carrier < *duty {
-                        GateState::On
-                    } else {
-                        GateState::Off
-                    }
-                }
-                GateSpec::Vco { .. }
-                | GateSpec::DutyCtrl { .. }
-                | GateSpec::DutyCtrlComplement { .. }
-                | GateSpec::Block { .. }
-                | GateSpec::VcoPhase { .. } => {
-                    return Err(format!(
-                        "device '{name}': gate=vco/dutyctrl/dutyctrlcomplement/block/vcophase \
-                         needs --mode transient, not 'dc' (a DC operating point has no notion \
-                         of a block's time-stepped \
-                         state)"
-                    ))
-                }
-            };
-            Ok((name.clone(), (*m, state)))
-        })
-        .collect()
-}
-
-/// `--mode transient` with at least one MOSFET: resolves every gate (`fixed`/`pwm`/`vco`/
-/// `dutyctrl`, mixed freely) via [`dae_runtime::simulate_transient_with_blocks`] — see this
-/// file's module doc comment for why there's no separate mode for the block-driven case.
+/// `--mode dc` has no notion of a block's time-stepped state (no transient loop runs at all),
+/// but every gate is now block-driven (`GateSpec` is always `gate=block ctrl=<name>`) — so a
+/// `.op`-style DC operating point with any MOSFET present has nothing to resolve its gate from
+/// and is unconditionally unsupported, not just for the cases that used to need a block.
+/// `--mode transient` with at least one MOSFET: resolves every gate (always block-driven,
+/// `gate=block`) via [`dae_runtime::simulate_transient_with_blocks`] — see this file's module
+/// doc comment for why there's no separate mode for the block-driven case.
 #[allow(clippy::too_many_arguments)]
 fn run_transient_with_mosfets(
     netlist: &str,
@@ -594,16 +542,18 @@ fn run_transient_with_mosfets(
     )
     .map_err(|e| format!("{e:?}"))?;
 
-    // A cscript, coordinate-transform, or pmsm block registers extra named outputs beyond its
-    // own block name (see block_graph::evaluate_blocks) -- list those too, so they show up as
-    // their own CSV columns instead of only being reachable via Signal::Block from another
-    // declared block.
+    // A cscript, coordinate-transform, pmsm, pwm, or pspwm block registers extra named outputs
+    // beyond its own block name (see block_graph::evaluate_blocks) -- list those too, so they
+    // show up as their own CSV columns instead of only being reachable via Signal::Block from
+    // another declared block.
     let mut block_names: Vec<String> = blocks.iter().map(|b| b.name.clone()).collect();
     for block in blocks {
         match &block.kind {
             BlockKind::CScript { output_names, .. }
             | BlockKind::CoordinateTransform { output_names, .. }
-            | BlockKind::Pmsm { output_names, .. } => {
+            | BlockKind::Pmsm { output_names, .. }
+            | BlockKind::Pwm { output_names, .. }
+            | BlockKind::PhaseShiftPwm { output_names, .. } => {
                 block_names.extend(output_names.iter().skip(1).cloned());
             }
             _ => {}
@@ -799,37 +749,26 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                     get("g_on")?,
                 );
                 let r_on = get("r_on")?;
+                // Every gate is block-driven -- gate=block ctrl=<name>, reading that block's
+                // current output (>= 0.5 means on). No other gate= spelling exists: a
+                // permanently-off gate is an explicit `Const(0.0)` wired through
+                // `kind=sig2gate`, the same as any other gate.
                 let gate = match fields.get("gate").map(String::as_str) {
-                    Some("on") => GateSpec::Fixed(GateState::On),
-                    Some("off") | None => GateSpec::Fixed(GateState::Off),
-                    Some("pwm") => GateSpec::Pwm {
-                        freq_hz: get("freq")?,
-                        duty: get("duty")?,
-                    },
-                    Some("vco") => GateSpec::Vco {
+                    Some("block") => GateSpec {
                         ctrl: get_str("ctrl")?,
-                        phase: get("phase")?,
-                        duty: get("duty")?,
-                    },
-                    Some("dutyctrl") => GateSpec::DutyCtrl {
-                        ctrl: get_str("ctrl")?,
-                        freq_hz: get("freq")?,
-                    },
-                    Some("dutyctrlcomplement") => GateSpec::DutyCtrlComplement {
-                        ctrl: get_str("ctrl")?,
-                        freq_hz: get("freq")?,
-                    },
-                    Some("block") => GateSpec::Block {
-                        ctrl: get_str("ctrl")?,
-                    },
-                    Some("vcophase") => GateSpec::VcoPhase {
-                        vco: get_str("vco")?,
-                        phase: get_str("phase")?,
-                        duty: get("duty")?,
                     },
                     Some(other) => {
                         return Err(format!(
-                            "line {}: unknown gate spec '{other}'",
+                            "line {}: unknown gate spec '{other}' (only gate=block ctrl=<name> \
+                             exists -- every gate is block-driven)",
+                            line_number + 1
+                        ))
+                    }
+                    None => {
+                        return Err(format!(
+                            "line {}: device '{name}' missing field 'gate' (gate=block \
+                             ctrl=<name> -- every gate is block-driven, see this file's own \
+                             module doc comment)",
                             line_number + 1
                         ))
                     }
@@ -1040,6 +979,107 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                     name: name.to_string(),
                     kind: BlockKind::Vco(vco),
                     inputs: vec![parse_signal(&get_str("in")?)],
+                })
+            }
+            // "pwm"/"pspwm": fixed-frequency and frequency+phase+duty active-high-complementary
+            // PWM modulators (see `dae_runtime::BlockKind::Pwm`/`PhaseShiftPwm`'s own doc
+            // comments for the full design) -- both default `red`/`fed` (dead time, seconds) to
+            // 0.0, the ideal gap-free/overlap-free complementary pair.
+            "pwm" => {
+                let output_names = match fields.get("outputs") {
+                    Some(names) => {
+                        let names: Vec<String> = names.split(',').map(str::to_string).collect();
+                        if names.len() != 2 {
+                            return Err(format!(
+                                "line {}: device '{name}': 'outputs' needs exactly 2 entries \
+                                 (main, complement; got {})",
+                                line_number + 1,
+                                names.len()
+                            ));
+                        }
+                        names
+                    }
+                    None => vec![name.to_string(), format!("{name}_comp")],
+                };
+                Kind::Block(BlockInstance {
+                    name: name.to_string(),
+                    kind: BlockKind::Pwm {
+                        freq_hz: get("freq")?,
+                        red: fields
+                            .get("red")
+                            .map(|s| s.parse::<f64>())
+                            .transpose()
+                            .map_err(|_| {
+                                format!(
+                                    "line {}: device '{name}' field 'red' is not a number",
+                                    line_number + 1
+                                )
+                            })?
+                            .unwrap_or(0.0),
+                        fed: fields
+                            .get("fed")
+                            .map(|s| s.parse::<f64>())
+                            .transpose()
+                            .map_err(|_| {
+                                format!(
+                                    "line {}: device '{name}' field 'fed' is not a number",
+                                    line_number + 1
+                                )
+                            })?
+                            .unwrap_or(0.0),
+                        output_names,
+                    },
+                    inputs: vec![parse_signal(&get_str("in")?)],
+                })
+            }
+            "pspwm" => {
+                let osc = Vco::new(get("f_min")?, get("f_max")?);
+                let inputs: Vec<Signal> = get_str("inputs")?.split(',').map(parse_signal).collect();
+                if inputs.len() != 3 {
+                    return Err(format!(
+                        "line {}: device '{name}' kind='pspwm' needs 3 inputs \
+                         (freq,phase,duty; got {})",
+                        line_number + 1,
+                        inputs.len()
+                    ));
+                }
+                let output_names = match fields.get("outputs") {
+                    Some(names) => {
+                        let names: Vec<String> = names.split(',').map(str::to_string).collect();
+                        if names.len() != 2 {
+                            return Err(format!(
+                                "line {}: device '{name}': 'outputs' needs exactly 2 entries \
+                                 (main, complement; got {})",
+                                line_number + 1,
+                                names.len()
+                            ));
+                        }
+                        names
+                    }
+                    None => vec![name.to_string(), format!("{name}_comp")],
+                };
+                let get_opt = |key: &str| -> Result<f64, String> {
+                    fields
+                        .get(key)
+                        .map(|s| s.parse::<f64>())
+                        .transpose()
+                        .map_err(|_| {
+                            format!(
+                                "line {}: device '{name}' field '{key}' is not a number",
+                                line_number + 1
+                            )
+                        })
+                        .map(|v| v.unwrap_or(0.0))
+                };
+                Kind::Block(BlockInstance {
+                    name: name.to_string(),
+                    kind: BlockKind::PhaseShiftPwm {
+                        osc,
+                        red: get_opt("red")?,
+                        fed: get_opt("fed")?,
+                        output_names,
+                    },
+                    inputs,
                 })
             }
             "hysteresis" => {

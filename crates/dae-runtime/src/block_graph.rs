@@ -1,25 +1,26 @@
 //! Resolves every MOSFET's gate state, each transient step, from a graph of named,
 //! independently reusable `continuous-blocks` blocks (`Const`, `Pwc`, `Pwl`, `Sin`, `Pulse`,
-//! `Exp`, `Sffm`, `Sum`, `Gain`, `Pid`, `StateSpace`, `TransferFunction`, `Vco`, `Hysteresis`,
-//! `CoordinateTransform`, `Pmsm`, `CScript`) wired together by the caller — the same discipline
-//! a real block-diagram tool uses:
+//! `Exp`, `Sffm`, `Sum`, `Gain`, `Pid`, `StateSpace`, `TransferFunction`, `Vco`, `Pwm`,
+//! `PhaseShiftPwm`, `Hysteresis`, `CoordinateTransform`, `Pmsm`, `CScript`) wired together by
+//! the caller — the same discipline a real block-diagram tool uses:
 //! an error
 //! signal is a `Sum`
 //! block's output, a filtered-derivative PID compensator is a `TransferFunction` given its own
-//! `N(s)/D(s)` coefficients, and a frequency-modulated PWM carrier is `Pid -> Gain -> Vco`, not
-//! a single function that bakes a specific topology together.
+//! `N(s)/D(s)` coefficients, and a frequency-modulated PWM carrier is `Pid -> Gain ->
+//! PhaseShiftPwm`, not a single function that bakes a specific topology together.
 //!
-//! **There is no separate "closed-loop mode."** A [`GateBinding`] can be a plain fixed state or
-//! fixed-frequency/fixed-duty PWM (no block involved at all — the historically "open-loop"
-//! case) just as easily as a block whose input chain happens to trace back to a
-//! [`BlockKind::Probe`] of the circuit's own state (the historically "closed-loop" case) — both
-//! are resolved by exactly the same code, every step, because from the solver's point of view
-//! they're the same kind of question: "what's this device's terminal condition right now,"
-//! answered from whatever the netlist and device file actually say. A real circuit simulator
-//! doesn't have a closed-loop *mode* either — closed-loop is a property of how a circuit
-//! happens to be wired, not an analysis type the tool needs to be told about upfront; `.op` and
-//! `.tran` are genuinely distinct analyses (different equations solved), but nothing about
-//! *this* function is analysis-specific.
+//! **There is no separate "closed-loop mode," and no non-block-driven gate at all** — every
+//! [`GateBinding`] is `Block(name)`, reading a named block's current output (`>= 0.5` means
+//! on), whether that block's own input chain traces back to a
+//! [`BlockKind::Probe`] of the circuit's own state (the historically "closed-loop" case) or is
+//! just a `Const` (the historically "open-loop, fixed" case, now expressed as an ordinary block
+//! instead of a special no-block `GateBinding` variant) — both are resolved by exactly the same
+//! code, every step, because from the solver's point of view they're the same kind of question:
+//! "what's this device's terminal condition right now," answered from whatever the netlist and
+//! device file actually say. A real circuit simulator doesn't have a closed-loop *mode* either —
+//! closed-loop is a property of how a circuit happens to be wired, not an analysis type the tool
+//! needs to be told about upfront; `.op` and `.tran` are genuinely distinct analyses (different
+//! equations solved), but nothing about *this* function is analysis-specific.
 //!
 //! Sampled-data co-simulation: every block reads the *previous* circuit step's measurement,
 //! the whole graph is evaluated once per circuit step (in the causal order [`topological_order`]
@@ -181,8 +182,53 @@ pub enum BlockKind {
     /// derivation). Compiled once via [`TransferFunction::to_state_space`]; no anti-windup, for
     /// the same reason `StateSpace` above has none.
     TransferFunction(TransferFunction),
-    /// A voltage-controlled oscillator (see [`Vco`]).
+    /// A voltage-controlled oscillator (see [`Vco`]) — a bare, standalone oscillator producing
+    /// a `[0, 1)` ramp, still useful on its own (a raw frequency-to-ramp conversion for
+    /// something other than gate control). Not how a gate-driving PWM modulator gets its own
+    /// switching frequency, though — see [`BlockKind::Pwm`]/[`BlockKind::PhaseShiftPwm`] below,
+    /// PWM Modulator 1/2, neither of which reads this block at all.
     Vco(Vco),
+    /// **PWM Modulator 1**: fixed-frequency, duty-driven, **active-high complementary** PWM.
+    /// One input, `duty` (`[0,1]`, clamped, read fresh every step from anywhere in the graph —
+    /// a `Pid`, a filtered `TransferFunction`, a plain `Const`...), fixed carrier frequency
+    /// `freq_hz`. Two outputs, following the [`BlockKind::CScript`] `output_names` convention:
+    /// `output_names[0]` (aliasing this block's own `.name`) is the main signal, `output_names[1]`
+    /// its active-high complement — the fusion of what used to be two separate `GateBinding`
+    /// variants (`Pwm`/`PwmComplement`) into one component, per explicit request. `red`/`fed`
+    /// (seconds) are independent per-edge dead-time delays — see
+    /// [`math_ops::complementary_pwm_with_deadtime`] for the exact rising-edge-only-delay
+    /// semantics and why `red=fed=0.0` recovers the ideal, gap-free, overlap-free pair exactly.
+    /// Stateless: a pure function of `(t, duty)` every step, no internal oscillator.
+    Pwm {
+        freq_hz: f64,
+        red: f64,
+        fed: f64,
+        output_names: Vec<String>,
+    },
+    /// **PWM Modulator 2**: frequency+phase+duty-driven, **active-high complementary** PWM —
+    /// the fusion of what used to be two separate `GateBinding` variants (`Vco`/`VcoPhase`)
+    /// plus a block-driven `duty` neither had, again with the same dead-time/complementary-
+    /// output treatment as [`BlockKind::Pwm`]. This is *not* a variant of [`BlockKind::Vco`] —
+    /// it owns its own frequency-integration state directly (`osc` reuses [`Vco`]'s own
+    /// clamp-and-integrate math purely as an implementation detail, the same formula, not a
+    /// shared block reference), so two instances fed the *same* `freq` input stay bit-for-bit
+    /// phase-synchronized (deterministic integration, same `dt`, same starting phase `0.0`),
+    /// the way e.g. a dual-active-bridge's two legs need to be, without a separately-declared
+    /// shared oscillator block in between. Three inputs, in order: `freq` (Hz, clamped
+    /// internally to `[osc.f_min, osc.f_max]`), `phase` (`[0,1)`, a phase-shift command as a
+    /// fraction of one carrier period — *not* this block's own internal integration state, a
+    /// different thing), `duty` (`[0,1]`, clamped). `red`/`fed` are in seconds, exactly like
+    /// [`BlockKind::Pwm`]'s own, but converted to a phase fraction using *this step's own*
+    /// resolved frequency (not a fixed constant) — this matters for a variable-frequency
+    /// converter, since the same absolute dead time eats a larger fraction of the period at
+    /// higher switching frequency, a real effect on e.g. a resonant converter's own ZVS margin,
+    /// not just bookkeeping.
+    PhaseShiftPwm {
+        osc: Vco,
+        red: f64,
+        fed: f64,
+        output_names: Vec<String>,
+    },
     /// Multiplies all its inputs together (see [`math_ops::product`]).
     Product,
     /// Clamps its single input to `[-limit, limit]` (see [`math_ops::saturation`]).
@@ -202,7 +248,7 @@ pub enum BlockKind {
     MathFn3(MathFn3),
     /// A Schmitt-trigger comparator (see [`Hysteresis`]) — bang-bang/hysteresis-band control,
     /// used when there's no fixed switching frequency to modulate a duty command onto (unlike
-    /// `Pid` feeding a [`GateBinding::Pwm`]). Its output is `1.0`/`0.0`, read directly by a
+    /// `Pid` feeding a [`BlockKind::Pwm`]). Its output is `1.0`/`0.0`, read directly by a
     /// [`GateBinding::Block`] rather than compared against a carrier.
     Hysteresis(Hysteresis),
     /// A dynamically-loaded, user-supplied block (see [`cscript_ffi`]): `lib` is a precompiled
@@ -272,9 +318,9 @@ pub enum BlockKind {
     /// replacement for this).
     Probe(ProbeTarget),
     /// The **Signal-to-PS** converter for a discrete physical actuation: the *only* legal
-    /// target for any [`GateBinding`] field that names a block (`duty`/`vco`/`phase`/the
-    /// direct-block variant) — `dae-runtime` rejects a `GateBinding` naming anything else with
-    /// `DaeError::GateTargetNotSig2Gate`. Purely an identity pass-through numerically (`value =
+    /// target for a [`GateBinding::Block`]'s own named block — `dae-runtime` rejects a
+    /// `GateBinding` naming anything else with `DaeError::GateTargetNotSig2Gate`. Purely an
+    /// identity pass-through numerically (`value =
     /// input`); its entire purpose is marking, at the netlist level, exactly where a signal
     /// stops being "just a number a controller computed" and starts being "a command that
     /// actuates a physical switch" — the discrete-actuation counterpart to
@@ -323,102 +369,32 @@ pub struct BlockInstance {
     pub inputs: Vec<Signal>,
 }
 
-/// How one MOSFET's gate state is resolved, every step. The first two variants need no block
-/// graph at all (the historically "open-loop" cases); the last two read a named block's
-/// current output (which may or may not itself depend on a circuit measurement somewhere
-/// upstream — this type doesn't need to know or care which).
+/// How one MOSFET's gate state is resolved, every step: always from a named block's current
+/// output, on while it's `>= 0.5`. No non-block-driven variant exists — even a permanently-off
+/// gate is an explicit `Const(0.0)` wired through a [`BlockKind::Sig2Gate`], the same as every
+/// other gate — and no bare carrier-comparator variant exists either: that comparison now lives
+/// entirely inside gate-driving `BlockKind`s themselves ([`BlockKind::Pwm`]/
+/// [`BlockKind::PhaseShiftPwm`], or a hand-built chain of ordinary blocks), so `GateBinding` has
+/// exactly one job — reading a number and thresholding it — regardless of what produced that
+/// number: a modulator's own main/complement output, a [`BlockKind::Hysteresis`] block (no
+/// carrier at all, event-driven bang-bang switching), or any other block a caller composes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GateBinding {
-    /// Always the same state.
-    Fixed(GateState),
-    /// Fixed-frequency, fixed-duty PWM: on while [`sawtooth_carrier`]`(t, freq_hz) < duty`.
-    PwmFixed { freq_hz: f64, duty: f64 },
-    /// Frequency modulation: on while `(ramp + phase).rem_euclid(1.0) < duty`, where `ramp`
-    /// is a named [`BlockKind::Vco`] block's current `[0, 1)` output — see
-    /// [`math_ops::pwm_from_ramp`]. Several `GateBinding::Vco`s naming the same block share one
-    /// oscillator with different phase offsets (a half-bridge's two complementary switches),
-    /// rather than needing one `Vco` block per gate.
-    Vco { vco: String, phase: f64, duty: f64 },
-    /// Duty modulation at a fixed carrier frequency: on while
-    /// [`sawtooth_carrier`]`(t, freq_hz)` is below a named block's current output (clamped to
-    /// `[0, 1]`) — the standard buck/boost-style comparator, with the duty *command* coming
-    /// from anywhere in the graph (a `Pid`, a filtered `TransferFunction`, ...) instead of
-    /// being a fixed value.
-    Pwm { duty: String, freq_hz: f64 },
-    /// Direct duty-less on/off control: on while a named block's current output is `>= 0.5` —
-    /// no carrier at all, since bang-bang/hysteresis control has no fixed switching frequency
-    /// to compare against (unlike [`GateBinding::Pwm`]). Meant for a [`BlockKind::Hysteresis`]
-    /// block, whose output is already `1.0`/`0.0`, but works with any block.
+    /// On while the named block's current output is `>= 0.5`.
     Block(String),
-    /// Frequency modulation with a *block-driven* phase, instead of [`GateBinding::Vco`]'s
-    /// fixed `f64` — on while `(ramp + phase).rem_euclid(1.0) < duty`, where `ramp` is a named
-    /// [`BlockKind::Vco`] block's current `[0, 1)` output and `phase` is a *different* named
-    /// block's current output, read fresh every step. Exactly [`GateBinding::Pwm`]'s relation
-    /// to [`GateBinding::Vco`] and [`GateBinding::PwmFixed`] — a fixed value promoted to a
-    /// block-driven one — needed for phase-shift modulation schemes (e.g. a dual-active-bridge
-    /// converter's secondary-leg phase shift) where the phase itself is a controller output
-    /// recomputed periodically, not a netlist-time constant. `duty` stays a plain `f64`: every
-    /// leg/pole in this kind of scheme uses the same fixed duty (typically `~0.5`, minus a
-    /// dead-time shrink), only the phase varies.
-    VcoPhase {
-        vco: String,
-        phase: String,
-        duty: f64,
-    },
-    /// The exact logical complement of [`GateBinding::Pwm`]: on while
-    /// [`sawtooth_carrier`]`(t, freq_hz)` is *at or above* the named block's current output
-    /// (clamped to `[0, 1]`), instead of below. The standard way to drive a half-bridge leg's
-    /// two switches from one shared duty command with no gap and no overlap: a
-    /// `GateBinding::Pwm` on the leg's top switch and a `GateBinding::PwmComplement` on its
-    /// bottom switch, both naming the *same* duty block and `freq_hz` — since
-    /// [`sawtooth_carrier`] is a pure function of `(t, freq_hz)` with no block state of its own,
-    /// both gates evaluate the identical carrier value every step, so "below" and "at or above"
-    /// partition `[0, 1)` exactly, the two switches are never simultaneously on (no
-    /// shoot-through) and never simultaneously off (no dead time — this is the ideal-switching
-    /// case; a caller wanting dead time would shrink one leg's own duty command, not something
-    /// this type needs to know about).
-    PwmComplement { duty: String, freq_hz: f64 },
 }
 
 impl GateBinding {
-    /// The blocks this binding reads from, if any (`Fixed`/`PwmFixed` need none;
-    /// `VcoPhase` needs two — `vco` and `phase` name different blocks).
+    /// The block this binding reads from.
     fn source_blocks(&self) -> [Option<&str>; 2] {
         match self {
-            GateBinding::Fixed(_) | GateBinding::PwmFixed { .. } => [None, None],
-            GateBinding::Vco { vco, .. } => [Some(vco), None],
-            GateBinding::Pwm { duty, .. } | GateBinding::PwmComplement { duty, .. } => {
-                [Some(duty), None]
-            }
             GateBinding::Block(name) => [Some(name), None],
-            GateBinding::VcoPhase { vco, phase, .. } => [Some(vco), Some(phase)],
         }
     }
 
-    fn resolve(&self, t: f64, outputs: &BTreeMap<String, f64>) -> GateState {
-        let on = match self {
-            GateBinding::Fixed(state) => return *state,
-            GateBinding::PwmFixed { freq_hz, duty } => sawtooth_carrier(t, *freq_hz) < *duty,
-            GateBinding::Vco { vco, phase, duty } => {
-                let ramp = outputs[vco.as_str()];
-                math_ops::pwm_from_ramp(ramp, *phase, *duty)
-            }
-            GateBinding::Pwm { duty, freq_hz } => {
-                let source = outputs[duty.as_str()];
-                sawtooth_carrier(t, *freq_hz) < source.clamp(0.0, 1.0)
-            }
-            GateBinding::PwmComplement { duty, freq_hz } => {
-                let source = outputs[duty.as_str()];
-                sawtooth_carrier(t, *freq_hz) >= source.clamp(0.0, 1.0)
-            }
-            GateBinding::Block(name) => outputs[name.as_str()] >= 0.5,
-            GateBinding::VcoPhase { vco, phase, duty } => {
-                let ramp = outputs[vco.as_str()];
-                let phase = outputs[phase.as_str()];
-                math_ops::pwm_from_ramp(ramp, phase, *duty)
-            }
-        };
-        if on {
+    fn resolve(&self, _t: f64, outputs: &BTreeMap<String, f64>) -> GateState {
+        let GateBinding::Block(name) = self;
+        if outputs[name.as_str()] >= 0.5 {
             GateState::On
         } else {
             GateState::Off
@@ -438,6 +414,14 @@ enum BlockState {
     },
     Vco {
         vco: Vco,
+        phase: f64,
+    },
+    /// PWM Modulator 2's own frequency-integration state — structurally identical to `Vco`
+    /// above (both reuse the same [`Vco`] clamp-and-integrate math), but a distinct variant so
+    /// nothing in this module's own dispatch code has to pretend PWM Modulator 2 *is* a `Vco`
+    /// block, which it isn't.
+    PhaseShiftPwm {
+        osc: Vco,
         phase: f64,
     },
     Pmsm {
@@ -467,8 +451,7 @@ enum BlockState {
 
 /// One step's result: `(t, OperatingPoint, block_outputs)`, where `block_outputs` is every
 /// block's value that step (by name) — useful for plotting a controller's internal signals
-/// (e.g. a `Vco`'s commanded frequency) without needing to separately re-derive them. Empty if
-/// the run used no blocks at all (every gate `Fixed`/`PwmFixed`).
+/// (e.g. a `Vco`'s commanded frequency) without needing to separately re-derive them.
 pub type TransientWithBlocksStep = (f64, OperatingPoint, BTreeMap<String, f64>);
 
 /// Name -> block index, including a [`BlockKind::CScript`]/[`BlockKind::CoordinateTransform`]/
@@ -482,7 +465,9 @@ fn block_index_by_name(blocks: &[BlockInstance]) -> BTreeMap<&str, usize> {
         let extra: &[String] = match &b.kind {
             BlockKind::CScript { output_names, .. }
             | BlockKind::CoordinateTransform { output_names, .. }
-            | BlockKind::Pmsm { output_names, .. } => output_names,
+            | BlockKind::Pmsm { output_names, .. }
+            | BlockKind::Pwm { output_names, .. }
+            | BlockKind::PhaseShiftPwm { output_names, .. } => output_names,
             _ => &[],
         };
         for name in extra.iter().skip(1) {
@@ -516,6 +501,8 @@ fn block_kind_name(kind: &BlockKind) -> &'static str {
         BlockKind::StateSpace(_) => "statespace",
         BlockKind::TransferFunction(_) => "tf",
         BlockKind::Vco(_) => "vco",
+        BlockKind::Pwm { .. } => "pwm",
+        BlockKind::PhaseShiftPwm { .. } => "pspwm",
         BlockKind::Product => "product",
         BlockKind::Saturation(_) => "saturation",
         BlockKind::Table(_) => "table",
@@ -724,6 +711,32 @@ fn evaluate_blocks(
             (BlockKind::Sum(signs), _) => math_ops::sum(&input_vals, signs),
             (BlockKind::Gain(k), _) => math_ops::gain(*k, input_vals[0]),
             (BlockKind::Product, _) => math_ops::product(&input_vals),
+            (
+                BlockKind::Pwm {
+                    freq_hz,
+                    red,
+                    fed,
+                    output_names,
+                },
+                _,
+            ) => {
+                let theta = sawtooth_carrier(t, *freq_hz);
+                let duty = input_vals[0];
+                let (main, complement) = math_ops::complementary_pwm_with_deadtime(
+                    theta,
+                    duty,
+                    red * freq_hz,
+                    fed * freq_hz,
+                );
+                if let Some(name) = output_names.get(1) {
+                    outputs.insert(name.clone(), if complement { 1.0 } else { 0.0 });
+                }
+                if main {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
             (BlockKind::Saturation(limit), _) => math_ops::saturation(input_vals[0], *limit),
             (BlockKind::Table(points), _) => {
                 continuous_blocks::waveform_arithmetic::table(input_vals[0], points)
@@ -769,6 +782,36 @@ fn evaluate_blocks(
             (BlockKind::Vco(_), BlockState::Vco { vco, phase }) => {
                 *phase = vco.step(*phase, input_vals[0], dt);
                 *phase
+            }
+            (
+                BlockKind::PhaseShiftPwm {
+                    red,
+                    fed,
+                    output_names,
+                    ..
+                },
+                BlockState::PhaseShiftPwm { osc, phase },
+            ) => {
+                let freq_command = input_vals[0];
+                let phase_offset = input_vals[1];
+                let duty = input_vals[2];
+                *phase = osc.step(*phase, freq_command, dt);
+                let actual_freq = freq_command.clamp(osc.f_min, osc.f_max);
+                let theta = (*phase + phase_offset).rem_euclid(1.0);
+                let (main, complement) = math_ops::complementary_pwm_with_deadtime(
+                    theta,
+                    duty,
+                    red * actual_freq,
+                    fed * actual_freq,
+                );
+                if let Some(name) = output_names.get(1) {
+                    outputs.insert(name.clone(), if complement { 1.0 } else { 0.0 });
+                }
+                if main {
+                    1.0
+                } else {
+                    0.0
+                }
             }
             (BlockKind::Pmsm { output_names, .. }, BlockState::Pmsm { pmsm, x }) => {
                 *x = pmsm.step(*x, input_vals[0], input_vals[1], input_vals[2], dt);
@@ -849,11 +892,11 @@ fn resolve_gates(
 }
 
 /// Runs a transient with every MOSFET's gate resolved from a [`GateBinding`] each step — see
-/// this module's doc comment for why there's no separate "closed-loop" entry point: a
-/// `GateBinding::Fixed`/`PwmFixed` device and a `GateBinding::Vco`/`Pwm` device driven by a
-/// `Sum`-`Pid`-`Vco` chain that happens to read a [`BlockKind::Probe`] are resolved by exactly
-/// the same loop below. `blocks` may be empty if every gate is `Fixed`/`PwmFixed`. `step` picks
-/// fixed or adaptive timing — see [`TimeStep`]/[`AdaptiveConfig`]. Adaptive mode here can't
+/// this module's doc comment for why there's no separate "closed-loop" entry point: a device
+/// gated by a plain [`BlockKind::Hysteresis`] and one gated by a `Sum`-`Pid`-[`BlockKind::PhaseShiftPwm`]
+/// chain that happens to read a [`BlockKind::Probe`] are resolved by exactly the same loop
+/// below — every [`GateBinding`] is `Block(name)`, reading whatever `name`'s current output
+/// happens to be. `step` picks fixed or adaptive timing — see [`TimeStep`]/[`AdaptiveConfig`]. Adaptive mode here can't
 /// reuse [`step_control::adaptive_step`] directly (that assumes a `dt`-independent `system`):
 /// this circuit's gate states, and so its `system`, are themselves a function of `dt` through
 /// the block graph, so a rejected trial has to redo block evaluation *and* gate resolution at
@@ -979,6 +1022,10 @@ pub fn simulate_transient_with_blocks(
             BlockKind::TransferFunction(tf) => dynamic(tf.to_state_space()),
             BlockKind::Vco(vco) => BlockState::Vco {
                 vco: *vco,
+                phase: 0.0,
+            },
+            BlockKind::PhaseShiftPwm { osc, .. } => BlockState::PhaseShiftPwm {
+                osc: *osc,
                 phase: 0.0,
             },
             BlockKind::Pmsm { pmsm, .. } => BlockState::Pmsm {
