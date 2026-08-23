@@ -876,13 +876,18 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                     inputs: Vec::new(),
                 })
             }
-            // "sin"/"pulse"/"exp"/"sffm": the electrical domain's other four time-varying
-            // source forms (see `elspice_mna::TransientFunction`'s own doc comment for the
-            // exact formula each implements), reused directly rather than reimplemented, with
-            // the same field names/order/defaults as ngspice/Xyce's own SIN()/PULSE()/EXP()/
-            // SFFM() -- so a `kind=sin ...` reference schedule and a `V1 a 0 SIN(...)` source
-            // built from the same numbers are bit-for-bit the same waveform.
-            "sin" => {
+            // "sinwave"/"pulsewave"/"expwave"/"sffmwave": the electrical domain's other four
+            // time-varying source forms (see `elspice_mna::TransientFunction`'s own doc comment
+            // for the exact formula each implements), reused directly rather than
+            // reimplemented, with the same field names/order/defaults as ngspice/Xyce's own
+            // SIN()/PULSE()/EXP()/SFFM() -- so a `kind=sinwave ...` reference schedule and a
+            // `V1 a 0 SIN(...)` source built from the same numbers are bit-for-bit the same
+            // waveform. Named "...wave" rather than the bare SPICE keyword specifically to
+            // avoid colliding with the pre-existing `kind=sin`/`kind=exp` waveform-arithmetic
+            // *functions* (`sin(x)`/`exp(x)` of an input signal, see the `MathFn1` fallback
+            // dispatch below) -- "pulse"/"sffm" have no such collision today, but are named the
+            // same way for consistency across the family rather than only where forced to.
+            "sinwave" => {
                 let get_opt = |key: &str, default: f64| -> f64 {
                     fields
                         .get(key)
@@ -902,7 +907,7 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                     inputs: Vec::new(),
                 })
             }
-            "pulse" => {
+            "pulsewave" => {
                 let get_opt = |key: &str, default: f64| -> f64 {
                     fields
                         .get(key)
@@ -923,7 +928,7 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                     inputs: Vec::new(),
                 })
             }
-            "exp" => {
+            "expwave" => {
                 let get_opt = |key: &str, default: f64| -> f64 {
                     fields
                         .get(key)
@@ -931,6 +936,11 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                         .unwrap_or(default)
                 };
                 let td1 = get_opt("td1", 0.0);
+                // td2 defaults to "effectively never" (matching pulsewave's own pw/per
+                // defaults just above), NOT td1 -- TransientFunction::Exp treats `t < td2` as
+                // "still in the rise phase," so a naive td1 default would make every omitted-
+                // td2 call fall straight into the *fall* phase at t=0 instead of never falling
+                // at all (a real bug caught by this file's own dae-runtime-level test).
                 Kind::Block(BlockInstance {
                     name: name.to_string(),
                     kind: BlockKind::Waveform(TransientFunction::Exp {
@@ -938,13 +948,13 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                         v2: get("v2")?,
                         td1,
                         tau1: get_opt("tau1", 1.0),
-                        td2: get_opt("td2", td1),
+                        td2: get_opt("td2", f64::MAX / 4.0),
                         tau2: get_opt("tau2", 1.0),
                     }),
                     inputs: Vec::new(),
                 })
             }
-            "sffm" => {
+            "sffmwave" => {
                 let get_opt = |key: &str, default: f64| -> f64 {
                     fields
                         .get(key)
