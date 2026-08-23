@@ -1,7 +1,8 @@
 //! Resolves every MOSFET's gate state, each transient step, from a graph of named,
-//! independently reusable `continuous-blocks` blocks (`Const`, `Pwl`, `Sum`, `Gain`, `Pid`,
-//! `StateSpace`, `TransferFunction`, `Vco`, `Hysteresis`, `CoordinateTransform`, `Pmsm`,
-//! `CScript`) wired together by the caller — the same discipline a real block-diagram tool uses:
+//! independently reusable `continuous-blocks` blocks (`Const`, `Pwc`, `Pwl`, `Sin`, `Pulse`,
+//! `Exp`, `Sffm`, `Sum`, `Gain`, `Pid`, `StateSpace`, `TransferFunction`, `Vco`, `Hysteresis`,
+//! `CoordinateTransform`, `Pmsm`, `CScript`) wired together by the caller — the same discipline
+//! a real block-diagram tool uses:
 //! an error
 //! signal is a `Sum`
 //! block's output, a filtered-derivative PID compensator is a `TransferFunction` given its own
@@ -42,7 +43,7 @@ use spice_core::Dialect;
 
 use crate::{
     classify_segments, sawtooth_carrier, step_control, step_with_fallback, DaeError, GateState,
-    OperatingPoint, Segment, TimeStep, RINGING_COOLDOWN_STEPS,
+    OperatingPoint, Segment, TimeStep, TransientFunction, RINGING_COOLDOWN_STEPS,
 };
 
 /// Where a block's input value comes from: another block's output this same step, or that (or
@@ -105,9 +106,9 @@ pub enum PidClamp {
     Dynamic,
 }
 
-/// One block's behavior. `Const`/`Pwl` are sources (zero inputs); `Sum`/`Gain` are stateless
-/// (recomputed fresh from their inputs every step); `Pid`/`StateSpace`/`TransferFunction`/`Vco`
-/// carry their own state forward across steps.
+/// One block's behavior. `Const`/`Pwc`/`Pwl`/`Sin`/`Pulse`/`Exp`/`Sffm` are sources (zero
+/// inputs); `Sum`/`Gain` are stateless (recomputed fresh from their inputs every step);
+/// `Pid`/`StateSpace`/`TransferFunction`/`Vco` carry their own state forward across steps.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BlockKind {
     /// A fixed value, ignoring time — e.g. a nominal frequency or a fixed setpoint.
@@ -115,12 +116,43 @@ pub enum BlockKind {
     /// The current step's own simulated time (seconds), zero inputs — the standard
     /// block-diagram "clock" source, needed to build a genuine `sin(2*pi*f*t)`-style time
     /// varying signal out of `MathFn1`/`Gain` blocks (there's otherwise no way for a block to
-    /// see `t` directly; `Pwl`'s own use of it is internal to that block alone).
+    /// see `t` directly; `Pwc`/`Pwl`'s own use of it is internal to those blocks alone).
     Time,
-    /// A piecewise-constant function of time: the value from the last point at or before `t`
-    /// (the first point's value for `t` before it). Used for reference schedules, including
-    /// step tests (two points is a step at the second point's time).
-    Pwl(Vec<(f64, f64)>),
+    /// A piecewise-**constant** function of time: the value from the last point at or before
+    /// `t` (the first point's value for `t` before it). Used for reference schedules, including
+    /// step tests (two points is a step at the second point's time). `repeat`, if `true`, wraps
+    /// `t` into `[points[0].0, points.last().0)` (period = last time − first time) once `t`
+    /// passes the last point, instead of holding flat forever — a periodic step/square-like
+    /// waveform. **Not the same interpolation as [`BlockKind::Pwl`]** (this block is named
+    /// `pwc` at the CLI level specifically to avoid the ambiguity a shared `pwl` name would
+    /// create with the real piecewise-*linear* SPICE-matching source below — see that variant's
+    /// own doc comment).
+    Pwc {
+        points: Vec<(f64, f64)>,
+        repeat: bool,
+    },
+    /// A piecewise-**linear** function of time — real SPICE `PWL(t1 v1 t2 v2 ...)` semantics,
+    /// linearly interpolated between breakpoints, held at the first/last point's value before/
+    /// after the breakpoint range (matching `elspice_mna::TransientFunction::Pwl`'s own
+    /// electrical-domain behavior exactly, so the same breakpoint list means the same waveform
+    /// whether it drives a `V`/`I` source directly or a signal-domain reference through this
+    /// block). `repeat`, if `true`, wraps `t` into `[points[0].0, points.last().0)` once past
+    /// the last point instead of holding flat — the electrical-domain `PWL` source has no such
+    /// option (SPICE's own repeat semantics aren't implemented there), so a genuinely periodic
+    /// piecewise-linear waveform (a triangle/sawtooth reference, a repeating ramp) is only
+    /// available here in the signal domain.
+    Pwl {
+        points: Vec<(f64, f64)>,
+        repeat: bool,
+    },
+    /// One of the electrical domain's four other time-varying source forms
+    /// (`elspice_mna::TransientFunction::Sin`/`Pulse`/`Exp`/`Sffm` — never `::Pwl`, which this
+    /// module models as its own [`BlockKind::Pwl`] above instead, specifically to add the
+    /// `repeat` option `TransientFunction` doesn't have), reused directly rather than
+    /// reimplemented, so a `V`/`I` source and a signal-domain reference built from the same
+    /// parameters produce bit-for-bit the same waveform. Zero inputs; evaluated via
+    /// [`TransientFunction::value_at`] at the current step's own `t`.
+    Waveform(TransientFunction),
     /// Weighted sum of its inputs, one sign per input (`+1.0`/`-1.0` for an error junction).
     Sum(Vec<f64>),
     /// Scales its single input.
@@ -269,8 +301,9 @@ pub enum BlockKind {
     Sig2Current,
 }
 
-/// One named block instance and where its inputs (if any) come from. `Const`/`Pwl`/`Probe`
-/// blocks must have zero inputs; `Sum`/`Product` need one input per sign/factor; `Gain`/
+/// One named block instance and where its inputs (if any) come from.
+/// `Const`/`Pwc`/`Pwl`/`Waveform`/`Probe` blocks must have zero inputs; `Sum`/`Product` need one
+/// input per sign/factor; `Gain`/
 /// `StateSpace`/`TransferFunction`/`Vco`/`Saturation`/`Table`/`MathFn1`/`Sig2Gate`/
 /// `Sig2Voltage`/`Sig2Current` each need exactly one; `Pid` needs exactly one (the error signal)
 /// when its `clamp` is `PidClamp::Fixed`, or exactly three (`error, clamp_lo, clamp_hi`, in that
@@ -466,7 +499,17 @@ fn block_kind_name(kind: &BlockKind) -> &'static str {
     match kind {
         BlockKind::Const(_) => "const",
         BlockKind::Time => "time",
-        BlockKind::Pwl(_) => "pwl",
+        BlockKind::Pwc { .. } => "pwc",
+        BlockKind::Pwl { .. } => "pwl",
+        BlockKind::Waveform(TransientFunction::Sin { .. }) => "sin",
+        BlockKind::Waveform(TransientFunction::Pulse { .. }) => "pulse",
+        BlockKind::Waveform(TransientFunction::Exp { .. }) => "exp",
+        BlockKind::Waveform(TransientFunction::Sffm { .. }) => "sffm",
+        // Never actually constructed (elspice-pwl-cli only builds `Waveform` from
+        // Sin/Pulse/Exp/Sffm — a Pwl-shaped waveform always goes through `BlockKind::Pwl`
+        // above instead, since only that variant supports `repeat`), but `TransientFunction`
+        // is a 5-variant enum so this match must still be exhaustive.
+        BlockKind::Waveform(TransientFunction::Pwl(_)) => "waveform(pwl)",
         BlockKind::Sum(_) => "sum",
         BlockKind::Gain(_) => "gain",
         BlockKind::Pid { .. } => "pid",
@@ -568,6 +611,27 @@ fn topological_order(blocks: &[BlockInstance]) -> Result<Vec<usize>, DaeError> {
     Ok(order)
 }
 
+/// Maps simulated time `t` into the effective evaluation time for a [`BlockKind::Pwc`]/
+/// [`BlockKind::Pwl`] block: unchanged when `repeat` is `false`, or `points` has fewer than two
+/// breakpoints (no well-defined period), or `t` hasn't yet reached the last breakpoint;
+/// otherwise wraps `t` into `[points[0].0, points.last().0)`, period = last breakpoint time −
+/// first breakpoint time, so the same finite breakpoint list repeats forever instead of holding
+/// its last value flat — the periodic PWL/PWC source this session added specifically because
+/// neither `elspice-mna`'s own electrical-domain `PWL(...)` source nor any prior signal-domain
+/// block had a repeat option.
+fn periodic_time(t: f64, points: &[(f64, f64)], repeat: bool) -> f64 {
+    if !repeat || points.len() < 2 {
+        return t;
+    }
+    let t0 = points[0].0;
+    let t_last = points[points.len() - 1].0;
+    let period = t_last - t0;
+    if period <= 0.0 || t < t_last {
+        return t;
+    }
+    t0 + (t - t0) % period
+}
+
 /// Evaluates every block once, in the causal `order` [`topological_order`] derived from the
 /// graph's own `Signal::Block` dependencies (not declaration order), advancing `block_states`
 /// in place at step size `dt`, reading any [`BlockKind::Probe`] from `point_prev` and any
@@ -619,10 +683,11 @@ fn evaluate_blocks(
             (BlockKind::Sig2Gate | BlockKind::Sig2Voltage | BlockKind::Sig2Current, _) => {
                 input_vals[0]
             }
-            (BlockKind::Pwl(points), _) => {
+            (BlockKind::Pwc { points, repeat }, _) => {
+                let t_eval = periodic_time(t, points, *repeat);
                 let mut v = points.first().map(|(_, v)| *v).unwrap_or(0.0);
                 for &(t_i, v_i) in points {
-                    if t_i <= t {
+                    if t_i <= t_eval {
                         v = v_i;
                     } else {
                         break;
@@ -630,6 +695,32 @@ fn evaluate_blocks(
                 }
                 v
             }
+            (BlockKind::Pwl { points, repeat }, _) => {
+                let t_eval = periodic_time(t, points, *repeat);
+                match points.as_slice() {
+                    [] => 0.0,
+                    [(_, v)] => *v,
+                    _ if t_eval <= points[0].0 => points[0].1,
+                    _ if t_eval >= points[points.len() - 1].0 => points[points.len() - 1].1,
+                    _ => {
+                        let mut v = points[points.len() - 1].1;
+                        for window in points.windows(2) {
+                            let (t0, v0) = window[0];
+                            let (t1, v1) = window[1];
+                            if t_eval >= t0 && t_eval <= t1 {
+                                v = if (t1 - t0).abs() < f64::EPSILON {
+                                    v1
+                                } else {
+                                    v0 + (v1 - v0) * ((t_eval - t0) / (t1 - t0))
+                                };
+                                break;
+                            }
+                        }
+                        v
+                    }
+                }
+            }
+            (BlockKind::Waveform(f), _) => f.value_at(t),
             (BlockKind::Sum(signs), _) => math_ops::sum(&input_vals, signs),
             (BlockKind::Gain(k), _) => math_ops::gain(*k, input_vals[0]),
             (BlockKind::Product, _) => math_ops::product(&input_vals),

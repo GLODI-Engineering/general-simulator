@@ -235,7 +235,7 @@
 //! * D2 kind=mosfet r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=vco ctrl=VCO1G phase=0.5 duty=0.48
 //! ... (Lr, Cr, transformer, rectifier, Cout, Rout -- ordinary SPICE elements)
 //! * VOUT_PROBE kind=probe node=vout
-//! * REF    kind=pwl points=0:20,0.014:17
+//! * REF    kind=pwc points=0:20,0.014:17
 //! * ERR    kind=sum inputs=REF,VOUT_PROBE signs=1,-1
 //! * PID1   kind=pid kp=800 ki=4e6 kd=0 n=1000 clamp_lo=-15000 clamp_hi=15000 in=ERR
 //! * FNOM   kind=const value=115000
@@ -265,7 +265,7 @@ use continuous_blocks::{CoordinateTransform, Hysteresis, Pid, StateSpace, Transf
 use dae_runtime::{
     simulate_transient, simulate_transient_with_blocks, solve_dc, solve_dc_with_mosfets,
     AdaptiveConfig, BlockInstance, BlockKind, GateBinding, GateState, PidClamp, ProbeTarget,
-    Signal, TimeStep,
+    Signal, TimeStep, TransientFunction,
 };
 use pwl_devices::{Diode, Mosfet};
 use spice_core::Dialect;
@@ -659,7 +659,7 @@ fn parse_signal(text: &str) -> Signal {
     }
 }
 
-/// Parses a `<x>:<y>,<x>:<y>,...` point list (a `kind=pwl` reference schedule, or a
+/// Parses a `<x>:<y>,<x>:<y>,...` point list (a `kind=pwc`/`kind=pwl` reference schedule, or a
 /// `kind=table` lookup table), sorted ascending by `x` on return.
 fn parse_xy_points(text: &str, name: &str, line_number: usize) -> Result<Vec<(f64, f64)>, String> {
     let mut points = Vec::new();
@@ -850,11 +850,116 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                 kind: BlockKind::Time,
                 inputs: Vec::new(),
             }),
-            "pwl" => {
+            // "repeat=true" is optional on both "pwc" and "pwl" (default false, unchanged
+            // hold-flat-past-the-end behavior) -- wraps time into the breakpoint list's own
+            // [first, last) span once past the last point, making it periodic. See
+            // `dae_runtime::block_graph`'s own doc comment on `BlockKind::Pwc`/`BlockKind::Pwl`
+            // for why these are two distinct block kinds (interpolation style) rather than one
+            // with a flag, and why "pwl" here means real piecewise-*linear* SPICE PWL semantics
+            // while the older piecewise-*constant* block was renamed to "pwc" to free that name
+            // up.
+            "pwc" => {
                 let points = parse_xy_points(&get_str("points")?, name, line_number)?;
+                let repeat = fields.get("repeat").map(|s| s == "true").unwrap_or(false);
                 Kind::Block(BlockInstance {
                     name: name.to_string(),
-                    kind: BlockKind::Pwl(points),
+                    kind: BlockKind::Pwc { points, repeat },
+                    inputs: Vec::new(),
+                })
+            }
+            "pwl" => {
+                let points = parse_xy_points(&get_str("points")?, name, line_number)?;
+                let repeat = fields.get("repeat").map(|s| s == "true").unwrap_or(false);
+                Kind::Block(BlockInstance {
+                    name: name.to_string(),
+                    kind: BlockKind::Pwl { points, repeat },
+                    inputs: Vec::new(),
+                })
+            }
+            // "sin"/"pulse"/"exp"/"sffm": the electrical domain's other four time-varying
+            // source forms (see `elspice_mna::TransientFunction`'s own doc comment for the
+            // exact formula each implements), reused directly rather than reimplemented, with
+            // the same field names/order/defaults as ngspice/Xyce's own SIN()/PULSE()/EXP()/
+            // SFFM() -- so a `kind=sin ...` reference schedule and a `V1 a 0 SIN(...)` source
+            // built from the same numbers are bit-for-bit the same waveform.
+            "sin" => {
+                let get_opt = |key: &str, default: f64| -> f64 {
+                    fields
+                        .get(key)
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .unwrap_or(default)
+                };
+                Kind::Block(BlockInstance {
+                    name: name.to_string(),
+                    kind: BlockKind::Waveform(TransientFunction::Sin {
+                        v0: get_opt("v0", 0.0),
+                        va: get("va")?,
+                        freq: get("freq")?,
+                        td: get_opt("td", 0.0),
+                        theta: get_opt("theta", 0.0),
+                        phase: get_opt("phase", 0.0),
+                    }),
+                    inputs: Vec::new(),
+                })
+            }
+            "pulse" => {
+                let get_opt = |key: &str, default: f64| -> f64 {
+                    fields
+                        .get(key)
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .unwrap_or(default)
+                };
+                Kind::Block(BlockInstance {
+                    name: name.to_string(),
+                    kind: BlockKind::Waveform(TransientFunction::Pulse {
+                        v1: get("v1")?,
+                        v2: get("v2")?,
+                        td: get_opt("td", 0.0),
+                        tr: get_opt("tr", 0.0),
+                        tf: get_opt("tf", 0.0),
+                        pw: get_opt("pw", f64::MAX / 4.0),
+                        per: get_opt("per", f64::MAX / 4.0),
+                    }),
+                    inputs: Vec::new(),
+                })
+            }
+            "exp" => {
+                let get_opt = |key: &str, default: f64| -> f64 {
+                    fields
+                        .get(key)
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .unwrap_or(default)
+                };
+                let td1 = get_opt("td1", 0.0);
+                Kind::Block(BlockInstance {
+                    name: name.to_string(),
+                    kind: BlockKind::Waveform(TransientFunction::Exp {
+                        v1: get("v1")?,
+                        v2: get("v2")?,
+                        td1,
+                        tau1: get_opt("tau1", 1.0),
+                        td2: get_opt("td2", td1),
+                        tau2: get_opt("tau2", 1.0),
+                    }),
+                    inputs: Vec::new(),
+                })
+            }
+            "sffm" => {
+                let get_opt = |key: &str, default: f64| -> f64 {
+                    fields
+                        .get(key)
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .unwrap_or(default)
+                };
+                Kind::Block(BlockInstance {
+                    name: name.to_string(),
+                    kind: BlockKind::Waveform(TransientFunction::Sffm {
+                        v0: get_opt("v0", 0.0),
+                        va: get("va")?,
+                        fc: get("fc")?,
+                        mdi: get_opt("mdi", 0.0),
+                        fs: get("fs")?,
+                    }),
                     inputs: Vec::new(),
                 })
             }

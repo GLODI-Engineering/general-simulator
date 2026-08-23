@@ -46,6 +46,7 @@ use pwl_devices::{Diode, Mosfet};
 use spice_core::Dialect;
 
 pub use elspice_mna::SwitchState as GateState;
+pub use elspice_mna::TransientFunction;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OperatingPoint {

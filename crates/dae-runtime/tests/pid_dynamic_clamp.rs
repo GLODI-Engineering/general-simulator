@@ -128,7 +128,10 @@ fn dynamic_clamp_respects_a_bound_that_shrinks_mid_run() {
         // which only Dynamic can do; a Fixed bound has no way to express this at all.
         BlockInstance {
             name: "HI".to_string(),
-            kind: BlockKind::Pwl(vec![(0.0, 1000.0), (1e-3, 5.0)]),
+            kind: BlockKind::Pwc {
+                points: vec![(0.0, 1000.0), (1e-3, 5.0)],
+                repeat: false,
+            },
             inputs: vec![],
         },
         BlockInstance {

@@ -32,7 +32,10 @@ fn sig2v_drives_a_voltage_source_exactly_through_a_pwl_ramp() {
     let blocks = vec![
         BlockInstance {
             name: "CMD".to_string(),
-            kind: BlockKind::Pwl(vec![(0.0, 2.0), (5e-4, 8.0)]),
+            kind: BlockKind::Pwc {
+                points: vec![(0.0, 2.0), (5e-4, 8.0)],
+                repeat: false,
+            },
             inputs: vec![],
         },
         BlockInstance {
@@ -223,7 +226,10 @@ fn sig2v_driven_source_produces_correct_rc_charging_dynamics_under_trapezoidal()
     let blocks = vec![
         BlockInstance {
             name: "CMD".to_string(),
-            kind: BlockKind::Pwl(vec![(0.0, 10.0)]),
+            kind: BlockKind::Pwc {
+                points: vec![(0.0, 10.0)],
+                repeat: false,
+            },
             inputs: vec![],
         },
         BlockInstance {
