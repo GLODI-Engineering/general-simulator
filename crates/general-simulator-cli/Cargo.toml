@@ -20,3 +20,4 @@ continuous-blocks = { path = "../continuous-blocks" }
 dae-runtime = { path = "../dae-runtime" }
 pwl-devices = { path = "../pwl-devices" }
 general-spice-core = { path = "../../../spice-lsp/servers/core" }
+general-mna = { path = "../../../general-mna" }

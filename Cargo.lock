@@ -35,7 +35,9 @@ dependencies = [
 name = "general-mna"
 version = "0.1.0"
 dependencies = [
+ "continuous-blocks",
  "general-spice-core",
+ "pwl-devices",
 ]
 
 [[package]]
@@ -44,6 +46,7 @@ version = "0.1.0"
 dependencies = [
  "continuous-blocks",
  "dae-runtime",
+ "general-mna",
  "general-spice-core",
  "pwl-devices",
 ]

@@ -8,37 +8,33 @@
 //!
 //! **The netlist is the one file** — PWL device parameters and any controller block graph
 //! live directly inside it, the same way a real SPICE deck is self-contained, not split across
-//! files by convention. `general-spice-core` enforces real SPICE grammar (see its own docs), which has
-//! no syntax for `kind=mosfet r_on=...` or a block graph, so those lines are written as
-//! ordinary SPICE comments — anything starting with `*` — with a leading `kind=...` key/value
-//! declaration (a small hand-rolled format, no serde/TOML dependency needed for something this
-//! simple):
+//! files by convention. **This binary no longer parses any of that itself** — `general-mna`'s
+//! `build_system` does, via `general-spice-core`'s real grammar (see its own
+//! `docs/GRAMMAR.md` §12), which now has a genuine first-class syntax for a `kind=mosfet
+//! r_on=...`/block-graph line, no `*`-comment disguise needed:
 //!
 //! ```text
-//! * D1 kind=diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1
-//! * ONVAL kind=const value=1
-//! * ONGATE kind=sig2gate in=ONVAL
-//! * D2 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=block ctrl=ONGATE
-//! * DUTY kind=const value=0.6
-//! * PWM1 kind=pwm freq=10000 in=DUTY outputs=PWM1_ON,PWM1_OFF
-//! * PWM1G kind=sig2gate in=PWM1_ON
-//! * D3 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=block ctrl=PWM1G
+//! D1 kind=diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1
+//! ONVAL kind=const value=1
+//! ONGATE kind=sig2gate in=ONVAL
+//! D2 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=block ctrl=ONGATE
+//! DUTY kind=const value=0.6
+//! PWM1 kind=pwm freq=10000 in=DUTY outputs=PWM1_ON,PWM1_OFF
+//! PWM1G kind=sig2gate in=PWM1_ON
+//! D3 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=block ctrl=PWM1G
 //! ```
 //!
-//! Any other tool — a real SPICE simulator, a text editor, a diff — sees exactly what a `*`
-//! line always means: an ordinary comment, safely ignored. `general-simulator-cli` is the only thing
-//! that additionally reads these lines as device/block declarations (stripping the leading `*`;
-//! a line without `kind=` — including a genuine comment that happens to start with `*` — is
-//! left alone). This is the whole netlist: run `general-simulator-cli some.cir --mode transient` with
-//! no `--devices` at all and it looks for these lines in `some.cir` itself. `--devices <file>`
-//! remains available for the rarer case of sharing one controller/PWL-parameter file across
-//! several netlists, but is not the default or the expected common case.
+//! The older convention — the same lines, each prefixed with `*` so a real SPICE tool (or an
+//! un-migrated netlist) sees an ordinary comment — still works unchanged; `general-spice-core`'s
+//! lexer still strips `*`-prefixed lines to nothing before parsing either way, so a mix of old-
+//! and new-style lines in the same file is fine. This is the whole netlist: run
+//! `general-simulator some.cir --mode transient` with no `--devices` at all and `build_system`
+//! looks for these lines in `some.cir` itself. `--devices <file>` remains available for the
+//! rarer case of sharing one controller/PWL-parameter file across several netlists, but is not
+//! the default or the expected common case.
 //!
-//! `#`/`;`-prefixed lines (not `*`) and blank lines in either file are plain devices-file
-//! comments, invisible to `general-simulator-cli` itself, not SPICE comments — use `*` for anything
-//! meant to also survive being read by a real SPICE tool. Every MOSFET must declare the same
-//! `r_on` — `dae-runtime`'s switch mechanism uses one shared on-resistance per call (see
-//! `dae_runtime::solve_dc_with_mosfets`'s doc comment).
+//! Every MOSFET must declare the same `r_on` — `dae-runtime`'s switch mechanism uses one shared
+//! on-resistance per call (see `dae_runtime::solve_dc_with_mosfets`'s doc comment).
 //!
 //! ## Wiring a controller into a gate
 //!
@@ -287,37 +283,12 @@ use std::env;
 use std::fs;
 use std::process::ExitCode;
 
-use continuous_blocks::{CoordinateTransform, Hysteresis, Pid, StateSpace, TransferFunction, Vco};
 use dae_runtime::{
     simulate_transient, simulate_transient_with_blocks, solve_dc, AdaptiveConfig, BlockInstance,
-    BlockKind, GateBinding, PidClamp, ProbeTarget, Signal, TimeStep, TransientFunction,
+    BlockKind, GateBinding, TimeStep,
 };
 use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
-
-enum Kind {
-    Diode(Diode),
-    Mosfet {
-        mosfet: Mosfet,
-        r_on: f64,
-        gate: GateSpec,
-    },
-    Block(BlockInstance),
-}
-
-/// Every gate is block-driven — see `dae_runtime::GateBinding`'s own doc comment for why there
-/// is no non-block-driven variant left (a permanently-off gate is an explicit `Const(0.0)`
-/// wired through `kind=sig2gate`, the same as any other gate).
-#[derive(Clone)]
-struct GateSpec {
-    ctrl: String,
-}
-
-impl GateSpec {
-    fn to_binding(&self) -> GateBinding {
-        GateBinding::Block(self.ctrl.clone())
-    }
-}
 
 fn main() -> ExitCode {
     match run() {
@@ -417,48 +388,27 @@ fn run() -> Result<(), String> {
 
     let netlist =
         fs::read_to_string(netlist_path).map_err(|e| format!("reading {netlist_path}: {e}"))?;
-    // No `--devices` given: look for device/block lines (marked `*...kind=...`, a plain SPICE
-    // comment to every other tool) directly in the netlist file itself, so one `.cir` file can
-    // be the complete, self-contained circuit — the same discipline a real SPICE deck already
-    // has, rather than device/block declarations living in a second file split out by
-    // convention alone. `--devices <file>` remains available for the (rarer) case of sharing
-    // one controller/PWL-parameter file across several netlists.
-    let devices = match &devices_path {
-        Some(path) => {
-            let text = fs::read_to_string(path).map_err(|e| format!("reading {path}: {e}"))?;
-            parse_devices(&text)?
-        }
-        None => parse_devices(&netlist)?,
-    };
-
-    let mut diodes = BTreeMap::new();
-    let mut mosfets = BTreeMap::new();
-    let mut blocks: Vec<BlockInstance> = Vec::new();
-    let mut shared_r_on: Option<f64> = None;
-    for (name, kind) in devices {
-        match kind {
-            Kind::Diode(d) => {
-                diodes.insert(name, d);
-            }
-            Kind::Mosfet { mosfet, r_on, gate } => {
-                match shared_r_on {
-                    None => shared_r_on = Some(r_on),
-                    Some(existing) if (existing - r_on).abs() > 1e-15 => {
-                        return Err(format!(
-                            "all MOSFETs must share the same r_on (dae-runtime's switch model uses one \
-                             shared on-resistance per call); got {existing} and {r_on}"
-                        ));
-                    }
-                    Some(_) => {}
-                }
-                mosfets.insert(name, (mosfet, gate));
-            }
-            Kind::Block(instance) => blocks.push(instance),
-        }
-    }
-    let shared_r_on = shared_r_on.unwrap_or(0.0);
-
     let dialect = Dialect::Ngspice;
+    // No `--devices` given: look for device/block lines directly in the netlist file itself, so
+    // one `.cir` file can be the complete, self-contained circuit — the same discipline a real
+    // SPICE deck already has, rather than device/block declarations living in a second file
+    // split out by convention alone. `--devices <file>` remains available for the (rarer) case
+    // of sharing one controller/PWL-parameter file across several netlists. This binary parses
+    // none of it itself — `general_mna::build_system` does, via `general-spice-core`'s real
+    // grammar (see this file's own module doc comment).
+    let devices_source = match &devices_path {
+        Some(path) => fs::read_to_string(path).map_err(|e| format!("reading {path}: {e}"))?,
+        None => netlist.clone(),
+    };
+    let general_mna::System {
+        diodes,
+        mosfets,
+        gates,
+        blocks,
+        shared_r_on,
+        ..
+    } = general_mna::build_system(&devices_source, dialect)
+        .map_err(|e| format!("parsing device/block declarations: {e}"))?;
 
     if mode == "dc" {
         let point = if mosfets.is_empty() {
@@ -491,6 +441,7 @@ fn run() -> Result<(), String> {
                 dialect,
                 &diodes,
                 &mosfets,
+                &gates,
                 &blocks,
                 shared_r_on,
                 t_final,
@@ -507,37 +458,31 @@ fn run() -> Result<(), String> {
 }
 
 /// `--mode dc` has no notion of a block's time-stepped state (no transient loop runs at all),
-/// but every gate is now block-driven (`GateSpec` is always `gate=block ctrl=<name>`) — so a
-/// `.op`-style DC operating point with any MOSFET present has nothing to resolve its gate from
-/// and is unconditionally unsupported, not just for the cases that used to need a block.
-/// `--mode transient` with at least one MOSFET: resolves every gate (always block-driven,
-/// `gate=block`) via [`dae_runtime::simulate_transient_with_blocks`] — see this file's module
-/// doc comment for why there's no separate mode for the block-driven case.
+/// but every gate is now block-driven (`gate=block ctrl=<name>`, enforced by `general_mna::
+/// build_system` itself) — so a `.op`-style DC operating point with any MOSFET present has
+/// nothing to resolve its gate from and is unconditionally unsupported, not just for the cases
+/// that used to need a block. `--mode transient` with at least one MOSFET: resolves every gate
+/// (always block-driven) via [`dae_runtime::simulate_transient_with_blocks`] — see this file's
+/// module doc comment for why there's no separate mode for the block-driven case.
 #[allow(clippy::too_many_arguments)]
 fn run_transient_with_mosfets(
     netlist: &str,
     dialect: Dialect,
     diodes: &BTreeMap<String, Diode>,
-    mosfets: &BTreeMap<String, (Mosfet, GateSpec)>,
+    mosfets: &BTreeMap<String, Mosfet>,
+    gates: &BTreeMap<String, GateBinding>,
     blocks: &[BlockInstance],
     shared_r_on: f64,
     t_final: f64,
     step: TimeStep,
 ) -> Result<(), String> {
-    let mosfets_only: BTreeMap<String, Mosfet> =
-        mosfets.iter().map(|(n, (m, _))| (n.clone(), *m)).collect();
-    let gates: BTreeMap<String, GateBinding> = mosfets
-        .iter()
-        .map(|(name, (_, gate))| (name.clone(), gate.to_binding()))
-        .collect();
-
     let trace = simulate_transient_with_blocks(
         netlist,
         dialect,
         diodes,
-        &mosfets_only,
+        mosfets,
         blocks,
-        &gates,
+        gates,
         shared_r_on,
         None,
         t_final,
@@ -605,868 +550,6 @@ fn print_row(t: f64, point: &dae_runtime::OperatingPoint) {
 /// before this convention was enforced is simply treated as an ordinary (and therefore unknown)
 /// block name, surfacing as a clear `UnknownBlockInput` error rather than silently reading the
 /// circuit.
-fn parse_signal(text: &str) -> Signal {
-    match text.strip_prefix("prev:") {
-        Some(name) => Signal::BlockPrev(name.to_string()),
-        None => Signal::Block(text.to_string()),
-    }
-}
-
-/// Splits `text` on top-level commas only — one inside a nested `[...]` (bracket depth > 0)
-/// doesn't count — so `"[1,2],[3,4]"` splits into `["[1,2]", "[3,4]"]`, not four pieces. The
-/// one primitive every Python-list-literal field below (`num=`/`den=`/`a=`/`b=`/`c=`/`points=`)
-/// is built from, so a matrix's row separator and a vector's entry separator are the same
-/// operation applied at a different nesting depth, not two different parsers.
-fn split_top_level(text: &str) -> Vec<&str> {
-    let mut depth = 0i32;
-    let mut start = 0usize;
-    let mut parts = Vec::new();
-    for (i, c) in text.char_indices() {
-        match c {
-            '[' => depth += 1,
-            ']' => depth -= 1,
-            ',' if depth == 0 => {
-                parts.push(text[start..i].trim());
-                start = i + c.len_utf8();
-            }
-            _ => {}
-        }
-    }
-    parts.push(text[start..].trim());
-    parts
-}
-
-/// Strips a field's required outer `[...]` — every list-valued field here is a real Python list
-/// literal (`num=[1,2,3]`, `a=[[1,2],[3,4]]`), never the bare comma/semicolon/colon delimiters
-/// an earlier version of this grammar used, so a Python list built from the same numbers can be
-/// pasted into a `.cir` file (spaces after commas included: [`split_top_level`]/the `f64` parse
-/// below both trim) without reformatting.
-fn strip_brackets<'a>(
-    text: &'a str,
-    name: &str,
-    field: &str,
-    line_number: usize,
-) -> Result<&'a str, String> {
-    let trimmed = text.trim();
-    trimmed
-        .strip_prefix('[')
-        .and_then(|s| s.strip_suffix(']'))
-        .ok_or_else(|| {
-            format!(
-                "line {}: device '{name}' field '{field}' must be a Python-style list, e.g. \
-                 '[1,2,3]' or '[[1,2],[3,4]]' (got '{text}')",
-                line_number + 1
-            )
-        })
-}
-
-/// Parses a `[[<x>,<y>],[<x>,<y>],...]` point list (a `kind=pwc`/`kind=pwl` reference schedule,
-/// or a `kind=table` lookup table) — a Python list of 2-element `[x, y]` lists, exactly the
-/// shape `numpy.array(points)` would expect for an `Nx2` table. Sorted ascending by `x` on
-/// return.
-fn parse_xy_points(
-    text: &str,
-    name: &str,
-    field: &str,
-    line_number: usize,
-) -> Result<Vec<(f64, f64)>, String> {
-    let rows = parse_matrix_rows(text, name, field, line_number)?;
-    let mut points = Vec::with_capacity(rows.len());
-    for row in rows {
-        let [x, y] = row.as_slice() else {
-            return Err(format!(
-                "line {}: device '{name}' field '{field}': each entry must be a 2-element \
-                 '[x,y]' list (got '{row:?}')",
-                line_number + 1
-            ));
-        };
-        points.push((*x, *y));
-    }
-    points.sort_by(|a, b| a.0.total_cmp(&b.0));
-    Ok(points)
-}
-
-/// Parses a Python-style list of numbers, e.g. a `kind=statespace` block's `b=[1,2]`/`c=[1,0]`
-/// vector or a `kind=tf` block's `num=[1,2]`/`den=[1,3,2]` coefficients.
-fn parse_vector(
-    text: &str,
-    name: &str,
-    field: &str,
-    line_number: usize,
-) -> Result<Vec<f64>, String> {
-    let inner = strip_brackets(text, name, field, line_number)?;
-    if inner.is_empty() {
-        return Ok(Vec::new());
-    }
-    split_top_level(inner)
-        .into_iter()
-        .map(|v| {
-            let parsed: f64 = v.parse().map_err(|_| {
-                format!(
-                    "line {}: device '{name}' field '{field}' entry '{v}' is not a number",
-                    line_number + 1
-                )
-            })?;
-            // `f64::from_str` accepts "nan"/"inf"/"-inf" as valid floats, but a NaN or
-            // infinity here would otherwise silently reach a downstream `partial_cmp().unwrap()`
-            // (this file's own `points` sort, or `lcp-solver`'s pivot selection) and panic the
-            // whole process instead of failing this one netlist line cleanly.
-            if !parsed.is_finite() {
-                return Err(format!(
-                    "line {}: device '{name}' field '{field}' entry '{v}' must be a finite \
-                     number (got {parsed})",
-                    line_number + 1
-                ));
-            }
-            Ok(parsed)
-        })
-        .collect()
-}
-
-/// Parses a `kind=statespace` block's `a` matrix: a Python-style list of row lists, e.g.
-/// `a=[[1,2],[3,4]]` — exactly `numpy.array([[1,2],[3,4]])`'s own literal shape.
-fn parse_matrix_rows(
-    text: &str,
-    name: &str,
-    field: &str,
-    line_number: usize,
-) -> Result<Vec<Vec<f64>>, String> {
-    let inner = strip_brackets(text, name, field, line_number)?;
-    if inner.is_empty() {
-        return Ok(Vec::new());
-    }
-    split_top_level(inner)
-        .into_iter()
-        .map(|row| parse_vector(row, name, field, line_number))
-        .collect()
-}
-
-fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
-    let mut result = Vec::new();
-    for (line_number, raw_line) in text.lines().enumerate() {
-        let mut line = raw_line.trim();
-        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
-            continue;
-        }
-        // A device/block line embedded directly in a `.cir` file (so the same file is both
-        // the netlist and the device/block source -- see this file's module doc comment)
-        // needs a leading `*`, a plain SPICE comment marker, so general-spice-core's own parser skips
-        // it as an ordinary comment. Strip that marker here before parsing.
-        if let Some(rest) = line.strip_prefix('*') {
-            line = rest.trim_start();
-        }
-        // Anything without `kind=` isn't a device/block declaration -- most likely a real
-        // SPICE element line (when this same file is also the netlist) or a plain comment
-        // that happens to start with `*`. Either way, not ours to parse.
-        if !line.contains("kind=") {
-            continue;
-        }
-        let mut tokens = line.split_whitespace();
-        let name = tokens
-            .next()
-            .ok_or_else(|| format!("line {}: missing device name", line_number + 1))?;
-        let fields: BTreeMap<String, String> = tokens
-            .map(|token| {
-                let mut parts = token.splitn(2, '=');
-                let key = parts.next().unwrap_or_default().to_string();
-                let value = parts.next().unwrap_or_default().to_string();
-                (key, value)
-            })
-            .collect();
-
-        let get = |key: &str| -> Result<f64, String> {
-            fields
-                .get(key)
-                .ok_or_else(|| {
-                    format!(
-                        "line {}: device '{name}' missing field '{key}'",
-                        line_number + 1
-                    )
-                })?
-                .parse::<f64>()
-                .map_err(|_| {
-                    format!(
-                        "line {}: device '{name}' field '{key}' is not a number",
-                        line_number + 1
-                    )
-                })
-        };
-
-        let get_str = |key: &str| -> Result<String, String> {
-            fields.get(key).cloned().ok_or_else(|| {
-                format!(
-                    "line {}: device '{name}' missing field '{key}'",
-                    line_number + 1
-                )
-            })
-        };
-
-        let kind = fields.get("kind").map(String::as_str).unwrap_or("diode");
-        let entry = match kind {
-            "diode" => Kind::Diode(Diode::new(
-                get("g_breakdown")?,
-                get("v_breakdown")?,
-                get("g_off")?,
-                get("v_th")?,
-                get("g_on")?,
-            )),
-            "mosfet" => {
-                let body_diode = Diode::new(
-                    get("g_breakdown")?,
-                    get("v_breakdown")?,
-                    get("g_off")?,
-                    get("v_th")?,
-                    get("g_on")?,
-                );
-                let r_on = get("r_on")?;
-                // Every gate is block-driven -- gate=block ctrl=<name>, reading that block's
-                // current output (>= 0.5 means on). No other gate= spelling exists: a
-                // permanently-off gate is an explicit `Const(0.0)` wired through
-                // `kind=sig2gate`, the same as any other gate.
-                let gate = match fields.get("gate").map(String::as_str) {
-                    Some("block") => GateSpec {
-                        ctrl: get_str("ctrl")?,
-                    },
-                    Some(other) => {
-                        return Err(format!(
-                            "line {}: unknown gate spec '{other}' (only gate=block ctrl=<name> \
-                             exists -- every gate is block-driven)",
-                            line_number + 1
-                        ))
-                    }
-                    None => {
-                        return Err(format!(
-                            "line {}: device '{name}' missing field 'gate' (gate=block \
-                             ctrl=<name> -- every gate is block-driven, see this file's own \
-                             module doc comment)",
-                            line_number + 1
-                        ))
-                    }
-                };
-                Kind::Mosfet {
-                    mosfet: Mosfet::new(r_on, body_diode),
-                    r_on,
-                    gate,
-                }
-            }
-            "const" => Kind::Block(BlockInstance {
-                name: name.to_string(),
-                kind: BlockKind::Const(get("value")?),
-                inputs: Vec::new(),
-            }),
-            "time" => Kind::Block(BlockInstance {
-                name: name.to_string(),
-                kind: BlockKind::Time,
-                inputs: Vec::new(),
-            }),
-            // "repeat=true" is optional on both "pwc" and "pwl" (default false, unchanged
-            // hold-flat-past-the-end behavior) -- wraps time into the breakpoint list's own
-            // [first, last) span once past the last point, making it periodic. See
-            // `dae_runtime::block_graph`'s own doc comment on `BlockKind::Pwc`/`BlockKind::Pwl`
-            // for why these are two distinct block kinds (interpolation style) rather than one
-            // with a flag, and why "pwl" here means real piecewise-*linear* SPICE PWL semantics
-            // while the older piecewise-*constant* block was renamed to "pwc" to free that name
-            // up.
-            "pwc" => {
-                let points = parse_xy_points(&get_str("points")?, name, "points", line_number)?;
-                let repeat = fields.get("repeat").map(|s| s == "true").unwrap_or(false);
-                Kind::Block(BlockInstance {
-                    name: name.to_string(),
-                    kind: BlockKind::Pwc { points, repeat },
-                    inputs: Vec::new(),
-                })
-            }
-            "pwl" => {
-                let points = parse_xy_points(&get_str("points")?, name, "points", line_number)?;
-                let repeat = fields.get("repeat").map(|s| s == "true").unwrap_or(false);
-                Kind::Block(BlockInstance {
-                    name: name.to_string(),
-                    kind: BlockKind::Pwl { points, repeat },
-                    inputs: Vec::new(),
-                })
-            }
-            // "sinwave"/"pulsewave"/"expwave"/"sffmwave": the electrical domain's other four
-            // time-varying source forms (see `general_mna::TransientFunction`'s own doc comment
-            // for the exact formula each implements), reused directly rather than
-            // reimplemented, with the same field names/order/defaults as ngspice/Xyce's own
-            // SIN()/PULSE()/EXP()/SFFM() -- so a `kind=sinwave ...` reference schedule and a
-            // `V1 a 0 SIN(...)` source built from the same numbers are bit-for-bit the same
-            // waveform. Named "...wave" rather than the bare SPICE keyword specifically to
-            // avoid colliding with the pre-existing `kind=sin`/`kind=exp` waveform-arithmetic
-            // *functions* (`sin(x)`/`exp(x)` of an input signal, see the `MathFn1` fallback
-            // dispatch below) -- "pulse"/"sffm" have no such collision today, but are named the
-            // same way for consistency across the family rather than only where forced to.
-            "sinwave" => {
-                let get_opt = |key: &str, default: f64| -> f64 {
-                    fields
-                        .get(key)
-                        .and_then(|s| s.parse::<f64>().ok())
-                        .unwrap_or(default)
-                };
-                Kind::Block(BlockInstance {
-                    name: name.to_string(),
-                    kind: BlockKind::Waveform(TransientFunction::Sin {
-                        v0: get_opt("v0", 0.0),
-                        va: get("va")?,
-                        freq: get("freq")?,
-                        td: get_opt("td", 0.0),
-                        theta: get_opt("theta", 0.0),
-                        phase: get_opt("phase", 0.0),
-                    }),
-                    inputs: Vec::new(),
-                })
-            }
-            "pulsewave" => {
-                let get_opt = |key: &str, default: f64| -> f64 {
-                    fields
-                        .get(key)
-                        .and_then(|s| s.parse::<f64>().ok())
-                        .unwrap_or(default)
-                };
-                Kind::Block(BlockInstance {
-                    name: name.to_string(),
-                    kind: BlockKind::Waveform(TransientFunction::Pulse {
-                        v1: get("v1")?,
-                        v2: get("v2")?,
-                        td: get_opt("td", 0.0),
-                        tr: get_opt("tr", 0.0),
-                        tf: get_opt("tf", 0.0),
-                        pw: get_opt("pw", f64::MAX / 4.0),
-                        per: get_opt("per", f64::MAX / 4.0),
-                    }),
-                    inputs: Vec::new(),
-                })
-            }
-            "expwave" => {
-                let get_opt = |key: &str, default: f64| -> f64 {
-                    fields
-                        .get(key)
-                        .and_then(|s| s.parse::<f64>().ok())
-                        .unwrap_or(default)
-                };
-                let td1 = get_opt("td1", 0.0);
-                // td2 defaults to "effectively never" (matching pulsewave's own pw/per
-                // defaults just above), NOT td1 -- TransientFunction::Exp treats `t < td2` as
-                // "still in the rise phase," so a naive td1 default would make every omitted-
-                // td2 call fall straight into the *fall* phase at t=0 instead of never falling
-                // at all (a real bug caught by this file's own dae-runtime-level test).
-                Kind::Block(BlockInstance {
-                    name: name.to_string(),
-                    kind: BlockKind::Waveform(TransientFunction::Exp {
-                        v1: get("v1")?,
-                        v2: get("v2")?,
-                        td1,
-                        tau1: get_opt("tau1", 1.0),
-                        td2: get_opt("td2", f64::MAX / 4.0),
-                        tau2: get_opt("tau2", 1.0),
-                    }),
-                    inputs: Vec::new(),
-                })
-            }
-            "sffmwave" => {
-                let get_opt = |key: &str, default: f64| -> f64 {
-                    fields
-                        .get(key)
-                        .and_then(|s| s.parse::<f64>().ok())
-                        .unwrap_or(default)
-                };
-                Kind::Block(BlockInstance {
-                    name: name.to_string(),
-                    kind: BlockKind::Waveform(TransientFunction::Sffm {
-                        v0: get_opt("v0", 0.0),
-                        va: get("va")?,
-                        fc: get("fc")?,
-                        mdi: get_opt("mdi", 0.0),
-                        fs: get("fs")?,
-                    }),
-                    inputs: Vec::new(),
-                })
-            }
-            "sum" => {
-                let inputs: Vec<Signal> = get_str("inputs")?.split(',').map(parse_signal).collect();
-                let signs: Vec<f64> = get_str("signs")?
-                    .split(',')
-                    .map(|s| {
-                        s.parse::<f64>().map_err(|_| {
-                            format!(
-                                "line {}: device '{name}' field 'signs' entry '{s}' is not a \
-                                 number",
-                                line_number + 1
-                            )
-                        })
-                    })
-                    .collect::<Result<_, _>>()?;
-                if inputs.len() != signs.len() {
-                    return Err(format!(
-                        "line {}: device '{name}': 'inputs' has {} entries but 'signs' has {} \
-                         (need one sign per input)",
-                        line_number + 1,
-                        inputs.len(),
-                        signs.len()
-                    ));
-                }
-                Kind::Block(BlockInstance {
-                    name: name.to_string(),
-                    kind: BlockKind::Sum(signs),
-                    inputs,
-                })
-            }
-            "gain" => Kind::Block(BlockInstance {
-                name: name.to_string(),
-                kind: BlockKind::Gain(get("k")?),
-                inputs: vec![parse_signal(&get_str("in")?)],
-            }),
-            "pid" => {
-                let pid = Pid::new(get("kp")?, get("ki")?, get("kd")?, get("n")?).map_err(|e| {
-                    format!(
-                        "line {}: device '{name}': invalid PID ({e:?})",
-                        line_number + 1
-                    )
-                })?;
-                let error_input = parse_signal(&get_str("in")?);
-                let (clamp, inputs) = match (fields.get("clamp_lo_in"), fields.get("clamp_hi_in")) {
-                    (Some(lo), Some(hi)) => (
-                        PidClamp::Dynamic,
-                        vec![error_input, parse_signal(lo), parse_signal(hi)],
-                    ),
-                    (None, None) => (
-                        PidClamp::Fixed(get("clamp_lo")?, get("clamp_hi")?),
-                        vec![error_input],
-                    ),
-                    _ => {
-                        return Err(format!(
-                            "line {}: device '{name}': 'clamp_lo_in'/'clamp_hi_in' must both be \
-                             given together (dynamic clamp) or both omitted (fixed clamp= \
-                             clamp_lo/clamp_hi)",
-                            line_number + 1
-                        ))
-                    }
-                };
-                Kind::Block(BlockInstance {
-                    name: name.to_string(),
-                    kind: BlockKind::Pid { pid, clamp },
-                    inputs,
-                })
-            }
-            "vco" => {
-                let vco = Vco::new(get("f_min")?, get("f_max")?).map_err(|e| {
-                    format!(
-                        "line {}: device '{name}': invalid vco ({e:?})",
-                        line_number + 1
-                    )
-                })?;
-                Kind::Block(BlockInstance {
-                    name: name.to_string(),
-                    kind: BlockKind::Vco(vco),
-                    inputs: vec![parse_signal(&get_str("in")?)],
-                })
-            }
-            // "pwm"/"pspwm": fixed-frequency and frequency+phase+duty active-high-complementary
-            // PWM modulators (see `dae_runtime::BlockKind::Pwm`/`PhaseShiftPwm`'s own doc
-            // comments for the full design) -- both default `red`/`fed` (dead time, seconds) to
-            // 0.0, the ideal gap-free/overlap-free complementary pair.
-            "pwm" => {
-                let output_names = match fields.get("outputs") {
-                    Some(names) => {
-                        let names: Vec<String> = names.split(',').map(str::to_string).collect();
-                        if names.len() != 2 {
-                            return Err(format!(
-                                "line {}: device '{name}': 'outputs' needs exactly 2 entries \
-                                 (main, complement; got {})",
-                                line_number + 1,
-                                names.len()
-                            ));
-                        }
-                        names
-                    }
-                    None => vec![name.to_string(), format!("{name}_comp")],
-                };
-                Kind::Block(BlockInstance {
-                    name: name.to_string(),
-                    kind: BlockKind::Pwm {
-                        freq_hz: get("freq")?,
-                        red: fields
-                            .get("red")
-                            .map(|s| s.parse::<f64>())
-                            .transpose()
-                            .map_err(|_| {
-                                format!(
-                                    "line {}: device '{name}' field 'red' is not a number",
-                                    line_number + 1
-                                )
-                            })?
-                            .unwrap_or(0.0),
-                        fed: fields
-                            .get("fed")
-                            .map(|s| s.parse::<f64>())
-                            .transpose()
-                            .map_err(|_| {
-                                format!(
-                                    "line {}: device '{name}' field 'fed' is not a number",
-                                    line_number + 1
-                                )
-                            })?
-                            .unwrap_or(0.0),
-                        output_names,
-                    },
-                    inputs: vec![parse_signal(&get_str("in")?)],
-                })
-            }
-            "pspwm" => {
-                let osc = Vco::new(get("f_min")?, get("f_max")?).map_err(|e| {
-                    format!(
-                        "line {}: device '{name}': invalid pspwm oscillator ({e:?})",
-                        line_number + 1
-                    )
-                })?;
-                let inputs: Vec<Signal> = get_str("inputs")?.split(',').map(parse_signal).collect();
-                if inputs.len() != 3 {
-                    return Err(format!(
-                        "line {}: device '{name}' kind='pspwm' needs 3 inputs \
-                         (freq,phase,duty; got {})",
-                        line_number + 1,
-                        inputs.len()
-                    ));
-                }
-                let output_names = match fields.get("outputs") {
-                    Some(names) => {
-                        let names: Vec<String> = names.split(',').map(str::to_string).collect();
-                        if names.len() != 2 {
-                            return Err(format!(
-                                "line {}: device '{name}': 'outputs' needs exactly 2 entries \
-                                 (main, complement; got {})",
-                                line_number + 1,
-                                names.len()
-                            ));
-                        }
-                        names
-                    }
-                    None => vec![name.to_string(), format!("{name}_comp")],
-                };
-                let get_opt = |key: &str| -> Result<f64, String> {
-                    fields
-                        .get(key)
-                        .map(|s| s.parse::<f64>())
-                        .transpose()
-                        .map_err(|_| {
-                            format!(
-                                "line {}: device '{name}' field '{key}' is not a number",
-                                line_number + 1
-                            )
-                        })
-                        .map(|v| v.unwrap_or(0.0))
-                };
-                Kind::Block(BlockInstance {
-                    name: name.to_string(),
-                    kind: BlockKind::PhaseShiftPwm {
-                        osc,
-                        red: get_opt("red")?,
-                        fed: get_opt("fed")?,
-                        output_names,
-                    },
-                    inputs,
-                })
-            }
-            "hysteresis" => {
-                let hysteresis = Hysteresis::new(get("high")?, get("low")?).map_err(|e| {
-                    format!(
-                        "line {}: device '{name}': invalid hysteresis ({e:?})",
-                        line_number + 1
-                    )
-                })?;
-                Kind::Block(BlockInstance {
-                    name: name.to_string(),
-                    kind: BlockKind::Hysteresis(hysteresis),
-                    inputs: vec![parse_signal(&get_str("in")?)],
-                })
-            }
-            "cscript" => {
-                let lib = std::path::PathBuf::from(get_str("lib")?);
-                let output_names = match fields.get("outputs") {
-                    Some(names) => names.split(',').map(str::to_string).collect(),
-                    None => vec![name.to_string()],
-                };
-                let inputs = match fields.get("inputs") {
-                    Some(list) => list.split(',').map(parse_signal).collect(),
-                    None => vec![parse_signal(&get_str("in")?)],
-                };
-                let sample_time = match (fields.get("ts"), fields.get("freq")) {
-                    (Some(_), Some(_)) => {
-                        return Err(format!(
-                            "line {}: device '{name}': 'ts' and 'freq' are mutually exclusive \
-                             (both set this block's sample time)",
-                            line_number + 1
-                        ))
-                    }
-                    (Some(_), None) => Some(get("ts")?),
-                    (None, Some(_)) => Some(1.0 / get("freq")?),
-                    (None, None) => None,
-                };
-                Kind::Block(BlockInstance {
-                    name: name.to_string(),
-                    kind: BlockKind::CScript {
-                        lib,
-                        output_names,
-                        sample_time,
-                    },
-                    inputs,
-                })
-            }
-            "statespace" => {
-                let a = parse_matrix_rows(&get_str("a")?, name, "a", line_number)?;
-                let b_vec = parse_vector(&get_str("b")?, name, "b", line_number)?;
-                let c_vec = parse_vector(&get_str("c")?, name, "c", line_number)?;
-                let d = fields
-                    .get("d")
-                    .map(|s| {
-                        s.parse::<f64>().map_err(|_| {
-                            format!(
-                                "line {}: device '{name}' field 'd' is not a number",
-                                line_number + 1
-                            )
-                        })
-                    })
-                    .transpose()?
-                    .unwrap_or(0.0);
-                let b: Vec<Vec<f64>> = b_vec.into_iter().map(|v| vec![v]).collect();
-                let c: Vec<Vec<f64>> = vec![c_vec];
-                // No `e=` field exposed at the CLI level yet, so this is always the trivial
-                // (always-valid) e=None case -- StateSpace::new still runs the same check every
-                // other block-kind constructor here does, so a future `e=` field only has to
-                // add parsing, not a new validation path.
-                let ss = StateSpace::new(a, b, c, vec![vec![d]], None).map_err(|e| {
-                    format!(
-                        "line {}: device '{name}': invalid statespace ({e:?})",
-                        line_number + 1
-                    )
-                })?;
-                Kind::Block(BlockInstance {
-                    name: name.to_string(),
-                    kind: BlockKind::StateSpace(ss),
-                    inputs: vec![parse_signal(&get_str("in")?)],
-                })
-            }
-            "tf" => {
-                let num = parse_vector(&get_str("num")?, name, "num", line_number)?;
-                let den = parse_vector(&get_str("den")?, name, "den", line_number)?;
-                let tf = TransferFunction::new(num, den).map_err(|e| {
-                    format!(
-                        "line {}: device '{name}': invalid transfer function ({e:?})",
-                        line_number + 1
-                    )
-                })?;
-                Kind::Block(BlockInstance {
-                    name: name.to_string(),
-                    kind: BlockKind::TransferFunction(tf),
-                    inputs: vec![parse_signal(&get_str("in")?)],
-                })
-            }
-            "product" => Kind::Block(BlockInstance {
-                name: name.to_string(),
-                kind: BlockKind::Product,
-                inputs: get_str("inputs")?.split(',').map(parse_signal).collect(),
-            }),
-            "saturation" => Kind::Block(BlockInstance {
-                name: name.to_string(),
-                kind: BlockKind::Saturation(get("limit")?),
-                inputs: vec![parse_signal(&get_str("in")?)],
-            }),
-            "table" => {
-                let points = parse_xy_points(&get_str("points")?, name, "points", line_number)?;
-                Kind::Block(BlockInstance {
-                    name: name.to_string(),
-                    kind: BlockKind::Table(points),
-                    inputs: vec![parse_signal(&get_str("in")?)],
-                })
-            }
-            "probe" => {
-                let target = match (fields.get("node"), fields.get("branch")) {
-                    (Some(node), None) => ProbeTarget::Voltage(node.clone()),
-                    (None, Some(branch)) => ProbeTarget::Current(branch.clone()),
-                    (Some(_), Some(_)) => {
-                        return Err(format!(
-                            "line {}: device '{name}': 'node' and 'branch' are mutually \
-                             exclusive (a probe reads either a node voltage or a branch \
-                             current, never both)",
-                            line_number + 1
-                        ))
-                    }
-                    (None, None) => {
-                        return Err(format!(
-                            "line {}: device '{name}' kind='probe' needs 'node=<name>' (reads \
-                             V(node)) or 'branch=<name>' (reads I(branch))",
-                            line_number + 1
-                        ))
-                    }
-                };
-                Kind::Block(BlockInstance {
-                    name: name.to_string(),
-                    kind: BlockKind::Probe(target),
-                    inputs: Vec::new(),
-                })
-            }
-            "sig2gate" => Kind::Block(BlockInstance {
-                name: name.to_string(),
-                kind: BlockKind::Sig2Gate,
-                inputs: vec![parse_signal(&get_str("in")?)],
-            }),
-            "sig2voltage" => Kind::Block(BlockInstance {
-                name: name.to_string(),
-                kind: BlockKind::Sig2Voltage,
-                inputs: vec![parse_signal(&get_str("in")?)],
-            }),
-            "sig2current" => Kind::Block(BlockInstance {
-                name: name.to_string(),
-                kind: BlockKind::Sig2Current,
-                inputs: vec![parse_signal(&get_str("in")?)],
-            }),
-            "clarke" | "clarkeinv" | "park" | "parkinv" | "clarkepark" | "clarkeparkinv" => {
-                let ct = match kind {
-                    "clarke" => CoordinateTransform::Clarke,
-                    "clarkeinv" => CoordinateTransform::ClarkeInv,
-                    "park" => CoordinateTransform::Park,
-                    "parkinv" => CoordinateTransform::ParkInv,
-                    "clarkepark" => CoordinateTransform::ClarkePark,
-                    "clarkeparkinv" => CoordinateTransform::ClarkeParkInv,
-                    _ => unreachable!("matched above"),
-                };
-                let inputs: Vec<Signal> = get_str("inputs")?.split(',').map(parse_signal).collect();
-                if inputs.len() != ct.input_count() {
-                    return Err(format!(
-                        "line {}: device '{name}' kind='{kind}' needs {} inputs (got {})",
-                        line_number + 1,
-                        ct.input_count(),
-                        inputs.len()
-                    ));
-                }
-                let output_names = match fields.get("outputs") {
-                    Some(names) => {
-                        let names: Vec<String> = names.split(',').map(str::to_string).collect();
-                        if names.len() != 3 {
-                            return Err(format!(
-                                "line {}: device '{name}': 'outputs' needs exactly 3 entries \
-                                 (got {})",
-                                line_number + 1,
-                                names.len()
-                            ));
-                        }
-                        names
-                    }
-                    // Default: block's own name aliases the first (primary) output, same as
-                    // `kind=cscript`'s default; the other two get readable auto-generated names
-                    // from this transform's own conventional output names (e.g. `<name>_beta`).
-                    None => {
-                        let suffixes = ct.output_names();
-                        std::iter::once(name.to_string())
-                            .chain(suffixes[1..].iter().map(|s| format!("{name}_{s}")))
-                            .collect()
-                    }
-                };
-                Kind::Block(BlockInstance {
-                    name: name.to_string(),
-                    kind: BlockKind::CoordinateTransform {
-                        kind: ct,
-                        output_names,
-                    },
-                    inputs,
-                })
-            }
-            "pmsm" => {
-                let pmsm = continuous_blocks::Pmsm::new(
-                    get("r_s")?,
-                    get("l_d")?,
-                    get("l_q")?,
-                    get("lambda_pm")?,
-                    get("pole_pairs")?,
-                    get("inertia")?,
-                    get("friction")?,
-                )
-                .map_err(|e| {
-                    format!(
-                        "line {}: device '{name}': invalid pmsm ({e:?})",
-                        line_number + 1
-                    )
-                })?;
-                let inputs: Vec<Signal> = get_str("inputs")?.split(',').map(parse_signal).collect();
-                if inputs.len() != 3 {
-                    return Err(format!(
-                        "line {}: device '{name}' kind='pmsm' needs 3 inputs (vd,vq,t_load; \
-                         got {})",
-                        line_number + 1,
-                        inputs.len()
-                    ));
-                }
-                let output_names = match fields.get("outputs") {
-                    Some(names) => {
-                        let names: Vec<String> = names.split(',').map(str::to_string).collect();
-                        if names.len() != 4 {
-                            return Err(format!(
-                                "line {}: device '{name}': 'outputs' needs exactly 4 entries \
-                                 (got {})",
-                                line_number + 1,
-                                names.len()
-                            ));
-                        }
-                        names
-                    }
-                    // Default: block's own name aliases the first (primary) output (`id`), same
-                    // convention as `kind=cscript`/`kind=clarke`; the other three get readable
-                    // auto-generated names.
-                    None => {
-                        let suffixes = ["id", "iq", "omega_m", "theta_e"];
-                        std::iter::once(name.to_string())
-                            .chain(suffixes[1..].iter().map(|s| format!("{name}_{s}")))
-                            .collect()
-                    }
-                };
-                Kind::Block(BlockInstance {
-                    name: name.to_string(),
-                    kind: BlockKind::Pmsm { pmsm, output_names },
-                    inputs,
-                })
-            }
-            other => {
-                // Not one of the block kinds above: try the real-valued waveform-arithmetic
-                // function library (cos, sin, exp, sqrt, atan2, hypot, if, limit, ...) before
-                // giving up — see `continuous_blocks::waveform_arithmetic` for the full list.
-                if let Some(f) = continuous_blocks::MathFn1::from_name(other) {
-                    Kind::Block(BlockInstance {
-                        name: name.to_string(),
-                        kind: BlockKind::MathFn1(f),
-                        inputs: vec![parse_signal(&get_str("in")?)],
-                    })
-                } else if let Some(f) = continuous_blocks::MathFn2::from_name(other) {
-                    Kind::Block(BlockInstance {
-                        name: name.to_string(),
-                        kind: BlockKind::MathFn2(f),
-                        inputs: vec![
-                            parse_signal(&get_str("in1")?),
-                            parse_signal(&get_str("in2")?),
-                        ],
-                    })
-                } else if let Some(f) = continuous_blocks::MathFn3::from_name(other) {
-                    Kind::Block(BlockInstance {
-                        name: name.to_string(),
-                        kind: BlockKind::MathFn3(f),
-                        inputs: vec![
-                            parse_signal(&get_str("in1")?),
-                            parse_signal(&get_str("in2")?),
-                            parse_signal(&get_str("in3")?),
-                        ],
-                    })
-                } else {
-                    return Err(format!(
-                        "line {}: unknown device kind '{other}'",
-                        line_number + 1
-                    ));
-                }
-            }
-        };
-        result.push((name.to_string(), entry));
-    }
-    Ok(result)
-}
-
 fn usage() -> String {
     "usage: general-simulator <netlist> [--devices <file>] [--mode dc|transient] [--tfinal T] \
      [--dt DT | --dt-max T --dt-min T --dt-init T --reltol R --abstol A]\n\

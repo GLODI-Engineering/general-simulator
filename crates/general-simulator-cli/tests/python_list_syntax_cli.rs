@@ -28,9 +28,9 @@ fn run(args: &[&str]) -> std::process::Output {
 }
 
 const DUMMY_MOSFET: &str = "DDUMMY dummy_a dummy_b mosfetmodel\n\
-     * DOFFVAL kind=const value=0\n\
-     * DOFFGATE kind=sig2gate in=DOFFVAL\n\
-     * DDUMMY kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 gate=block ctrl=DOFFGATE\n\
+     DOFFVAL kind=const value=0\n\
+     DOFFGATE kind=sig2gate in=DOFFVAL\n\
+     DDUMMY kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 gate=block ctrl=DOFFGATE\n\
      Rdummy_a dummy_a 0 1e9\nRdummy_b dummy_b 0 1e9\n";
 
 fn column(stdout: &str, name: &str) -> Vec<f64> {
@@ -52,8 +52,8 @@ fn statespace_a_b_c_parse_as_python_lists_and_match_hand_derived_rc_response() {
         "statespace",
         &format!(
             "{DUMMY_MOSFET}V1 a 0 5\nR1 a 0 1000\n\
-             * U kind=const value=1\n\
-             * Y kind=statespace a=[[-1000]] b=[1000] c=[1] d=0 in=U\n"
+             U kind=const value=1\n\
+             Y kind=statespace a=[[-1000]] b=[1000] c=[1] d=0 in=U\n"
         ),
     );
     let output = run(&[
@@ -99,8 +99,8 @@ fn tf_num_den_parse_as_python_lists_and_match_statespace_on_the_same_pole() {
         "tf",
         &format!(
             "{DUMMY_MOSFET}V1 a 0 5\nR1 a 0 1000\n\
-             * U kind=const value=1\n\
-             * Y kind=tf num=[1000] den=[1,1000] in=U\n"
+             U kind=const value=1\n\
+             Y kind=tf num=[1000] den=[1,1000] in=U\n"
         ),
     );
     let output = run(&[
@@ -145,8 +145,8 @@ fn table_points_parse_as_a_python_list_of_xy_pairs_and_interpolate_correctly() {
         "table",
         &format!(
             "{DUMMY_MOSFET}V1 a 0 5\nR1 a 0 1000\n\
-             * X kind=const value=1.5\n\
-             * Y kind=table points=[[0,0],[1,10],[2,20]] in=X\n"
+             X kind=const value=1.5\n\
+             Y kind=table points=[[0,0],[1,10],[2,20]] in=X\n"
         ),
     );
     let output = run(&[
@@ -177,8 +177,8 @@ fn old_a reference tool_style_matrix_syntax_is_rejected_with_a_clear_error() {
         "old-matrix",
         &format!(
             "{DUMMY_MOSFET}V1 a 0 5\nR1 a 0 1000\n\
-             * U kind=const value=1\n\
-             * Y kind=statespace a=-1000 b=1000 c=1 d=0 in=U\n"
+             U kind=const value=1\n\
+             Y kind=statespace a=-1000 b=1000 c=1 d=0 in=U\n"
         ),
     );
     let output = run(&[
@@ -207,8 +207,8 @@ fn old_colon_pair_points_syntax_is_rejected_with_a_clear_error() {
         "old-points",
         &format!(
             "{DUMMY_MOSFET}V1 a 0 5\nR1 a 0 1000\n\
-             * X kind=const value=1.5\n\
-             * Y kind=table points=0:0,1:10,2:20 in=X\n"
+             X kind=const value=1.5\n\
+             Y kind=table points=0:0,1:10,2:20 in=X\n"
         ),
     );
     let output = run(&[
@@ -241,7 +241,7 @@ fn nan_in_a_list_field_is_a_clean_error_not_a_process_panic() {
         "nan-points",
         &format!(
             "{DUMMY_MOSFET}V1 a 0 5\nR1 a 0 1000\n\
-             * REF kind=pwc points=[[nan,0],[1,2]]\n"
+             REF kind=pwc points=[[nan,0],[1,2]]\n"
         ),
     );
     let output = run(&[
