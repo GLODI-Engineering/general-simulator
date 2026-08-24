@@ -129,11 +129,13 @@
 //! bound — a real, previously hard-to-diagnose failure mode this dynamic form fixes directly
 //! (see `dae_runtime::PidClamp`'s own doc comment for the worked example this was built for).
 //!
-//! `kind=statespace a=<row>;<row>;... b=<v0,v1,...> c=<v0,v1,...> [d=<scalar>]` declares an
-//! arbitrary single-input single-output block directly from its own matrices (`a`'s rows
-//! semicolon-separated, each row comma-separated entries; `b`/`c` comma-separated vectors; `d`
-//! defaults to `0`, the common case for a strictly-proper filter). `kind=tf num=<c0,c1,...>
-//! den=<c0,c1,...>` declares one from a rational transfer function instead (coefficients
+//! `kind=statespace a=[[...],...] b=[...] c=[...] [d=<scalar>]` declares an arbitrary
+//! single-input single-output block directly from its own matrices — every list-valued field in
+//! this grammar (`a`/`b`/`c` here, `num`/`den` below, `points` on `pwc`/`pwl`/`table`) is a real
+//! Python list literal (`a=[[1,2],[3,4]]` is exactly `numpy.array([[1,2],[3,4]])`'s own shape;
+//! `b=[1,2]` a plain list), so a matrix/vector built in Python can be pasted in unchanged. `d`
+//! defaults to `0`, the common case for a strictly-proper filter. `kind=tf num=[c0,c1,...]
+//! den=[c0,c1,...]` declares one from a rational transfer function instead (coefficients
 //! highest-degree first) — e.g. a PID's own realizable form `C(s) = Kp + Ki/s + Kd*N*s/(s+N)`
 //! (a pure derivative term alone is non-causal, so every real PID filters it) put over one
 //! denominator and given directly as `num`/`den`, instead of `kind=pid`'s `kp`/`ki`/`kd`/`n`
@@ -141,7 +143,7 @@
 //!
 //! `kind=product inputs=<signal>,...` (multiplies all its inputs) and `kind=saturation
 //! limit=<f64> in=<signal>` (clamps to `[-limit, limit]`) round out the stateless math ops.
-//! `kind=table points=<x>:<y>,<x>:<y>,... in=<signal>` linearly interpolates through a fixed
+//! `kind=table points=[[x0,y0],[x1,y1],...] in=<signal>` linearly interpolates through a fixed
 //! lookup table (clamped, not extrapolated, past either end). `kind=hysteresis high=<f64>
 //! low=<f64> in=<signal>` is a Schmitt-trigger comparator (output `1.0`/`0.0`): stays HIGH
 //! until the input drops below `low`, stays LOW until it rises above `high` — the standard
@@ -256,7 +258,7 @@
 //! * D2 kind=mosfet r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=block ctrl=LEG_COMP_G
 //! ... (Lr, Cr, transformer, rectifier, Cout, Rout -- ordinary SPICE elements)
 //! * VOUT_PROBE kind=probe node=vout
-//! * REF     kind=pwc points=0:20,0.014:17
+//! * REF     kind=pwc points=[[0,20],[0.014,17]]
 //! * ERR     kind=sum inputs=REF,VOUT_PROBE signs=1,-1
 //! * PID1    kind=pid kp=800 ki=4e6 kd=0 n=1000 clamp_lo=-15000 clamp_hi=15000 in=ERR
 //! * FNOM    kind=const value=115000
@@ -610,46 +612,96 @@ fn parse_signal(text: &str) -> Signal {
     }
 }
 
-/// Parses a `<x>:<y>,<x>:<y>,...` point list (a `kind=pwc`/`kind=pwl` reference schedule, or a
-/// `kind=table` lookup table), sorted ascending by `x` on return.
-fn parse_xy_points(text: &str, name: &str, line_number: usize) -> Result<Vec<(f64, f64)>, String> {
-    let mut points = Vec::new();
-    for point in text.split(',') {
-        let (x_str, y_str) = point.split_once(':').ok_or_else(|| {
+/// Splits `text` on top-level commas only — one inside a nested `[...]` (bracket depth > 0)
+/// doesn't count — so `"[1,2],[3,4]"` splits into `["[1,2]", "[3,4]"]`, not four pieces. The
+/// one primitive every Python-list-literal field below (`num=`/`den=`/`a=`/`b=`/`c=`/`points=`)
+/// is built from, so a matrix's row separator and a vector's entry separator are the same
+/// operation applied at a different nesting depth, not two different parsers.
+fn split_top_level(text: &str) -> Vec<&str> {
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    let mut parts = Vec::new();
+    for (i, c) in text.char_indices() {
+        match c {
+            '[' => depth += 1,
+            ']' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(text[start..i].trim());
+                start = i + c.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    parts.push(text[start..].trim());
+    parts
+}
+
+/// Strips a field's required outer `[...]` — every list-valued field here is a real Python list
+/// literal (`num=[1,2,3]`, `a=[[1,2],[3,4]]`), never the bare comma/semicolon/colon delimiters
+/// an earlier version of this grammar used, so a Python list built from the same numbers can be
+/// pasted into a `.cir` file (spaces after commas included: [`split_top_level`]/the `f64` parse
+/// below both trim) without reformatting.
+fn strip_brackets<'a>(
+    text: &'a str,
+    name: &str,
+    field: &str,
+    line_number: usize,
+) -> Result<&'a str, String> {
+    let trimmed = text.trim();
+    trimmed
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .ok_or_else(|| {
             format!(
-                "line {}: device '{name}' field 'points' entry '{point}' is not '<x>:<y>'",
+                "line {}: device '{name}' field '{field}' must be a Python-style list, e.g. \
+                 '[1,2,3]' or '[[1,2],[3,4]]' (got '{text}')",
                 line_number + 1
             )
-        })?;
-        let x: f64 = x_str.parse().map_err(|_| {
-            format!(
-                "line {}: device '{name}' points entry '{point}': '{x_str}' is not a number",
+        })
+}
+
+/// Parses a `[[<x>,<y>],[<x>,<y>],...]` point list (a `kind=pwc`/`kind=pwl` reference schedule,
+/// or a `kind=table` lookup table) — a Python list of 2-element `[x, y]` lists, exactly the
+/// shape `numpy.array(points)` would expect for an `Nx2` table. Sorted ascending by `x` on
+/// return.
+fn parse_xy_points(
+    text: &str,
+    name: &str,
+    field: &str,
+    line_number: usize,
+) -> Result<Vec<(f64, f64)>, String> {
+    let rows = parse_matrix_rows(text, name, field, line_number)?;
+    let mut points = Vec::with_capacity(rows.len());
+    for row in rows {
+        let [x, y] = row.as_slice() else {
+            return Err(format!(
+                "line {}: device '{name}' field '{field}': each entry must be a 2-element \
+                 '[x,y]' list (got '{row:?}')",
                 line_number + 1
-            )
-        })?;
-        let y: f64 = y_str.parse().map_err(|_| {
-            format!(
-                "line {}: device '{name}' points entry '{point}': '{y_str}' is not a number",
-                line_number + 1
-            )
-        })?;
-        points.push((x, y));
+            ));
+        };
+        points.push((*x, *y));
     }
     points.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
     Ok(points)
 }
 
-/// Parses a comma-separated list of numbers, e.g. a `kind=statespace` block's `b`/`c` vector
-/// or a `kind=tf` block's `num`/`den` coefficients.
+/// Parses a Python-style list of numbers, e.g. a `kind=statespace` block's `b=[1,2]`/`c=[1,0]`
+/// vector or a `kind=tf` block's `num=[1,2]`/`den=[1,3,2]` coefficients.
 fn parse_vector(
     text: &str,
     name: &str,
     field: &str,
     line_number: usize,
 ) -> Result<Vec<f64>, String> {
-    text.split(',')
+    let inner = strip_brackets(text, name, field, line_number)?;
+    if inner.is_empty() {
+        return Ok(Vec::new());
+    }
+    split_top_level(inner)
+        .into_iter()
         .map(|v| {
-            v.trim().parse::<f64>().map_err(|_| {
+            v.parse::<f64>().map_err(|_| {
                 format!(
                     "line {}: device '{name}' field '{field}' entry '{v}' is not a number",
                     line_number + 1
@@ -659,15 +711,20 @@ fn parse_vector(
         .collect()
 }
 
-/// Parses a `kind=statespace` block's `a` matrix: semicolon-separated rows, each a
-/// comma-separated list of numbers.
+/// Parses a `kind=statespace` block's `a` matrix: a Python-style list of row lists, e.g.
+/// `a=[[1,2],[3,4]]` — exactly `numpy.array([[1,2],[3,4]])`'s own literal shape.
 fn parse_matrix_rows(
     text: &str,
     name: &str,
     field: &str,
     line_number: usize,
 ) -> Result<Vec<Vec<f64>>, String> {
-    text.split(';')
+    let inner = strip_brackets(text, name, field, line_number)?;
+    if inner.is_empty() {
+        return Ok(Vec::new());
+    }
+    split_top_level(inner)
+        .into_iter()
         .map(|row| parse_vector(row, name, field, line_number))
         .collect()
 }
@@ -799,7 +856,7 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
             // while the older piecewise-*constant* block was renamed to "pwc" to free that name
             // up.
             "pwc" => {
-                let points = parse_xy_points(&get_str("points")?, name, line_number)?;
+                let points = parse_xy_points(&get_str("points")?, name, "points", line_number)?;
                 let repeat = fields.get("repeat").map(|s| s == "true").unwrap_or(false);
                 Kind::Block(BlockInstance {
                     name: name.to_string(),
@@ -808,7 +865,7 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                 })
             }
             "pwl" => {
-                let points = parse_xy_points(&get_str("points")?, name, line_number)?;
+                let points = parse_xy_points(&get_str("points")?, name, "points", line_number)?;
                 let repeat = fields.get("repeat").map(|s| s == "true").unwrap_or(false);
                 Kind::Block(BlockInstance {
                     name: name.to_string(),
@@ -1180,7 +1237,7 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                 inputs: vec![parse_signal(&get_str("in")?)],
             }),
             "table" => {
-                let points = parse_xy_points(&get_str("points")?, name, line_number)?;
+                let points = parse_xy_points(&get_str("points")?, name, "points", line_number)?;
                 Kind::Block(BlockInstance {
                     name: name.to_string(),
                     kind: BlockKind::Table(points),

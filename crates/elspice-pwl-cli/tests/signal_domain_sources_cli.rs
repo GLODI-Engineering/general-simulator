@@ -109,9 +109,9 @@ fn sinwave_and_sin_coexist_in_one_file_without_collision() {
 fn pwc_and_pwl_repeat_parse_and_wrap_through_the_real_cli() {
     let netlist = write_netlist(&format!(
         "{DUMMY_MOSFET}V1 a 0 STEP_V\nR1 a 0 1000\nV2 b 0 RAMP_V\nR2 b 0 1000\n\
-         * STEP kind=pwc points=0:1,0.5e-3:5,1e-3:1 repeat=true\n\
+         * STEP kind=pwc points=[[0,1],[0.5e-3,5],[1e-3,1]] repeat=true\n\
          * STEP_V kind=sig2voltage in=STEP\n\
-         * RAMP kind=pwl points=0:0,1e-3:10,2e-3:0 repeat=true\n\
+         * RAMP kind=pwl points=[[0,0],[1e-3,10],[2e-3,0]] repeat=true\n\
          * RAMP_V kind=sig2voltage in=RAMP\n"
     ));
 

@@ -57,7 +57,7 @@ interpolation behavior, exactly the kind of "easy to mix up because they sound l
 thing" trap `elspice-mna`'s own `PwlPoints` doc comment already warns readers about for the
 unrelated block-graph/electrical-domain naming overlap. Option 2 is a silent breaking change:
 every existing reference-schedule netlist in this project's own `internal-archive`
-sibling repo (e.g. a speed-step schedule `REF kind=pwl points=0:800,0.05:1500`) relies on the
+sibling repo (e.g. a speed-step schedule `REF kind=pwl points=[[0,800],[0.05,1500]]`) relies on the
 *step* behavior — reinterpreting it as a ramp would silently corrupt every one of those
 experiments' own recorded results without a single line of `elspice-pwl` itself reporting an
 error. Option 3 is the only one that (a) makes `pwc`/`pwl` self-document the actual
