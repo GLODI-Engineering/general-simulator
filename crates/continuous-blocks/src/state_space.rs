@@ -25,7 +25,37 @@ pub struct StateSpace {
     pub e: Option<Vec<Vec<f64>>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StateSpaceError {
+    /// The descriptor matrix `e` is singular — `E * dx/dt = A*x + B*u` has no unique `dx/dt`
+    /// for a generic `(A, x, B, u)`, so [`StateSpace::derivative`] could never solve it.
+    /// Checked once here, at construction, rather than on every single step's own
+    /// [`StateSpace::derivative`] call (which stays infallible as a result) — the same
+    /// validate-once-at-construction convention [`crate::Vco`]/[`crate::Pmsm`]/
+    /// [`crate::Hysteresis`]/[`crate::Pid`] all use for their own invariants.
+    NonInvertibleDescriptorMatrix,
+}
+
 impl StateSpace {
+    /// Validates `e` (if given) is invertible, then returns the assembled system. Every
+    /// [`StateSpace::derivative`] call downstream relies on this having already been checked —
+    /// see [`StateSpaceError::NonInvertibleDescriptorMatrix`]'s own doc comment.
+    pub fn new(
+        a: Vec<Vec<f64>>,
+        b: Vec<Vec<f64>>,
+        c: Vec<Vec<f64>>,
+        d: Vec<Vec<f64>>,
+        e: Option<Vec<Vec<f64>>>,
+    ) -> Result<Self, StateSpaceError> {
+        if let Some(e) = &e {
+            let n = e.len();
+            if dense_solve(e, &vec![0.0; n]).is_err() {
+                return Err(StateSpaceError::NonInvertibleDescriptorMatrix);
+            }
+        }
+        Ok(StateSpace { a, b, c, d, e })
+    }
+
     pub fn states(&self) -> usize {
         self.a.len()
     }
@@ -71,7 +101,8 @@ impl StateSpace {
             .collect();
         match &self.e {
             None => rhs,
-            Some(e) => dense_solve(e, &rhs).expect("descriptor matrix E must be nonsingular"),
+            // Safe: StateSpace::new already rejected a singular `e` at construction time.
+            Some(e) => dense_solve(e, &rhs).expect("StateSpace::new guarantees e is invertible"),
         }
     }
 
@@ -138,4 +169,48 @@ fn dense_solve(a: &[Vec<f64>], b: &[f64]) -> Result<Vec<f64>, SingularMatrix> {
         }
     }
     Ok((0..n).map(|row| augmented[row][n]).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn e_none_is_always_valid() {
+        let ss = StateSpace::new(
+            vec![vec![-1.0]],
+            vec![vec![1.0]],
+            vec![vec![1.0]],
+            vec![vec![0.0]],
+            None,
+        );
+        assert!(ss.is_ok());
+    }
+
+    #[test]
+    fn a_singular_descriptor_matrix_is_rejected_not_a_panic() {
+        // A 2x2 all-zero e: E*dx/dt = A*x+B*u has no unique dx/dt for a generic RHS.
+        let e = Some(vec![vec![0.0, 0.0], vec![0.0, 0.0]]);
+        let ss = StateSpace::new(
+            vec![vec![-1.0, 0.0], vec![0.0, -1.0]],
+            vec![vec![1.0], vec![1.0]],
+            vec![vec![1.0, 0.0]],
+            vec![vec![0.0]],
+            e,
+        );
+        assert_eq!(ss, Err(StateSpaceError::NonInvertibleDescriptorMatrix));
+    }
+
+    #[test]
+    fn an_invertible_descriptor_matrix_is_accepted() {
+        let e = Some(vec![vec![2.0, 0.0], vec![0.0, 3.0]]);
+        let ss = StateSpace::new(
+            vec![vec![-1.0, 0.0], vec![0.0, -1.0]],
+            vec![vec![1.0], vec![1.0]],
+            vec![vec![1.0, 0.0]],
+            vec![vec![0.0]],
+            e,
+        );
+        assert!(ss.is_ok());
+    }
 }

@@ -3,7 +3,7 @@
 //! independently, then check the code reproduces it" discipline as the rest of this project's
 //! milestones (see `pwl-devices/tests/two_diode_circuit.rs`, `dae-runtime/tests/mosfet.rs`).
 
-use continuous_blocks::{integrator, Pid, TransferFunction};
+use continuous_blocks::{Pid, TransferFunction};
 
 fn simulate_step(ss: &continuous_blocks::StateSpace, t_final: f64, dt: f64) -> f64 {
     let mut x = vec![0.0; ss.states()];
@@ -35,7 +35,9 @@ fn first_order_lowpass_step_response_matches_analytic_solution() {
 /// precision, not just approximately.
 #[test]
 fn integrator_step_response_is_an_exact_ramp() {
-    let ss = integrator();
+    let ss = TransferFunction::new(vec![1.0], vec![1.0, 0.0])
+        .unwrap()
+        .to_state_space();
     let y = simulate_step(&ss, 2.5, 1e-3);
     assert!((y - 2.5).abs() < 1e-9, "y(2.5) = {y}, expected 2.5 exactly");
 }
@@ -48,7 +50,7 @@ fn integrator_step_response_is_an_exact_ramp() {
 /// response that's only right at t=0 or only in the limit.
 #[test]
 fn pid_with_kd_zero_reproduces_exact_pi_ramp_response() {
-    let pid = Pid::new(2.0, 3.0, 0.0, 10.0);
+    let pid = Pid::new(2.0, 3.0, 0.0, 10.0).unwrap();
     let ss = pid.to_state_space();
     for &t in &[0.1, 0.5, 1.0, 2.0] {
         let y = simulate_step(&ss, t, 1e-4);
@@ -68,7 +70,7 @@ fn pid_with_kd_zero_reproduces_exact_pi_ramp_response() {
 /// transient by hand is much more involved than the Kd=0 case.
 #[test]
 fn pid_with_nonzero_kd_stays_bounded_and_trends_like_pi_at_large_t() {
-    let pid = Pid::new(2.0, 3.0, 0.5, 10.0);
+    let pid = Pid::new(2.0, 3.0, 0.5, 10.0).unwrap();
     let ss = pid.to_state_space();
     let y_early = simulate_step(&ss, 0.05, 1e-5);
     let y_late = simulate_step(&ss, 3.0, 1e-4);

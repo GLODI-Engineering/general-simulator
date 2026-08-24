@@ -12,10 +12,17 @@ pub struct Hysteresis {
     pub low: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HysteresisError {
+    LowExceedsHigh,
+}
+
 impl Hysteresis {
-    pub fn new(high: f64, low: f64) -> Self {
-        assert!(low <= high, "low must not exceed high");
-        Hysteresis { high, low }
+    pub fn new(high: f64, low: f64) -> Result<Self, HysteresisError> {
+        if low > high {
+            return Err(HysteresisError::LowExceedsHigh);
+        }
+        Ok(Hysteresis { high, low })
     }
 
     /// Advances the latch by one step. `prev_state` is the previous step's output (`true` =
@@ -35,37 +42,45 @@ mod tests {
 
     #[test]
     fn rises_above_high_to_turn_on() {
-        let h = Hysteresis::new(1.0, -1.0);
+        let h = Hysteresis::new(1.0, -1.0).unwrap();
         assert!(!h.step(false, 0.5));
         assert!(h.step(false, 1.5));
     }
 
     #[test]
     fn stays_on_inside_the_band() {
-        let h = Hysteresis::new(1.0, -1.0);
+        let h = Hysteresis::new(1.0, -1.0).unwrap();
         assert!(h.step(true, 0.0));
         assert!(h.step(true, -0.5));
     }
 
     #[test]
     fn falls_below_low_to_turn_off() {
-        let h = Hysteresis::new(1.0, -1.0);
+        let h = Hysteresis::new(1.0, -1.0).unwrap();
         assert!(!h.step(true, -1.5));
     }
 
     #[test]
     fn stays_off_inside_the_band() {
-        let h = Hysteresis::new(1.0, -1.0);
+        let h = Hysteresis::new(1.0, -1.0).unwrap();
         assert!(!h.step(false, 0.0));
         assert!(!h.step(false, 0.9));
     }
 
     #[test]
     fn boundary_values_are_inclusive_of_staying_in_the_current_state() {
-        let h = Hysteresis::new(1.0, -1.0);
+        let h = Hysteresis::new(1.0, -1.0).unwrap();
         // exactly at low, while ON, should stay ON (>= low)
         assert!(h.step(true, -1.0));
         // exactly at high, while OFF, should stay OFF (> high, not >=)
         assert!(!h.step(false, 1.0));
+    }
+
+    #[test]
+    fn low_exceeding_high_is_rejected_not_a_panic() {
+        assert_eq!(
+            Hysteresis::new(-1.0, 1.0),
+            Err(HysteresisError::LowExceedsHigh)
+        );
     }
 }

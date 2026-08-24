@@ -18,6 +18,11 @@ pub enum LcpError {
     /// tie-breaking this should not happen on well-posed circuit-sized problems; treat it as a
     /// bug or a pathological input if it does.
     MaxIterationsExceeded,
+    /// `M` or `q` contained a NaN or infinity — e.g. from an overflowing upstream device
+    /// parameter, or an ill-conditioned circuit. Checked explicitly up front so this returns a
+    /// clean error instead of reaching a `partial_cmp().unwrap()` panic partway through pivoting
+    /// (`NaN.partial_cmp(_)` is `None`).
+    NonFiniteInput,
 }
 
 /// Solve `w = M z + q`, `w, z >= 0`, `w . z = 0` via Lemke's algorithm.
@@ -48,6 +53,13 @@ pub fn solve_with_covering_vector(
             w: vec![],
             z: vec![],
         });
+    }
+
+    if q.iter().any(|v| !v.is_finite())
+        || m.iter().flatten().any(|v| !v.is_finite())
+        || d.iter().any(|v| !v.is_finite())
+    {
+        return Err(LcpError::NonFiniteInput);
     }
 
     // Trivial case: q already feasible with z = 0, no pivoting (and no z0) needed at all.

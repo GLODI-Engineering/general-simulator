@@ -36,7 +36,7 @@ fn boost_pid_regulates_without_windup_collapse() {
     // constraint for this specific circuit found while building this fixture -- with a
     // saturating actuator, "too aggressive Kp" and "windup" are two distinct failure modes,
     // and anti-windup alone does not fix the former.
-    let pid = Pid::new(0.01, 20.0, 0.0, 1000.0);
+    let pid = Pid::new(0.01, 20.0, 0.0, 1000.0).unwrap();
     let controller = pid.to_state_space();
 
     let switching_freq = 100_000.0;

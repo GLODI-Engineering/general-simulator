@@ -57,7 +57,7 @@ fn dynamic_clamp_matches_fixed_clamp_at_the_same_constant_bound() {
             BlockInstance {
                 name: "PID1".to_string(),
                 kind: BlockKind::Pid {
-                    pid: continuous_blocks::Pid::new(1.0, 1000.0, 0.0, 1000.0),
+                    pid: continuous_blocks::Pid::new(1.0, 1000.0, 0.0, 1000.0).unwrap(),
                     clamp,
                 },
                 inputs,
@@ -137,7 +137,7 @@ fn dynamic_clamp_respects_a_bound_that_shrinks_mid_run() {
         BlockInstance {
             name: "PID1".to_string(),
             kind: BlockKind::Pid {
-                pid: continuous_blocks::Pid::new(1.0, 1000.0, 0.0, 1000.0),
+                pid: continuous_blocks::Pid::new(1.0, 1000.0, 0.0, 1000.0).unwrap(),
                 clamp: PidClamp::Dynamic,
             },
             inputs: vec![

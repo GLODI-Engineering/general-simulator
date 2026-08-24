@@ -230,3 +230,40 @@ fn old_colon_pair_points_syntax_is_rejected_with_a_clear_error() {
         "stderr should explain the expected Python-list syntax, got: {stderr}"
     );
 }
+
+#[test]
+fn nan_in_a_list_field_is_a_clean_error_not_a_process_panic() {
+    // f64::from_str accepts "nan" -- without an explicit finiteness check this used to reach a
+    // partial_cmp().unwrap() in the points sort and panic the whole process instead of failing
+    // this one netlist line. Exercised through kind=pwc's own points= (the sort is specific to
+    // that field), not just parse_vector in isolation.
+    let netlist = write_netlist(
+        "nan-points",
+        &format!(
+            "{DUMMY_MOSFET}V1 a 0 5\nR1 a 0 1000\n\
+             * REF kind=pwc points=[[nan,0],[1,2]]\n"
+        ),
+    );
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "1e-4",
+        "--dt",
+        "1e-5",
+    ]);
+    assert!(
+        !output.status.success(),
+        "expected a NaN entry to be rejected, not accepted"
+    );
+    assert!(
+        output.status.code().is_some(),
+        "expected a clean process exit (error code), not a panic/abort"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("finite"),
+        "stderr should explain the value must be finite, got: {stderr}"
+    );
+}

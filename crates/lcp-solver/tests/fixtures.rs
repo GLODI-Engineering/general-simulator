@@ -3,7 +3,7 @@
 //! verification discipline (see `../../../docs/architecture.md`): numerical self-consistency
 //! is not enough, every fixture here has an independently worked complementary solution.
 
-use lcp_solver::{solve, LcpError};
+use lcp_solver::{solve, solve_with_covering_vector, LcpError};
 
 fn assert_close(actual: &[f64], expected: &[f64], tol: f64) {
     assert_eq!(actual.len(), expected.len(), "length mismatch");
@@ -113,4 +113,41 @@ fn ray_termination_on_infeasible_problem() {
     let q = vec![-1.0];
     let err = solve(&m, &q).expect_err("this LCP has no complementary solution");
     assert_eq!(err, LcpError::RayTermination);
+}
+
+/// NaN in q (e.g. from an overflowing upstream device parameter) used to reach a
+/// `partial_cmp().unwrap()` panic in the pivot-row selection instead of a clean error --
+/// verified here it now fails cleanly with `LcpError::NonFiniteInput`.
+#[test]
+fn nan_in_q_is_a_clean_error_not_a_panic() {
+    let m = vec![vec![1.0]];
+    let q = vec![f64::NAN];
+    let err = solve(&m, &q).expect_err("NaN in q must not be silently accepted");
+    assert_eq!(err, LcpError::NonFiniteInput);
+}
+
+/// Same check for M, and via the public `solve_with_covering_vector` entry point directly --
+/// this doubles as confirming that function is actually reachable from outside the crate (it's
+/// documented as the "explicit covering vector" escape hatch and must be re-exported for that
+/// to be true).
+#[test]
+fn nan_in_m_is_a_clean_error_via_solve_with_covering_vector() {
+    let m = vec![vec![f64::NAN]];
+    let q = vec![-1.0];
+    let d = vec![1.0];
+    let err = solve_with_covering_vector(&m, &q, &d).expect_err("NaN in M must be rejected");
+    assert_eq!(err, LcpError::NonFiniteInput);
+}
+
+/// `solve_with_covering_vector` with an explicit (non-all-ones) covering vector reproduces the
+/// same trivial-feasible-q fast path `solve` itself uses -- a minimal smoke test that the
+/// public entry point actually works, not just that it's reachable.
+#[test]
+fn solve_with_covering_vector_handles_the_trivial_feasible_case() {
+    let m = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+    let q = vec![2.0, 3.0];
+    let d = vec![2.0, 5.0];
+    let sol = solve_with_covering_vector(&m, &q, &d).unwrap();
+    assert_close(&sol.w, &q, 1e-12);
+    assert_close(&sol.z, &[0.0, 0.0], 1e-12);
 }

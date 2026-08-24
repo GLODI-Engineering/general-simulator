@@ -1,13 +1,13 @@
 //! Resolves every MOSFET's gate state, each transient step, from a graph of named,
-//! independently reusable `continuous-blocks` blocks (`Const`, `Pwc`, `Pwl`, `Sin`, `Pulse`,
-//! `Exp`, `Sffm`, `Sum`, `Gain`, `Pid`, `StateSpace`, `TransferFunction`, `Vco`, `Pwm`,
-//! `PhaseShiftPwm`, `Hysteresis`, `CoordinateTransform`, `Pmsm`, `CScript`) wired together by
-//! the caller — the same discipline a real block-diagram tool uses:
-//! an error
-//! signal is a `Sum`
-//! block's output, a filtered-derivative PID compensator is a `TransferFunction` given its own
-//! `N(s)/D(s)` coefficients, and a frequency-modulated PWM carrier is `Pid -> Gain ->
-//! PhaseShiftPwm`, not a single function that bakes a specific topology together.
+//! independently reusable `continuous-blocks` blocks (`Const`, `Time`, `Pwc`, `Pwl`, `Sin`,
+//! `Pulse`, `Exp`, `Sffm`, `Sum`, `Gain`, `Pid`, `StateSpace`, `TransferFunction`, `Vco`, `Pwm`,
+//! `PhaseShiftPwm`, `Product`, `Saturation`, `Table`, `MathFn1`/`2`/`3`, `Hysteresis`,
+//! `CoordinateTransform`, `Pmsm`, `CScript`, `Probe`, `Sig2Gate`, `Sig2Voltage`, `Sig2Current`)
+//! wired together by the caller — the same discipline a real block-diagram tool uses: an error
+//! signal is a `Sum` block's output, a filtered-derivative PID compensator is a
+//! `TransferFunction` given its own `N(s)/D(s)` coefficients, and a frequency-modulated PWM
+//! carrier is `Pid -> Gain -> PhaseShiftPwm`, not a single function that bakes a specific
+//! topology together.
 //!
 //! **There is no separate "closed-loop mode," and no non-block-driven gate at all** — every
 //! [`GateBinding`] is `Block(name)`, reading a named block's current output (`>= 0.5` means
@@ -392,7 +392,7 @@ impl GateBinding {
         }
     }
 
-    fn resolve(&self, _t: f64, outputs: &BTreeMap<String, f64>) -> GateState {
+    fn resolve(&self, outputs: &BTreeMap<String, f64>) -> GateState {
         let GateBinding::Block(name) = self;
         if outputs[name.as_str()] >= 0.5 {
             GateState::On
@@ -457,11 +457,16 @@ pub type TransientWithBlocksStep = (f64, OperatingPoint, BTreeMap<String, f64>);
 /// Name -> block index, including a [`BlockKind::CScript`]/[`BlockKind::CoordinateTransform`]/
 /// [`BlockKind::Pmsm`]'s extra `output_names` (aliasing the index of the block that declared
 /// them) — the one piece of bookkeeping both [`topological_order`] and the upfront gate-name
-/// validation in [`simulate_transient_with_blocks`] need identically.
-fn block_index_by_name(blocks: &[BlockInstance]) -> BTreeMap<&str, usize> {
+/// validation in [`simulate_transient_with_blocks`] need identically. Rejects any name — a
+/// block's own `.name`, or one of its extra `output_names` aliases — that collides with one
+/// already seen, rather than letting the later one silently win (see
+/// [`DaeError::DuplicateBlockName`]'s own doc comment for why that matters).
+fn block_index_by_name(blocks: &[BlockInstance]) -> Result<BTreeMap<&str, usize>, DaeError> {
     let mut index_of = BTreeMap::new();
     for (i, b) in blocks.iter().enumerate() {
-        index_of.insert(b.name.as_str(), i);
+        if index_of.insert(b.name.as_str(), i).is_some() {
+            return Err(DaeError::DuplicateBlockName(b.name.clone()));
+        }
         let extra: &[String] = match &b.kind {
             BlockKind::CScript { output_names, .. }
             | BlockKind::CoordinateTransform { output_names, .. }
@@ -471,10 +476,12 @@ fn block_index_by_name(blocks: &[BlockInstance]) -> BTreeMap<&str, usize> {
             _ => &[],
         };
         for name in extra.iter().skip(1) {
-            index_of.insert(name.as_str(), i);
+            if index_of.insert(name.as_str(), i).is_some() {
+                return Err(DaeError::DuplicateBlockName(name.clone()));
+            }
         }
     }
-    index_of
+    Ok(index_of)
 }
 
 /// A short, human-readable name for a `BlockKind`, for error messages that need to say what a
@@ -586,7 +593,7 @@ fn topological_order(blocks: &[BlockInstance]) -> Result<Vec<usize>, DaeError> {
         Ok(())
     }
 
-    let index_of = block_index_by_name(blocks);
+    let index_of = block_index_by_name(blocks)?;
     let mut color = vec![Color::White; blocks.len()];
     let mut order = Vec::with_capacity(blocks.len());
     let mut stack = Vec::new();
@@ -627,6 +634,27 @@ fn periodic_time(t: f64, points: &[(f64, f64)], repeat: bool) -> f64 {
 /// per-step work both [`TimeStep::Fixed`] and [`TimeStep::Adaptive`] need identically, factored
 /// out so the adaptive loop below can re-run it (against a *cloned* `block_states`) once per
 /// retry at a shrinking trial `dt`, without duplicating the block-dispatch match arms.
+/// Shared by [`BlockKind::Pwm`] and [`BlockKind::PhaseShiftPwm`]'s own `evaluate_blocks` arms:
+/// both modulators produce an **active-high complementary pair**, binding the primary output
+/// under the block's own name (the caller's job, this just returns it) and the secondary
+/// `complement` output under `output_names[1]` (inserted here, if given). One implementation so
+/// a third gate-driving modulator only has to call this, not re-derive the convention.
+fn emit_complementary_pair(
+    outputs: &mut BTreeMap<String, f64>,
+    output_names: &[String],
+    main: bool,
+    complement: bool,
+) -> f64 {
+    if let Some(name) = output_names.get(1) {
+        outputs.insert(name.clone(), if complement { 1.0 } else { 0.0 });
+    }
+    if main {
+        1.0
+    } else {
+        0.0
+    }
+}
+
 fn evaluate_blocks(
     blocks: &[BlockInstance],
     order: &[usize],
@@ -728,14 +756,7 @@ fn evaluate_blocks(
                     red * freq_hz,
                     fed * freq_hz,
                 );
-                if let Some(name) = output_names.get(1) {
-                    outputs.insert(name.clone(), if complement { 1.0 } else { 0.0 });
-                }
-                if main {
-                    1.0
-                } else {
-                    0.0
-                }
+                emit_complementary_pair(&mut outputs, output_names, main, complement)
             }
             (BlockKind::Saturation(limit), _) => math_ops::saturation(input_vals[0], *limit),
             (BlockKind::Table(points), _) => {
@@ -804,14 +825,7 @@ fn evaluate_blocks(
                     red * actual_freq,
                     fed * actual_freq,
                 );
-                if let Some(name) = output_names.get(1) {
-                    outputs.insert(name.clone(), if complement { 1.0 } else { 0.0 });
-                }
-                if main {
-                    1.0
-                } else {
-                    0.0
-                }
+                emit_complementary_pair(&mut outputs, output_names, main, complement)
             }
             (BlockKind::Pmsm { output_names, .. }, BlockState::Pmsm { pmsm, x }) => {
                 *x = pmsm.step(*x, input_vals[0], input_vals[1], input_vals[2], dt);
@@ -883,11 +897,10 @@ fn evaluate_blocks(
 fn resolve_gates(
     gates: &BTreeMap<String, GateBinding>,
     outputs: &BTreeMap<String, f64>,
-    t: f64,
 ) -> BTreeMap<String, GateState> {
     gates
         .iter()
-        .map(|(mosfet_name, binding)| (mosfet_name.clone(), binding.resolve(t, outputs)))
+        .map(|(mosfet_name, binding)| (mosfet_name.clone(), binding.resolve(outputs)))
         .collect()
 }
 
@@ -919,7 +932,7 @@ pub fn simulate_transient_with_blocks(
     // for all three) that a gate binding is just as free to reference directly -- all need to
     // count as "known" here, or a valid netlist referencing one of those extra names gets
     // rejected before it ever runs.
-    let block_names = block_index_by_name(blocks);
+    let block_names = block_index_by_name(blocks)?;
     for (mosfet_name, binding) in gates {
         for needed in binding.source_blocks().into_iter().flatten() {
             let Some(&idx) = block_names.get(needed) else {
@@ -1095,7 +1108,7 @@ pub fn simulate_transient_with_blocks(
                     t,
                     dt,
                 )?;
-                let gate_states = resolve_gates(gates, &outputs, t);
+                let gate_states = resolve_gates(gates, &outputs);
                 let states: BTreeMap<String, (Mosfet, GateState)> = mosfets
                     .iter()
                     .map(|(name, m)| {
@@ -1162,7 +1175,7 @@ pub fn simulate_transient_with_blocks(
                         t_candidate,
                         dt,
                     )?;
-                    let gate_states = resolve_gates(gates, &outputs, t_candidate);
+                    let gate_states = resolve_gates(gates, &outputs);
                     let states: BTreeMap<String, (Mosfet, GateState)> = mosfets
                         .iter()
                         .map(|(name, m)| {

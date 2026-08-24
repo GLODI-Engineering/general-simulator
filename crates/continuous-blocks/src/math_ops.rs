@@ -17,19 +17,9 @@ pub fn product(inputs: &[f64]) -> f64 {
     inputs.iter().product()
 }
 
-/// Compares a periodic ramp (as produced by [`crate::Vco`], in `[0, 1)`) against a duty
-/// threshold, with an optional phase offset — the standard way a PWM carrier or oscillator
-/// output becomes a logic/gate signal (block-diagram simulation tools typically offer an
-/// equivalent relational-operator-on-a-ramp block). Kept separate from `Vco` itself so one
-/// shared oscillator can
-/// drive several independently-phased/duty-shifted gates (e.g. a half-bridge's two
-/// complementary switches) without needing a second oscillator instance.
-pub fn pwm_from_ramp(ramp: f64, phase_offset: f64, duty: f64) -> bool {
-    (ramp + phase_offset).rem_euclid(1.0) < duty
-}
-
-/// Compares a carrier phase `theta` (`[0, 1)`, e.g. from [`pwm_from_ramp`]'s own `(ramp +
-/// phase_offset).rem_euclid(1.0)` or [`crate::closed_loop::sawtooth_carrier`]) against `duty`,
+/// Compares a carrier phase `theta` (`[0, 1)`, e.g. a periodic ramp's own `(ramp +
+/// phase_offset).rem_euclid(1.0)`, as produced by [`crate::Vco`], or
+/// [`crate::closed_loop::sawtooth_carrier`]) against `duty`,
 /// producing an **active-high complementary pair** `(main, complement)` with independently
 /// configurable dead time on each edge — the shared primitive every gate-driving modulator in
 /// this crate uses, so "how dead time is inserted" only has one implementation to get right.
@@ -149,14 +139,5 @@ mod tests {
             let (main, comp) = complementary_pwm_with_deadtime(theta, 0.4, 0.05, 0.1);
             assert!(!(main && comp), "theta={theta}: both on simultaneously");
         }
-    }
-
-    #[test]
-    fn pwm_from_ramp_compares_against_duty_with_phase_offset() {
-        assert!(pwm_from_ramp(0.1, 0.0, 0.48));
-        assert!(!pwm_from_ramp(0.5, 0.0, 0.48));
-        // phase_offset=0.5 shifts the comparison window by half a period
-        assert!(pwm_from_ramp(0.6, 0.5, 0.48));
-        assert!(!pwm_from_ramp(0.1, 0.5, 0.48));
     }
 }

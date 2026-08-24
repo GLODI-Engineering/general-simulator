@@ -682,7 +682,7 @@ fn parse_xy_points(
         };
         points.push((*x, *y));
     }
-    points.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    points.sort_by(|a, b| a.0.total_cmp(&b.0));
     Ok(points)
 }
 
@@ -701,12 +701,24 @@ fn parse_vector(
     split_top_level(inner)
         .into_iter()
         .map(|v| {
-            v.parse::<f64>().map_err(|_| {
+            let parsed: f64 = v.parse().map_err(|_| {
                 format!(
                     "line {}: device '{name}' field '{field}' entry '{v}' is not a number",
                     line_number + 1
                 )
-            })
+            })?;
+            // `f64::from_str` accepts "nan"/"inf"/"-inf" as valid floats, but a NaN or
+            // infinity here would otherwise silently reach a downstream `partial_cmp().unwrap()`
+            // (this file's own `points` sort, or `lcp-solver`'s pivot selection) and panic the
+            // whole process instead of failing this one netlist line cleanly.
+            if !parsed.is_finite() {
+                return Err(format!(
+                    "line {}: device '{name}' field '{field}' entry '{v}' must be a finite \
+                     number (got {parsed})",
+                    line_number + 1
+                ));
+            }
+            Ok(parsed)
         })
         .collect()
 }
@@ -1005,7 +1017,12 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                 inputs: vec![parse_signal(&get_str("in")?)],
             }),
             "pid" => {
-                let pid = Pid::new(get("kp")?, get("ki")?, get("kd")?, get("n")?);
+                let pid = Pid::new(get("kp")?, get("ki")?, get("kd")?, get("n")?).map_err(|e| {
+                    format!(
+                        "line {}: device '{name}': invalid PID ({e:?})",
+                        line_number + 1
+                    )
+                })?;
                 let error_input = parse_signal(&get_str("in")?);
                 let (clamp, inputs) = match (fields.get("clamp_lo_in"), fields.get("clamp_hi_in")) {
                     (Some(lo), Some(hi)) => (
@@ -1032,7 +1049,12 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                 })
             }
             "vco" => {
-                let vco = Vco::new(get("f_min")?, get("f_max")?);
+                let vco = Vco::new(get("f_min")?, get("f_max")?).map_err(|e| {
+                    format!(
+                        "line {}: device '{name}': invalid vco ({e:?})",
+                        line_number + 1
+                    )
+                })?;
                 Kind::Block(BlockInstance {
                     name: name.to_string(),
                     kind: BlockKind::Vco(vco),
@@ -1091,7 +1113,12 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                 })
             }
             "pspwm" => {
-                let osc = Vco::new(get("f_min")?, get("f_max")?);
+                let osc = Vco::new(get("f_min")?, get("f_max")?).map_err(|e| {
+                    format!(
+                        "line {}: device '{name}': invalid pspwm oscillator ({e:?})",
+                        line_number + 1
+                    )
+                })?;
                 let inputs: Vec<Signal> = get_str("inputs")?.split(',').map(parse_signal).collect();
                 if inputs.len() != 3 {
                     return Err(format!(
@@ -1141,7 +1168,12 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                 })
             }
             "hysteresis" => {
-                let hysteresis = Hysteresis::new(get("high")?, get("low")?);
+                let hysteresis = Hysteresis::new(get("high")?, get("low")?).map_err(|e| {
+                    format!(
+                        "line {}: device '{name}': invalid hysteresis ({e:?})",
+                        line_number + 1
+                    )
+                })?;
                 Kind::Block(BlockInstance {
                     name: name.to_string(),
                     kind: BlockKind::Hysteresis(hysteresis),
@@ -1198,13 +1230,16 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                     .unwrap_or(0.0);
                 let b: Vec<Vec<f64>> = b_vec.into_iter().map(|v| vec![v]).collect();
                 let c: Vec<Vec<f64>> = vec![c_vec];
-                let ss = StateSpace {
-                    a,
-                    b,
-                    c,
-                    d: vec![vec![d]],
-                    e: None,
-                };
+                // No `e=` field exposed at the CLI level yet, so this is always the trivial
+                // (always-valid) e=None case -- StateSpace::new still runs the same check every
+                // other block-kind constructor here does, so a future `e=` field only has to
+                // add parsing, not a new validation path.
+                let ss = StateSpace::new(a, b, c, vec![vec![d]], None).map_err(|e| {
+                    format!(
+                        "line {}: device '{name}': invalid statespace ({e:?})",
+                        line_number + 1
+                    )
+                })?;
                 Kind::Block(BlockInstance {
                     name: name.to_string(),
                     kind: BlockKind::StateSpace(ss),
@@ -1345,7 +1380,13 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                     get("pole_pairs")?,
                     get("inertia")?,
                     get("friction")?,
-                );
+                )
+                .map_err(|e| {
+                    format!(
+                        "line {}: device '{name}': invalid pmsm ({e:?})",
+                        line_number + 1
+                    )
+                })?;
                 let inputs: Vec<Signal> = get_str("inputs")?.split(',').map(parse_signal).collect();
                 if inputs.len() != 3 {
                     return Err(format!(

@@ -44,6 +44,15 @@ pub struct Pmsm {
     pub friction: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PmsmError {
+    NegativeResistance,
+    NonPositiveInductance,
+    NonPositivePolePairs,
+    NonPositiveInertia,
+    NegativeFriction,
+}
+
 impl Pmsm {
     pub fn new(
         r_s: f64,
@@ -53,13 +62,23 @@ impl Pmsm {
         pole_pairs: f64,
         inertia: f64,
         friction: f64,
-    ) -> Self {
-        assert!(r_s >= 0.0, "r_s must be nonnegative");
-        assert!(l_d > 0.0 && l_q > 0.0, "l_d and l_q must be positive");
-        assert!(pole_pairs > 0.0, "pole_pairs must be positive");
-        assert!(inertia > 0.0, "inertia must be positive");
-        assert!(friction >= 0.0, "friction must be nonnegative");
-        Pmsm {
+    ) -> Result<Self, PmsmError> {
+        if r_s < 0.0 {
+            return Err(PmsmError::NegativeResistance);
+        }
+        if !(l_d > 0.0 && l_q > 0.0) {
+            return Err(PmsmError::NonPositiveInductance);
+        }
+        if pole_pairs <= 0.0 {
+            return Err(PmsmError::NonPositivePolePairs);
+        }
+        if inertia <= 0.0 {
+            return Err(PmsmError::NonPositiveInertia);
+        }
+        if friction < 0.0 {
+            return Err(PmsmError::NegativeFriction);
+        }
+        Ok(Pmsm {
             r_s,
             l_d,
             l_q,
@@ -67,7 +86,7 @@ impl Pmsm {
             pole_pairs,
             inertia,
             friction,
-        }
+        })
     }
 
     /// Electromagnetic torque (N*m) at a given `id`/`iq` operating point — the standard
@@ -122,7 +141,7 @@ mod tests {
 
     #[test]
     fn torque_matches_hand_derived_formula_including_reluctance_term() {
-        let motor = Pmsm::new(1.0, 2e-3, 3e-3, 0.05, 4.0, 1e-4, 0.0);
+        let motor = Pmsm::new(1.0, 2e-3, 3e-3, 0.05, 4.0, 1e-4, 0.0).unwrap();
         // Te = 1.5 * p * (lambda_pm*iq + (Ld-Lq)*id*iq)
         //    = 1.5 * 4 * (0.05*2.0 + (2e-3-3e-3)*1.5*2.0)
         //    = 6 * (0.1 - 0.003) = 6 * 0.097 = 0.582
@@ -131,7 +150,7 @@ mod tests {
 
         // Surface-mount case (Ld=Lq): reluctance term vanishes, torque is purely
         // current-proportional.
-        let surface = Pmsm::new(1.0, 2e-3, 2e-3, 0.05, 4.0, 1e-4, 0.0);
+        let surface = Pmsm::new(1.0, 2e-3, 2e-3, 0.05, 4.0, 1e-4, 0.0).unwrap();
         let te_surface = surface.torque(1.5, 2.0);
         assert!((te_surface - 1.5 * 4.0 * 0.05 * 2.0).abs() < 1e-12);
     }
@@ -145,7 +164,7 @@ mod tests {
     /// internal self-consistency.
     #[test]
     fn d_axis_step_response_matches_hand_derived_rl_circuit_when_decoupled() {
-        let motor = Pmsm::new(2.0, 5e-3, 5e-3, 0.05, 4.0, 1e-4, 0.0);
+        let motor = Pmsm::new(2.0, 5e-3, 5e-3, 0.05, 4.0, 1e-4, 0.0).unwrap();
         let (vd, r, l) = (10.0, 2.0, 5e-3);
         let tau = l / r;
 
@@ -175,7 +194,7 @@ mod tests {
     /// with no closed-form solution.
     #[test]
     fn full_coupled_system_converges_at_fourth_order() {
-        let motor = Pmsm::new(1.0, 3e-3, 5e-3, 0.08, 4.0, 2e-4, 1e-4);
+        let motor = Pmsm::new(1.0, 3e-3, 5e-3, 0.08, 4.0, 2e-4, 1e-4).unwrap();
         let x0 = [0.0, 0.0, 50.0, 0.0];
         let (vd, vq, t_load) = (20.0, 40.0, 0.02);
         let t_final = 2e-3;
@@ -217,5 +236,29 @@ mod tests {
         assert!((Pmsm::theta_e_wrapped(0.5) - 0.5).abs() < 1e-12);
         assert!((Pmsm::theta_e_wrapped(2.0 * PI + 0.5) - 0.5).abs() < 1e-12);
         assert!((Pmsm::theta_e_wrapped(-0.5) - (2.0 * PI - 0.5)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn invalid_parameters_are_rejected_not_a_panic() {
+        assert_eq!(
+            Pmsm::new(-1.0, 2e-3, 2e-3, 0.05, 4.0, 1e-4, 0.0),
+            Err(PmsmError::NegativeResistance)
+        );
+        assert_eq!(
+            Pmsm::new(1.0, 0.0, 2e-3, 0.05, 4.0, 1e-4, 0.0),
+            Err(PmsmError::NonPositiveInductance)
+        );
+        assert_eq!(
+            Pmsm::new(1.0, 2e-3, 2e-3, 0.05, 0.0, 1e-4, 0.0),
+            Err(PmsmError::NonPositivePolePairs)
+        );
+        assert_eq!(
+            Pmsm::new(1.0, 2e-3, 2e-3, 0.05, 4.0, 0.0, 0.0),
+            Err(PmsmError::NonPositiveInertia)
+        );
+        assert_eq!(
+            Pmsm::new(1.0, 2e-3, 2e-3, 0.05, 4.0, 1e-4, -1.0),
+            Err(PmsmError::NegativeFriction)
+        );
     }
 }

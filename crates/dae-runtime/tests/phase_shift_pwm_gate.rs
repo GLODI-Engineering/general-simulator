@@ -52,7 +52,7 @@ fn phase_shift_pwm_gate_matches_hand_computed_switching_instants() {
         BlockInstance {
             name: "MOD".to_string(),
             kind: BlockKind::PhaseShiftPwm {
-                osc: continuous_blocks::Vco::new(100_000.0, 100_000.0),
+                osc: continuous_blocks::Vco::new(100_000.0, 100_000.0).unwrap(),
                 red: 0.0,
                 fed: 0.0,
                 output_names: vec!["MOD".to_string(), "MOD_COMP".to_string()],

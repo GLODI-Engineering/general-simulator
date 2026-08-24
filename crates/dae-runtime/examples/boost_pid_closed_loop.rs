@@ -22,7 +22,7 @@ fn main() {
     diodes.insert("D2".to_string(), Diode::new(0.0, -100.0, 0.0, 0.6, 100.0));
 
     let reference = 24.0;
-    let pid = Pid::new(0.01, 20.0, 0.0, 1000.0);
+    let pid = Pid::new(0.01, 20.0, 0.0, 1000.0).unwrap();
     let controller = pid.to_state_space();
 
     let switching_freq = 100_000.0;

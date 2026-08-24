@@ -21,4 +21,4 @@
 mod lemke;
 mod tableau;
 
-pub use lemke::{solve, LcpError, Solution};
+pub use lemke::{solve, solve_with_covering_vector, LcpError, Solution};

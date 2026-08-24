@@ -20,7 +20,7 @@ fn pmsm_block_matches_hand_derived_rl_circuit_when_decoupled() {
     let gates = BTreeMap::new();
 
     let (r, l, vd) = (2.0, 5e-3, 10.0);
-    let pmsm = continuous_blocks::Pmsm::new(r, l, l, 0.05, 4.0, 1e-4, 0.0);
+    let pmsm = continuous_blocks::Pmsm::new(r, l, l, 0.05, 4.0, 1e-4, 0.0).unwrap();
 
     let blocks = vec![
         BlockInstance {

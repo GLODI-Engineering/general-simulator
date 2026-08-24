@@ -1,7 +1,6 @@
-//! Continuous-time block-diagram elements — transfer function, state-space, PID, integrator,
-//! filtered derivative, voltage-controlled oscillator, hysteresis (Schmitt-trigger) comparator,
-//! and stateless math ops (gain, sum, product, saturation, ramp-to-PWM) — matching the standard
-//! `Continuous`/`Math Operations`
+//! Continuous-time block-diagram elements — transfer function, state-space, PID,
+//! voltage-controlled oscillator, hysteresis (Schmitt-trigger) comparator, and stateless math
+//! ops (gain, sum, product, saturation) — matching the standard `Continuous`/`Math Operations`
 //! block sets common to block-diagram simulation tools. Each block does one
 //! job and is meant to be wired to the others by the caller — an error signal is a `Sum`
 //! block's output, not something a controller computes internally, and a frequency-modulated
@@ -25,7 +24,6 @@
 //! assembly, is a later milestone.
 
 pub mod coordinate_transforms;
-pub mod dynamics;
 mod hysteresis;
 pub mod math_ops;
 mod pid;
@@ -36,11 +34,10 @@ mod vco;
 pub mod waveform_arithmetic;
 
 pub use coordinate_transforms::CoordinateTransform;
-pub use dynamics::{derivative_filtered, integrator};
-pub use hysteresis::Hysteresis;
-pub use pid::Pid;
-pub use pmsm::Pmsm;
-pub use state_space::{SingularMatrix, StateSpace};
+pub use hysteresis::{Hysteresis, HysteresisError};
+pub use pid::{Pid, PidError};
+pub use pmsm::{Pmsm, PmsmError};
+pub use state_space::{StateSpace, StateSpaceError};
 pub use transfer_function::{TransferFunction, TransferFunctionError};
-pub use vco::Vco;
+pub use vco::{Vco, VcoError};
 pub use waveform_arithmetic::{MathFn1, MathFn2, MathFn3};

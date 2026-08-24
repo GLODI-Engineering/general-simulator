@@ -130,6 +130,14 @@ pub enum DaeError {
         expected_kind: &'static str,
         found_kind: &'static str,
     },
+    /// Two blocks in the same slice resolve to the same name — either two
+    /// [`block_graph::BlockInstance`]s declared with the same `.name`, or one block's own
+    /// extra `output_names` entry (a [`block_graph::BlockKind::CScript`]/`CoordinateTransform`/
+    /// `Pmsm`/`Pwm`/`PhaseShiftPwm`'s secondary output alias) colliding with another block's
+    /// name. Without this check, `block_index_by_name`'s `BTreeMap::insert` would silently let
+    /// the later one win, so a `Signal::Block(name)` reference would silently resolve to the
+    /// wrong block instead of failing loudly.
+    DuplicateBlockName(String),
 }
 
 /// Solves the DC operating point of a netlist containing linear devices plus any number of

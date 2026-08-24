@@ -47,7 +47,7 @@ fn pi_controller_regulates_output_to_reference_at_steady_state() {
     let diodes = BTreeMap::new();
 
     let reference = 6.0;
-    let pid = Pid::new(0.05, 50.0, 0.0, 1000.0);
+    let pid = Pid::new(0.05, 50.0, 0.0, 1000.0).unwrap();
     let controller = pid.to_state_space();
 
     let switching_freq = 10_000.0;

@@ -95,13 +95,8 @@ impl TransferFunction {
         let c: Vec<Vec<f64>> = vec![b_coeffs];
         let d: Vec<Vec<f64>> = vec![vec![d_feedthrough]];
 
-        StateSpace {
-            a,
-            b,
-            c,
-            d,
-            e: None,
-        }
+        // e: None always passes StateSpace::new's own validation trivially.
+        StateSpace::new(a, b, c, d, None).expect("e=None is always a valid descriptor matrix")
     }
 }
 

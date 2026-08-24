@@ -19,10 +19,17 @@ pub struct Vco {
     pub f_max: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VcoError {
+    FMinExceedsFMax,
+}
+
 impl Vco {
-    pub fn new(f_min: f64, f_max: f64) -> Self {
-        assert!(f_min <= f_max, "f_min must not exceed f_max");
-        Vco { f_min, f_max }
+    pub fn new(f_min: f64, f_max: f64) -> Result<Self, VcoError> {
+        if f_min > f_max {
+            return Err(VcoError::FMinExceedsFMax);
+        }
+        Ok(Vco { f_min, f_max })
     }
 
     /// Advances the oscillator by one step. `phase` is the previous step's output (in `[0,
@@ -40,14 +47,14 @@ mod tests {
 
     #[test]
     fn steps_at_the_commanded_frequency_before_wrapping() {
-        let vco = Vco::new(0.0, 200_000.0);
+        let vco = Vco::new(0.0, 200_000.0).unwrap();
         let phase = vco.step(0.0, 100_000.0, 1e-8);
         assert!((phase - 1e-3).abs() < 1e-12);
     }
 
     #[test]
     fn wraps_around_at_one() {
-        let vco = Vco::new(0.0, 200_000.0);
+        let vco = Vco::new(0.0, 200_000.0).unwrap();
         // freq=100_000, dt=1e-5 -> raw phase advance = 1.0 exactly -> wraps to 0.0
         let phase = vco.step(0.0, 100_000.0, 1e-5);
         assert!(phase.abs() < 1e-9);
@@ -58,7 +65,7 @@ mod tests {
 
     #[test]
     fn clamps_frequency_command_to_range() {
-        let vco = Vco::new(50_000.0, 100_000.0);
+        let vco = Vco::new(50_000.0, 100_000.0).unwrap();
         // command far above f_max should behave as if commanded exactly at f_max
         let phase_over = vco.step(0.0, 1_000_000.0, 1e-8);
         let phase_at_max = vco.step(0.0, 100_000.0, 1e-8);
@@ -67,5 +74,13 @@ mod tests {
         let phase_under = vco.step(0.0, -1_000_000.0, 1e-8);
         let phase_at_min = vco.step(0.0, 50_000.0, 1e-8);
         assert_eq!(phase_under, phase_at_min);
+    }
+
+    #[test]
+    fn f_min_exceeding_f_max_is_rejected_not_a_panic() {
+        assert_eq!(
+            Vco::new(200_000.0, 100_000.0),
+            Err(VcoError::FMinExceedsFMax)
+        );
     }
 }

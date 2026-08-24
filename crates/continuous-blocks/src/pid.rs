@@ -19,9 +19,20 @@ pub struct Pid {
     pub n: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PidError {
+    /// `n <= 0` puts the derivative filter's pole at `-n`, i.e. at the origin or in the
+    /// right half-plane — a non-causal or outright unstable filter, not the standard,
+    /// universally-used approximation this parameterization exists to give.
+    NonPositiveFilterCoefficient,
+}
+
 impl Pid {
-    pub fn new(kp: f64, ki: f64, kd: f64, n: f64) -> Self {
-        Pid { kp, ki, kd, n }
+    pub fn new(kp: f64, ki: f64, kd: f64, n: f64) -> Result<Self, PidError> {
+        if n <= 0.0 {
+            return Err(PidError::NonPositiveFilterCoefficient);
+        }
+        Ok(Pid { kp, ki, kd, n })
     }
 
     /// Puts `C(s)` over the common denominator `s*(s+N)`:
@@ -61,10 +72,22 @@ mod tests {
         // against the expanded-by-hand form for a concrete (Kp, Ki, N), as an independent
         // arithmetic check of the formula itself (not just that the code returns its own
         // formula back).
-        let pid = Pid::new(2.0, 3.0, 0.0, 10.0);
+        let pid = Pid::new(2.0, 3.0, 0.0, 10.0).unwrap();
         let tf = pid.to_transfer_function();
         // (s+10)(2s+3) = 2s^2 + 3s + 20s + 30 = 2s^2 + 23s + 30
         assert_eq!(tf.num, vec![2.0, 23.0, 30.0]);
         assert_eq!(tf.den, vec![1.0, 10.0, 0.0]);
+    }
+
+    #[test]
+    fn non_positive_filter_coefficient_is_rejected_not_silently_unstable() {
+        assert_eq!(
+            Pid::new(2.0, 3.0, 0.5, 0.0),
+            Err(PidError::NonPositiveFilterCoefficient)
+        );
+        assert_eq!(
+            Pid::new(2.0, 3.0, 0.5, -10.0),
+            Err(PidError::NonPositiveFilterCoefficient)
+        );
     }
 }
