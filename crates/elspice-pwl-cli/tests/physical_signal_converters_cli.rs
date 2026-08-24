@@ -1,8 +1,8 @@
-//! `kind=probe`/`kind=sig2gate`/`kind=sig2v`/`kind=sig2i` through the real CLI device-file
+//! `kind=probe`/`kind=sig2gate`/`kind=sig2voltage`/`kind=sig2current` through the real CLI
 //! parser — an end-to-end check that the enforced physical/signal-domain converter grammar
 //! documented in `main.rs`'s module doc comment actually parses and reaches `dae-runtime`'s
 //! block graph, not just the `BlockKind` construction tested directly in `dae-runtime`'s own
-//! `probe_block.rs`/`sig2gate_enforcement.rs`/`sig2v_sig2i.rs`.
+//! `probe_block.rs`/`sig2gate_enforcement.rs`/`sig2voltage_sig2current.rs`.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -136,7 +136,7 @@ fn sig2gate_wrapper_makes_gate_block_work() {
 }
 
 #[test]
-fn sig2v_drives_a_voltage_source_via_its_own_literal_value_field() {
+fn sig2voltage_drives_a_voltage_source_via_its_own_literal_value_field() {
     // A dummy always-off MOSFET reaches the block-graph code path; the real action is CMD_V
     // driving V1's own magnitude directly, checked against Ohm's law on a pure resistive
     // divider (V(a) must equal CMD's own commanded value exactly).
@@ -145,7 +145,7 @@ fn sig2v_drives_a_voltage_source_via_its_own_literal_value_field() {
          OFFGATE kind=sig2gate in=OFFVAL\n\
          D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 gate=block ctrl=OFFGATE\n\
          CMD kind=const value=7\n\
-         CMD_V kind=sig2v in=CMD\n",
+         CMD_V kind=sig2voltage in=CMD\n",
     );
     let netlist_path = write_devices_file("V1 a 0 CMD_V\nD1 a b mosfetmodel\nR1 b 0 1000\n");
 

@@ -117,6 +117,20 @@ impl CoordinateTransform {
         }
     }
 
+    /// The `kind=` keyword that selects this transform at the CLI level — used for diagnostics
+    /// that need to name *this specific* transform rather than the `CoordinateTransform` family
+    /// as a whole, e.g. `dae-runtime`'s own `block_kind_name`.
+    pub fn name(self) -> &'static str {
+        match self {
+            CoordinateTransform::Clarke => "clarke",
+            CoordinateTransform::ClarkeInv => "clarkeinv",
+            CoordinateTransform::Park => "park",
+            CoordinateTransform::ParkInv => "parkinv",
+            CoordinateTransform::ClarkePark => "clarkepark",
+            CoordinateTransform::ClarkeParkInv => "clarkeparkinv",
+        }
+    }
+
     /// Conventional names for this transform's outputs, in the order [`Self::call`] returns
     /// them — a caller wiring up a `dae-runtime` block graph names each output block after one
     /// of these (e.g. `"pll_alpha"`, `"pll_beta"`, `"pll_zero"`).

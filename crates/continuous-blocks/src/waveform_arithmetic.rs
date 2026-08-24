@@ -188,6 +188,42 @@ impl MathFn1 {
         })
     }
 
+    /// The exact inverse of [`Self::from_name`] — the `kind=` keyword that selects this
+    /// function at the CLI level. Used for diagnostics that need to name *this specific*
+    /// function rather than the `MathFn1` family as a whole, e.g. `dae-runtime`'s own
+    /// `block_kind_name`.
+    pub fn name(self) -> &'static str {
+        use MathFn1::*;
+        match self {
+            Abs => "abs",
+            Acos => "acos",
+            Acosh => "acosh",
+            Asin => "asin",
+            Asinh => "asinh",
+            Atan => "atan",
+            Atanh => "atanh",
+            Buf => "buf",
+            Ceil => "ceil",
+            Cos => "cos",
+            Cosh => "cosh",
+            Exp => "exp",
+            Floor => "floor",
+            Int => "int",
+            Inv => "inv",
+            Ln => "ln",
+            Log10 => "log10",
+            Round => "round",
+            Sgn => "sgn",
+            Sin => "sin",
+            Sinh => "sinh",
+            Sqrt => "sqrt",
+            Tan => "tan",
+            Tanh => "tanh",
+            U => "u",
+            Uramp => "uramp",
+        }
+    }
+
     pub fn call(self, x: f64) -> f64 {
         use MathFn1::*;
         match self {
@@ -257,6 +293,21 @@ impl MathFn2 {
         })
     }
 
+    /// The exact inverse of [`Self::from_name`] — see [`MathFn1::name`]'s own doc comment.
+    pub fn name(self) -> &'static str {
+        use MathFn2::*;
+        match self {
+            Atan2 => "atan2",
+            AngleWrapped => "angle_wrapped",
+            Hypot => "hypot",
+            Max => "max",
+            Min => "min",
+            Pow => "pow",
+            Pwr => "pwr",
+            Pwrs => "pwrs",
+        }
+    }
+
     pub fn call(self, x: f64, y: f64) -> f64 {
         use MathFn2::*;
         match self {
@@ -287,6 +338,14 @@ impl MathFn3 {
             "limit" => Limit,
             _ => return None,
         })
+    }
+
+    /// The exact inverse of [`Self::from_name`] — see [`MathFn1::name`]'s own doc comment.
+    pub fn name(self) -> &'static str {
+        match self {
+            MathFn3::If => "if",
+            MathFn3::Limit => "limit",
+        }
     }
 
     pub fn call(self, x: f64, y: f64, z: f64) -> f64 {

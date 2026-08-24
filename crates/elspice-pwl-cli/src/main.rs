@@ -104,12 +104,13 @@
 //!   identity pass-through numerically — its whole purpose is marking, in the netlist text,
 //!   exactly where a signal stops being "a number a controller computed" and starts being "a
 //!   command that actuates a physical switch."
-//! - `kind=sig2v in=<signal>` / `kind=sig2i in=<signal>` are the **only** legal way a
+//! - `kind=sig2voltage in=<signal>` / `kind=sig2current in=<signal>` are the **only** legal way a
 //!   signal-domain block drives an independent voltage/current source's own magnitude — name
 //!   the converter block directly as that source's own literal value in the netlist, e.g. `V1 a
-//!   0 VDRV` where `VDRV kind=sig2v in=CTRL` was declared earlier (`elspice-mna` already accepts
-//!   a bare symbol there; no change was needed on that side). `V` sources need `sig2v`, `I`
-//!   sources need `sig2i` — a mismatch, or naming any other kind of block, is rejected
+//!   0 VDRV` where `VDRV kind=sig2voltage in=CTRL` was declared earlier (`elspice-mna` already
+//!   accepts a bare symbol there; no change was needed on that side). `V` sources need
+//!   `sig2voltage`, `I` sources need `sig2current` — a mismatch, or naming any other kind of
+//!   block, is rejected
 //!   (`dae_runtime::DaeError::SourceNotSig2PhysicalConverter`) before any step runs. This closes
 //!   a real, previously-open gap: without it, a block could only ever *observe* the circuit
 //!   (via `kind=probe`), never load or drive it — see `elspice-pwl-buck-dc-motor-cascade` in the
@@ -1217,12 +1218,12 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                 kind: BlockKind::Sig2Gate,
                 inputs: vec![parse_signal(&get_str("in")?)],
             }),
-            "sig2v" => Kind::Block(BlockInstance {
+            "sig2voltage" => Kind::Block(BlockInstance {
                 name: name.to_string(),
                 kind: BlockKind::Sig2Voltage,
                 inputs: vec![parse_signal(&get_str("in")?)],
             }),
-            "sig2i" => Kind::Block(BlockInstance {
+            "sig2current" => Kind::Block(BlockInstance {
                 name: name.to_string(),
                 kind: BlockKind::Sig2Current,
                 inputs: vec![parse_signal(&get_str("in")?)],

@@ -21,7 +21,7 @@ use pwl_devices::{Diode, Mosfet};
 use spice_core::Dialect;
 
 #[test]
-fn sig2v_drives_a_voltage_source_exactly_through_a_pwl_ramp() {
+fn sig2voltage_drives_a_voltage_source_exactly_through_a_pwl_ramp() {
     // V1's own literal names CMD_V directly -- elspice-mna already accepts a bare symbol there
     // (Expression::Symbol), confirmed to need no change on that side.
     let netlist = "V1 a 0 CMD_V\nR1 a 0 1000";
@@ -75,7 +75,7 @@ fn sig2v_drives_a_voltage_source_exactly_through_a_pwl_ramp() {
 }
 
 #[test]
-fn sig2i_drives_a_current_source_matching_ohms_law_exactly() {
+fn sig2current_drives_a_current_source_matching_ohms_law_exactly() {
     let netlist = "I1 0 a CMD_I\nR1 a 0 1000";
     let mosfets: BTreeMap<String, Mosfet> = BTreeMap::new();
     let diodes: BTreeMap<String, Diode> = BTreeMap::new();
@@ -162,8 +162,8 @@ fn a_voltage_source_naming_a_sig2current_block_is_rejected() {
         } => {
             assert_eq!(source, "V1");
             assert_eq!(block, "CMD_I");
-            assert_eq!(expected_kind, "sig2v");
-            assert_eq!(found_kind, "sig2i");
+            assert_eq!(expected_kind, "sig2voltage");
+            assert_eq!(found_kind, "sig2current");
         }
         other => panic!("expected SourceNotSig2PhysicalConverter, got {other:?}"),
     }
@@ -204,7 +204,7 @@ fn a_voltage_source_naming_a_plain_block_directly_is_rejected() {
         } => {
             assert_eq!(source, "V1");
             assert_eq!(block, "CMD");
-            assert_eq!(expected_kind, "sig2v");
+            assert_eq!(expected_kind, "sig2voltage");
             assert_eq!(found_kind, "const");
         }
         other => panic!("expected SourceNotSig2PhysicalConverter, got {other:?}"),
@@ -212,7 +212,7 @@ fn a_voltage_source_naming_a_plain_block_directly_is_rejected() {
 }
 
 #[test]
-fn sig2v_driven_source_produces_correct_rc_charging_dynamics_under_trapezoidal() {
+fn sig2voltage_driven_source_produces_correct_rc_charging_dynamics_under_trapezoidal() {
     // R1=1k, C1=1uF -> tau=1ms. CMD steps 0V -> 10V at t=0 (a plain PWL, not a fixed literal),
     // driving V1 through CMD_V -- unlike the two resistive-only tests above, C1 gives this
     // circuit a real K != 0, so Scheme::Trapezoidal's own u_prev history-averaging path is

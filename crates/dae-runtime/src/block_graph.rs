@@ -486,10 +486,10 @@ fn block_kind_name(kind: &BlockKind) -> &'static str {
         BlockKind::Time => "time",
         BlockKind::Pwc { .. } => "pwc",
         BlockKind::Pwl { .. } => "pwl",
-        BlockKind::Waveform(TransientFunction::Sin { .. }) => "sin",
-        BlockKind::Waveform(TransientFunction::Pulse { .. }) => "pulse",
-        BlockKind::Waveform(TransientFunction::Exp { .. }) => "exp",
-        BlockKind::Waveform(TransientFunction::Sffm { .. }) => "sffm",
+        BlockKind::Waveform(TransientFunction::Sin { .. }) => "sinwave",
+        BlockKind::Waveform(TransientFunction::Pulse { .. }) => "pulsewave",
+        BlockKind::Waveform(TransientFunction::Exp { .. }) => "expwave",
+        BlockKind::Waveform(TransientFunction::Sffm { .. }) => "sffmwave",
         // Never actually constructed (elspice-pwl-cli only builds `Waveform` from
         // Sin/Pulse/Exp/Sffm — a Pwl-shaped waveform always goes through `BlockKind::Pwl`
         // above instead, since only that variant supports `repeat`), but `TransientFunction`
@@ -506,17 +506,17 @@ fn block_kind_name(kind: &BlockKind) -> &'static str {
         BlockKind::Product => "product",
         BlockKind::Saturation(_) => "saturation",
         BlockKind::Table(_) => "table",
-        BlockKind::MathFn1(_) => "mathfn1",
-        BlockKind::MathFn2(_) => "mathfn2",
-        BlockKind::MathFn3(_) => "mathfn3",
+        BlockKind::MathFn1(f) => f.name(),
+        BlockKind::MathFn2(f) => f.name(),
+        BlockKind::MathFn3(f) => f.name(),
         BlockKind::Hysteresis(_) => "hysteresis",
         BlockKind::CScript { .. } => "cscript",
-        BlockKind::CoordinateTransform { .. } => "coordinate_transform",
+        BlockKind::CoordinateTransform { kind, .. } => kind.name(),
         BlockKind::Pmsm { .. } => "pmsm",
         BlockKind::Probe(_) => "probe",
         BlockKind::Sig2Gate => "sig2gate",
-        BlockKind::Sig2Voltage => "sig2v",
-        BlockKind::Sig2Current => "sig2i",
+        BlockKind::Sig2Voltage => "sig2voltage",
+        BlockKind::Sig2Current => "sig2current",
     }
 }
 
@@ -982,8 +982,8 @@ pub fn simulate_transient_with_blocks(
             continue;
         };
         let expected = match name.chars().next() {
-            Some('V') | Some('v') => (BlockKind::Sig2Voltage, "sig2v"),
-            Some('I') | Some('i') => (BlockKind::Sig2Current, "sig2i"),
+            Some('V') | Some('v') => (BlockKind::Sig2Voltage, "sig2voltage"),
+            Some('I') | Some('i') => (BlockKind::Sig2Current, "sig2current"),
             _ => continue,
         };
         if blocks[idx].kind != expected.0 {
