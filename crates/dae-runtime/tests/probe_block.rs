@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 use dae_runtime::{
     simulate_transient_with_blocks, BlockInstance, BlockKind, ProbeTarget, TimeStep,
 };
+use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
-use spice_core::Dialect;
 
 #[test]
 fn probe_voltage_and_current_match_hand_derived_rc_charging_curve() {
@@ -31,7 +31,7 @@ fn probe_voltage_and_current_match_hand_derived_rc_charging_curve() {
             kind: BlockKind::Probe(ProbeTarget::Voltage("vout".to_string())),
             inputs: vec![],
         },
-        // elspice-mna only gives V/L/E/H elements their own branch-current MNA unknown (a
+        // general-mna only gives V/L/E/H elements their own branch-current MNA unknown (a
         // plain resistor's current is derivable but not separately stored) -- probe V1's own
         // current instead, which in this series R-C circuit equals the same charging current.
         BlockInstance {

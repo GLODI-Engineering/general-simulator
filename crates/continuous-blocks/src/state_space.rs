@@ -1,10 +1,10 @@
 //! A descriptor state-space system `E * dx/dt = A*x + B*u`, `y = C*x + D*u` — the same
-//! `A x + K dx/dt = B u` shape `elspice-mna` uses for circuits, with `K = E` (a standard
+//! `A x + K dx/dt = B u` shape `general-mna` uses for circuits, with `K = E` (a standard
 //! "Descriptor State-Space" block, `E dx/dt = Ax + Bu`, is textually identical to this
 //! convention — see `docs/architecture.md`). Plain `E = I` is the ordinary (non-descriptor)
 //! state-space case.
 //!
-//! Matrices are plain row-major `Vec<Vec<f64>>` here rather than `elspice_mna::Matrix`: block
+//! Matrices are plain row-major `Vec<Vec<f64>>` here rather than `general_mna::Matrix`: block
 //! parameters (gains, pole/zero locations, PID coefficients) are ordinary known numbers at
 //! model-build time, not symbolic netlist parameters, so there is no `Expression` layer to
 //! carry — wiring a block's *evaluated* `(A, K, B)` into a circuit's global descriptor system

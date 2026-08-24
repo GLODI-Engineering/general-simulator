@@ -16,8 +16,8 @@
 
 use continuous_blocks::Pid;
 use dae_runtime::{sawtooth_carrier, simulate_closed_loop, GateState};
+use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
-use spice_core::Dialect;
 use std::collections::BTreeMap;
 
 #[test]

@@ -29,7 +29,7 @@
   - **Signal-domain `pwc`/`pwl` source naming, resolved 2026-08-23** (`docs/journal/2026-08.md`,
     `2026-08-23 15:24`/`15:52`) — no longer an open question, this entry is now
     `## Signal-domain source naming: pwc vs. pwl` proper (not just a pointer): adding
-    `SIN`/`PULSE`/`EXP`/`PWL`/`SFFM` to the signal domain (parity with `elspice-mna`'s own
+    `SIN`/`PULSE`/`EXP`/`PWL`/`SFFM` to the signal domain (parity with `general-mna`'s own
     electrical-domain source forms) collided with the *existing* `BlockKind::Pwl`, which was
     piecewise-*constant* (a step-schedule block, not the piecewise-*linear* interpolation the
     name implies). User's own proposed resolution: rename the old block `Pwc`, freeing `Pwl` for
@@ -54,17 +54,17 @@
 
 **Because:** Option 1 keeps two similarly-named blocks (`pwl`/`pwl_lin`) with *different*
 interpolation behavior, exactly the kind of "easy to mix up because they sound like the same
-thing" trap `elspice-mna`'s own `PwlPoints` doc comment already warns readers about for the
+thing" trap `general-mna`'s own `PwlPoints` doc comment already warns readers about for the
 unrelated block-graph/electrical-domain naming overlap. Option 2 is a silent breaking change:
 every existing reference-schedule netlist in this project's own `internal-archive`
 sibling repo (e.g. a speed-step schedule `REF kind=pwl points=[[0,800],[0.05,1500]]`) relies on the
 *step* behavior — reinterpreting it as a ramp would silently corrupt every one of those
-experiments' own recorded results without a single line of `elspice-pwl` itself reporting an
+experiments' own recorded results without a single line of `general-simulator` itself reporting an
 error. Option 3 is the only one that (a) makes `pwc`/`pwl` self-document the actual
 interpolation-style distinction directly in the name (constant vs. linear — the same "c"/"l"
 distinction SPICE dialects don't need since they only ever had the linear one), (b) frees `pwl`
 to mean exactly what it means everywhere else (real SPICE PWL semantics, matching
-`elspice-mna`'s own source exactly, so a signal-domain reference and a `V`/`I` source built from
+`general-mna`'s own source exactly, so a signal-domain reference and a `V`/`I` source built from
 the same breakpoints are the same waveform), and (c) is a purely mechanical, behavior-preserving
 rename for every existing use — every `internal-archive` netlist using the old
 piecewise-constant block was renamed `kind=pwl` → `kind=pwc` and re-verified byte-identical

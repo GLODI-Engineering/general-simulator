@@ -9,8 +9,8 @@
 use std::collections::BTreeMap;
 
 use dae_runtime::{simulate_transient_with_blocks, BlockInstance, BlockKind, TimeStep};
+use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
-use spice_core::Dialect;
 
 #[test]
 fn coordinate_transform_block_exposes_all_outputs_by_name() {

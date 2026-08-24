@@ -1,10 +1,10 @@
-//! Runs the actual built `elspice-pwl` binary against netlists using `kind=cscript`, compiling
+//! Runs the actual built `general-simulator` binary against netlists using `kind=cscript`, compiling
 //! the `.c` fixtures in `tests/fixtures/` into real shared libraries at test time (via the
 //! system `cc`) -- an end-to-end check through the real CLI parser and `dae-runtime`'s block
 //! graph, not just `cscript-ffi`'s own lower-level unit tests. Both fixture netlists use a
 //! dummy always-off MOSFET (`gate=block` reading a `Const(0)` wrapped in `sig2gate`) purely so
 //! `simulate_transient_with_blocks`'s code path
-//! is reached at all -- `elspice-pwl-cli` only evaluates the block graph when at least one
+//! is reached at all -- `general-simulator-cli` only evaluates the block graph when at least one
 //! MOSFET is declared (see `main.rs`'s `run()`); the MOSFET being off never affects R1/the
 //! observed cscript output.
 
@@ -19,7 +19,7 @@ fn fixture(name: &str) -> PathBuf {
 
 fn compile_fixture(name: &str) -> PathBuf {
     let source = fixture(&format!("{name}.c"));
-    let out_dir = std::env::temp_dir().join("elspice-pwl-cli-test-fixtures");
+    let out_dir = std::env::temp_dir().join("general-simulator-cli-test-fixtures");
     std::fs::create_dir_all(&out_dir).expect("create fixture output dir");
     let lib_path = out_dir.join(format!("lib{name}.so"));
     let status = Command::new("cc")
@@ -33,7 +33,7 @@ fn compile_fixture(name: &str) -> PathBuf {
 }
 
 fn write_devices_file(contents: &str) -> PathBuf {
-    let out_dir = std::env::temp_dir().join("elspice-pwl-cli-test-fixtures");
+    let out_dir = std::env::temp_dir().join("general-simulator-cli-test-fixtures");
     std::fs::create_dir_all(&out_dir).expect("create fixture output dir");
     let path = out_dir.join(format!(
         "devices-{}.txt",
@@ -44,10 +44,10 @@ fn write_devices_file(contents: &str) -> PathBuf {
 }
 
 fn run(args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_elspice-pwl"))
+    Command::new(env!("CARGO_BIN_EXE_general-simulator"))
         .args(args)
         .output()
-        .expect("failed to run elspice-pwl binary")
+        .expect("failed to run general-simulator binary")
 }
 
 #[test]

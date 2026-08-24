@@ -25,28 +25,32 @@ version = "0.1.0"
 dependencies = [
  "continuous-blocks",
  "cscript-ffi",
- "elspice-mna",
+ "general-mna",
+ "general-spice-core",
  "lcp-solver",
  "pwl-devices",
- "spice-core",
 ]
 
 [[package]]
-name = "elspice-mna"
+name = "general-mna"
 version = "0.1.0"
 dependencies = [
- "spice-core",
+ "general-spice-core",
 ]
 
 [[package]]
-name = "elspice-pwl-cli"
+name = "general-simulator-cli"
 version = "0.1.0"
 dependencies = [
  "continuous-blocks",
  "dae-runtime",
+ "general-spice-core",
  "pwl-devices",
- "spice-core",
 ]
+
+[[package]]
+name = "general-spice-core"
+version = "0.1.0"
 
 [[package]]
 name = "lcp-solver"
@@ -68,10 +72,6 @@ version = "0.1.0"
 dependencies = [
  "lcp-solver",
 ]
-
-[[package]]
-name = "spice-core"
-version = "0.1.0"
 
 [[package]]
 name = "windows-link"

@@ -14,5 +14,5 @@
 
 ## Source material to adapt from
 - `crates/continuous-blocks/src/lib.rs`'s module doc comment.
-- `crates/elspice-pwl-cli/src/main.rs`'s module doc comment (the full `kind=` list with field
+- `crates/general-simulator-cli/src/main.rs`'s module doc comment (the full `kind=` list with field
   signatures) — this chapter's table is essentially that list, reformatted.

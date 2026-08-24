@@ -20,7 +20,7 @@
 //!   block) a real circuit's controller would need.
 //!
 //! [`MathFn1`]/[`MathFn2`]/[`MathFn3`] group the one/two/three-argument functions so
-//! `dae-runtime`'s block graph (and `elspice-pwl-cli`'s device-file parser) can dispatch by
+//! `dae-runtime`'s block graph (and `general-simulator-cli`'s device-file parser) can dispatch by
 //! name without one bespoke `BlockKind` variant per function.
 
 /// Sign of `x`: `-1`, `0`, or `1` — deliberately *not* `f64::signum` (which returns `1.0` for

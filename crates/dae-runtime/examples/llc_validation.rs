@@ -3,7 +3,7 @@
 //! `internal-archive`'s `experiments/converters-benchmark-open-loop-topologies`
 //! (`code/llc/`), used as a cross-simulator validation and timing comparison against ngspice
 //! and Xyce on the hardest topology in that experiment (two switches, a resonant tank near
-//! the switching frequency, and a coupled-inductor transformer via `elspice-mna`'s `K` stamp
+//! the switching frequency, and a coupled-inductor transformer via `general-mna`'s `K` stamp
 //! -- not just a single MOSFET and diode like the buck/boost cases). An example, not a `#[test]`
 //! fixture: unlike buck/boost, there is no simple hand-derivable closed-form target for an
 //! LLC resonant converter's steady-state output, so this is exploratory validation against
@@ -50,8 +50,8 @@ use std::io::Write;
 use std::time::Instant;
 
 use dae_runtime::{simulate_transient_with_mosfets, GateState};
+use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
-use spice_core::Dialect;
 
 fn main() {
     let netlist = "V1 vin 0 400\n\
@@ -122,7 +122,7 @@ fn main() {
     let elapsed = start.elapsed();
 
     println!(
-        "elspice-pwl LLC open-loop: {} steps in {:.3}s ({:.0} steps/s)",
+        "general-simulator LLC open-loop: {} steps in {:.3}s ({:.0} steps/s)",
         trace.len(),
         elapsed.as_secs_f64(),
         trace.len() as f64 / elapsed.as_secs_f64()
@@ -138,7 +138,7 @@ fn main() {
 
     // CSV export (t, V(vout), V(vx)) for the cross-simulator waveform plot -- see
     // internal-archive's experiments/elspice-pwl-boost-llc-vs-xyce-ngspice/README.md.
-    // Same `t,unknown1,unknown2,...` column convention as elspice-pwl-cli's own CSV output.
+    // Same `t,unknown1,unknown2,...` column convention as general-simulator-cli's own CSV output.
     let out_path = "llc_elspice_pwl_out.csv";
     let mut f = std::fs::File::create(out_path).unwrap();
     writeln!(f, "t,V(vout),V(vx)").unwrap();

@@ -20,5 +20,5 @@
 
 ## Source material to adapt from
 - `docs/architecture.md`'s "Status" section's own "Open" list.
-- Any experiment README's own Caveats section noting an `elspice-pwl`-side limitation.
+- Any experiment README's own Caveats section noting an `general-simulator`-side limitation.
 - `design-decisions.md`'s "Revisit if" conditions, cross-linked both directions.

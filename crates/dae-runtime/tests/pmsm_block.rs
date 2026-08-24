@@ -9,8 +9,8 @@
 use std::collections::BTreeMap;
 
 use dae_runtime::{simulate_transient_with_blocks, BlockInstance, BlockKind, Signal, TimeStep};
+use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
-use spice_core::Dialect;
 
 #[test]
 fn pmsm_block_matches_hand_derived_rl_circuit_when_decoupled() {

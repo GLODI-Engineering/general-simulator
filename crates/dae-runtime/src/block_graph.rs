@@ -30,7 +30,7 @@
 //! fixed `Sum`-then-`Pid`-then-duty-
 //! comparator topology, named for the one case it was first built for) remains as a lighter
 //! Rust-level convenience for simple direct callers; this module is the general one, used by
-//! `elspice-pwl-cli` unconditionally for every MOSFET-containing transient run.
+//! `general-simulator-cli` unconditionally for every MOSFET-containing transient run.
 
 use std::collections::BTreeMap;
 
@@ -39,8 +39,8 @@ use continuous_blocks::{
     TransferFunction, Vco,
 };
 use cscript_ffi::CScriptRegistry;
+use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
-use spice_core::Dialect;
 
 use crate::{
     classify_segments, sawtooth_carrier, step_control, step_with_fallback, DaeError, GateState,
@@ -80,7 +80,7 @@ pub enum Signal {
 
 /// What a [`BlockKind::Probe`] reads from the circuit's own previous-step operating point —
 /// `V(node)` or `I(branch)`, anything [`OperatingPoint::value`] accepts, keyed by exactly the
-/// same `V(...)`/`I(...)` naming convention `elspice-mna` itself uses for MNA unknowns.
+/// same `V(...)`/`I(...)` naming convention `general-mna` itself uses for MNA unknowns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProbeTarget {
     Voltage(String),
@@ -134,7 +134,7 @@ pub enum BlockKind {
     },
     /// A piecewise-**linear** function of time — real SPICE `PWL(t1 v1 t2 v2 ...)` semantics,
     /// linearly interpolated between breakpoints, held at the first/last point's value before/
-    /// after the breakpoint range (matching `elspice_mna::TransientFunction::Pwl`'s own
+    /// after the breakpoint range (matching `general_mna::TransientFunction::Pwl`'s own
     /// electrical-domain behavior exactly, so the same breakpoint list means the same waveform
     /// whether it drives a `V`/`I` source directly or a signal-domain reference through this
     /// block). `repeat`, if `true`, wraps `t` into `[points[0].0, points.last().0)` once past
@@ -147,7 +147,7 @@ pub enum BlockKind {
         repeat: bool,
     },
     /// One of the electrical domain's four other time-varying source forms
-    /// (`elspice_mna::TransientFunction::Sin`/`Pulse`/`Exp`/`Sffm` — never `::Pwl`, which this
+    /// (`general_mna::TransientFunction::Sin`/`Pulse`/`Exp`/`Sffm` — never `::Pwl`, which this
     /// module models as its own [`BlockKind::Pwl`] above instead, specifically to add the
     /// `repeat` option `TransientFunction` doesn't have), reused directly rather than
     /// reimplemented, so a `V`/`I` source and a signal-domain reference built from the same
@@ -330,7 +330,7 @@ pub enum BlockKind {
     /// gap [`BlockKind::Probe`] doesn't (a probe only ever reads): the *only* legal way a
     /// signal-domain block's output drives an independent voltage source's own magnitude. A `V`
     /// element's own literal value field in the netlist names this block directly (e.g. `V1 a 0
-    /// VDRV`, where `VDRV` is a declared `Sig2Voltage` block) — `elspice-mna`'s own
+    /// VDRV`, where `VDRV` is a declared `Sig2Voltage` block) — `general-mna`'s own
     /// `Expression::parse_scalar` already accepts a bare symbol there with no change needed on
     /// that side; `dae-runtime` requires, at validation time, that any such symbol naming a
     /// declared block resolve to exactly this kind (see
@@ -497,7 +497,7 @@ fn block_kind_name(kind: &BlockKind) -> &'static str {
         BlockKind::Waveform(TransientFunction::Pulse { .. }) => "pulsewave",
         BlockKind::Waveform(TransientFunction::Exp { .. }) => "expwave",
         BlockKind::Waveform(TransientFunction::Sffm { .. }) => "sffmwave",
-        // Never actually constructed (elspice-pwl-cli only builds `Waveform` from
+        // Never actually constructed (general-simulator-cli only builds `Waveform` from
         // Sin/Pulse/Exp/Sffm — a Pwl-shaped waveform always goes through `BlockKind::Pwl`
         // above instead, since only that variant supports `repeat`), but `TransientFunction`
         // is a 5-variant enum so this match must still be exhaustive.
@@ -611,7 +611,7 @@ fn topological_order(blocks: &[BlockInstance]) -> Result<Vec<usize>, DaeError> {
 /// otherwise wraps `t` into `[points[0].0, points.last().0)`, period = last breakpoint time −
 /// first breakpoint time, so the same finite breakpoint list repeats forever instead of holding
 /// its last value flat — the periodic PWL/PWC source this session added specifically because
-/// neither `elspice-mna`'s own electrical-domain `PWL(...)` source nor any prior signal-domain
+/// neither `general-mna`'s own electrical-domain `PWL(...)` source nor any prior signal-domain
 /// block had a repeat option.
 fn periodic_time(t: f64, points: &[(f64, f64)], repeat: bool) -> f64 {
     if !repeat || points.len() < 2 {
@@ -973,7 +973,7 @@ pub fn simulate_transient_with_blocks(
     let (system0, _) =
         crate::build_with_mosfets(source, dialect, diodes, &initial_states, shared_r_on)?;
 
-    // Signal-to-PS enforcement for a `V`/`I` source's own literal value: `elspice-mna` already
+    // Signal-to-PS enforcement for a `V`/`I` source's own literal value: `general-mna` already
     // accepts a bare symbol there (`Expression::Symbol`), stamped verbatim into that source's
     // own `input_values` entry -- a genuinely time-varying `TransientFunction` source uses this
     // too, with the symbol set to the source's *own* element name (`sym == name`, resolved via
@@ -985,7 +985,7 @@ pub fn simulate_transient_with_blocks(
     // expected converter kind below. V/I source stamps never depend on switch state, so
     // checking `system0` once here is representative of every later per-step rebuild.
     for (name, expr) in system0.inputs.iter().zip(&system0.input_values) {
-        let elspice_mna::Expression::Symbol(sym) = expr else {
+        let general_mna::Expression::Symbol(sym) = expr else {
             continue;
         };
         if sym == name || system0.transient_sources.contains_key(name) {

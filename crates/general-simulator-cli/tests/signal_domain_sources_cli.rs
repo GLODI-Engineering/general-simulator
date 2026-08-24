@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn write_netlist(contents: &str) -> PathBuf {
-    let out_dir = std::env::temp_dir().join("elspice-pwl-cli-test-fixtures");
+    let out_dir = std::env::temp_dir().join("general-simulator-cli-test-fixtures");
     std::fs::create_dir_all(&out_dir).expect("create fixture output dir");
     let path = out_dir.join(format!(
         "signal-domain-sources-{}.cir",
@@ -20,16 +20,16 @@ fn write_netlist(contents: &str) -> PathBuf {
 }
 
 fn run(args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_elspice-pwl"))
+    Command::new(env!("CARGO_BIN_EXE_general-simulator"))
         .args(args)
         .output()
-        .expect("failed to run elspice-pwl binary")
+        .expect("failed to run general-simulator binary")
 }
 
 /// A permanently-off MOSFET on its own isolated (grounded-through-1e9-ohm) node pair, wired to
 /// nothing else in the real circuit -- purely so `--mode transient` selects the block-graph-
 /// enabled solver path (gated on at least one declared MOSFET; none of these netlists have a
-/// real one). See `elspice-pwl-cli`'s own `cscript.rs` test for the general convention, and
+/// real one). See `general-simulator-cli`'s own `cscript.rs` test for the general convention, and
 /// `regulators.cir` (`internal-archive` repo) for this exact isolated-dummy variant.
 const DUMMY_MOSFET: &str = "DDUMMY dummy_a dummy_b mosfetmodel\n\
      * DOFFVAL kind=const value=0\n\

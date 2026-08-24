@@ -15,8 +15,8 @@
 use std::collections::BTreeMap;
 
 use dae_runtime::{simulate_transient_with_blocks, BlockInstance, BlockKind, PidClamp, TimeStep};
+use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
-use spice_core::Dialect;
 
 const NETLIST: &str = "V1 a 0 5\nD1 a b mosfetmodel\nR1 b 0 1000";
 

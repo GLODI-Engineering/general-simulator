@@ -5,7 +5,7 @@
 //! sparse/dense numeric layer once circuit size or sparsity actually make it worth the
 //! dependency — revisit then, not before.
 
-use elspice_mna::Matrix;
+use general_mna::Matrix;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SingularMatrix {

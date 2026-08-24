@@ -17,5 +17,5 @@
 ## Source material to adapt from
 - `crates/cscript-ffi/src/lib.rs` module doc comment — the full C-side contract already lives
   here.
-- `crates/elspice-pwl-cli/tests/fixtures/cscript_gain.c`/`cscript_counter.c` as ready-made
+- `crates/general-simulator-cli/tests/fixtures/cscript_gain.c`/`cscript_counter.c` as ready-made
   minimal examples.

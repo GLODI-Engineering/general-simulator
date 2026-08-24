@@ -17,12 +17,12 @@ use std::collections::BTreeMap;
 use dae_runtime::{
     simulate_transient_with_blocks, BlockInstance, BlockKind, DaeError, Signal, TimeStep,
 };
+use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
-use spice_core::Dialect;
 
 #[test]
 fn sig2voltage_drives_a_voltage_source_exactly_through_a_pwl_ramp() {
-    // V1's own literal names CMD_V directly -- elspice-mna already accepts a bare symbol there
+    // V1's own literal names CMD_V directly -- general-mna already accepts a bare symbol there
     // (Expression::Symbol), confirmed to need no change on that side.
     let netlist = "V1 a 0 CMD_V\nR1 a 0 1000";
     let mosfets: BTreeMap<String, Mosfet> = BTreeMap::new();

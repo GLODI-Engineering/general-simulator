@@ -3,7 +3,7 @@
 *(Skeleton — outline below; not yet written.)*
 
 ## What goes here
-- Why this crate is deliberately standalone (no dependency on `elspice-mna`/`pwl-devices`/
+- Why this crate is deliberately standalone (no dependency on `general-mna`/`pwl-devices`/
   `dae-runtime`) and what that buys: every block verified against a hand-derived result on its
   own before anything wires it into a whole circuit's global system.
 - Module map: `state_space.rs`/`transfer_function.rs`/`pid.rs`/`dynamics.rs` (the
@@ -18,5 +18,5 @@
 ## Source material to adapt from
 - `crates/continuous-blocks/src/lib.rs` module doc comment.
 - `crates/continuous-blocks/src/coordinate_transforms.rs` module doc comment.
-- `elspice-pwl`'s journal entries for `CoordinateTransform`/`Pmsm`/`anglewrap` (the design
+- `general-simulator`'s journal entries for `CoordinateTransform`/`Pmsm`/`anglewrap` (the design
   reasoning for each was recorded there as it was built).

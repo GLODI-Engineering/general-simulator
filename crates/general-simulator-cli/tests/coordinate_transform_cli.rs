@@ -15,7 +15,7 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn write_devices_file(contents: &str) -> PathBuf {
-    let out_dir = std::env::temp_dir().join("elspice-pwl-cli-test-fixtures");
+    let out_dir = std::env::temp_dir().join("general-simulator-cli-test-fixtures");
     std::fs::create_dir_all(&out_dir).expect("create fixture output dir");
     let path = out_dir.join(format!(
         "coord-devices-{}.txt",
@@ -26,13 +26,13 @@ fn write_devices_file(contents: &str) -> PathBuf {
 }
 
 fn run(args: &[&str]) -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_elspice-pwl"))
+    let output = Command::new(env!("CARGO_BIN_EXE_general-simulator"))
         .args(args)
         .output()
-        .expect("failed to run elspice-pwl binary");
+        .expect("failed to run general-simulator binary");
     assert!(
         output.status.success(),
-        "elspice-pwl exited with {:?}\nstdout: {}\nstderr: {}",
+        "general-simulator exited with {:?}\nstdout: {}\nstderr: {}",
         output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)

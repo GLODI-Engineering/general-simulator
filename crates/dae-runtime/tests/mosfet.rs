@@ -1,5 +1,5 @@
 //! Hand-derived MOSFET fixtures. Per the model in `pwl_devices::Mosfet`'s doc comment: gated
-//! on is a plain bidirectional `r_on` resistor (an existing, already-tested `elspice-mna`
+//! on is a plain bidirectional `r_on` resistor (an existing, already-tested `general-mna`
 //! mechanism); gated off falls back to the intrinsic body diode (the same LCP fold already
 //! verified for ordinary diodes in `two_diode_via_netlist.rs`), stamped via
 //! `Mosfet::body_diode_for_drain_source_stamping` so that a `Mosfet` element's two nodes are
@@ -8,8 +8,8 @@
 use std::collections::BTreeMap;
 
 use dae_runtime::{solve_dc_with_mosfets, GateState};
+use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
-use spice_core::Dialect;
 
 /// Gated on: D1 is just a 0.1-ohm resistor from `a` to `b`, in series with a 10-ohm load to
 /// ground, driven by a 5V source. I = 5 / (0.1 + 10) = 500/101 A. Vb = I * 10 = 5000/101 V.

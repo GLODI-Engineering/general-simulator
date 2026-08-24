@@ -1,5 +1,5 @@
 //! `BlockKind::Pwc`/`BlockKind::Pwl` (with the `repeat` option) and `BlockKind::Waveform`
-//! (`Sin`/`Pulse`/`Exp`/`Sffm`, reusing `elspice_mna::TransientFunction` directly) — the
+//! (`Sin`/`Pulse`/`Exp`/`Sffm`, reusing `general_mna::TransientFunction` directly) — the
 //! signal-domain counterparts to the electrical domain's five `TransientFunction` source forms,
 //! added this session specifically so a signal-domain reference schedule and a `V`/`I` source
 //! built from the same numbers produce the same waveform (`Waveform`), and so the signal domain
@@ -16,8 +16,8 @@ use std::collections::BTreeMap;
 use dae_runtime::{
     simulate_transient_with_blocks, BlockInstance, BlockKind, Signal, TimeStep, TransientFunction,
 };
+use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
-use spice_core::Dialect;
 
 fn run_source(kind: BlockKind, t_final: f64, dt: f64) -> Vec<(f64, f64)> {
     let netlist = "V1 a 0 CMD_V\nR1 a 0 1000";
@@ -158,7 +158,7 @@ fn pwl_repeat_produces_a_periodic_triangle_wave() {
 
 #[test]
 fn waveform_sin_matches_hand_computed_values() {
-    // Same SIN(0 10 1000 0 0 0) parameters elspice-mna's own transient_source.rs test uses,
+    // Same SIN(0 10 1000 0 0 0) parameters general-mna's own transient_source.rs test uses,
     // cross-checked through the full block-graph + Sig2Voltage + circuit path here instead of
     // calling TransientFunction::value_at directly.
     let trace = run_source(
@@ -193,7 +193,7 @@ fn waveform_sin_matches_hand_computed_values() {
 
 #[test]
 fn waveform_pulse_matches_hand_computed_trapezoid() {
-    // PULSE(0 10 0 1e-4 1e-4 2e-4 1e-3) in real seconds -- same shape as elspice-mna's own
+    // PULSE(0 10 0 1e-4 1e-4 2e-4 1e-3) in real seconds -- same shape as general-mna's own
     // arbitrary-unit test, scaled to a realistic timebase.
     let trace = run_source(
         BlockKind::Waveform(TransientFunction::Pulse {

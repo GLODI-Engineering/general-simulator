@@ -1,11 +1,11 @@
-//! Assembles a circuit's linear MNA system (via `elspice-mna`, including its `'D'` stamp) with
+//! Assembles a circuit's linear MNA system (via `general-mna`, including its `'D'` stamp) with
 //! PWL device segments (via `pwl-devices`) into one Linear Complementarity Problem, solves it
 //! (via `lcp-solver`), and reports the resolved DC operating point. No Newton-Raphson, no
 //! voltage limiting, anywhere in this crate — see this repository's `docs/architecture.md`.
 //!
 //! ## The generic Thevenin/LCP fold
 //!
-//! `elspice-mna` stamps each diode `k` as a *fixed* conductance `{k}_G` plus a per-instance
+//! `general-mna` stamps each diode `k` as a *fixed* conductance `{k}_G` plus a per-instance
 //! current-source symbol `{k}_Ioff`. Fixing `{k}_G` at the diode's canonical reference slope
 //! `g_off` (see `pwl_devices::Diode::canonical`) makes the whole linear system `A0` genuinely
 //! fixed — independent of which segment every diode ends up in — with every segment's actual
@@ -39,14 +39,14 @@ pub use step_control::{AdaptiveConfig, TimeStep};
 
 use std::collections::BTreeMap;
 
-use elspice_mna::{BuildError, BuildOptions, EvaluationError, Expression, MnaBuilder, MnaSystem};
+use general_mna::{BuildError, BuildOptions, EvaluationError, Expression, MnaBuilder, MnaSystem};
+use general_spice_core::Dialect;
 use lcp_solver::LcpError;
 use linsolve::{dense_solve, SingularMatrix};
 use pwl_devices::{Diode, Mosfet};
-use spice_core::Dialect;
 
-pub use elspice_mna::SwitchState as GateState;
-pub use elspice_mna::TransientFunction;
+pub use general_mna::SwitchState as GateState;
+pub use general_mna::TransientFunction;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OperatingPoint {
@@ -205,7 +205,7 @@ enum Scheme<'a> {
     /// a diode's resolved segment changes between consecutive steps.
     ///
     /// That "constant, in this crate's scope" assumption about the netlist's own linear
-    /// sources held until [`TransientFunction`](elspice_mna::TransientFunction) support was
+    /// sources held until [`TransientFunction`](general_mna::TransientFunction) support was
     /// added: for a genuinely time-varying `V`/`I` source, `u_n != u_{n+1}` for that source's
     /// own column too, not just for diode currents — `fold_and_solve` evaluates `numeric0.u`
     /// (i.e. `B u_{n+1}`) a second time at `t_n = t_{n+1} - dt` and averages the two, exactly
@@ -375,7 +375,7 @@ fn classify_segments(point: &OperatingPoint) -> Vec<Segment> {
 /// the middle one) with the magnitude not shrinking step to step — the direct signature of a
 /// sustained oscillation, as opposed to a legitimate sign change while settling (which
 /// shrinks, not sustains, in magnitude) or ordinary numerical noise near zero (excluded by
-/// the noise floor). Found and root-caused via `elspice-pwl`'s LLC validation
+/// the noise floor). Found and root-caused via `general-simulator`'s LLC validation
 /// (`crates/dae-runtime/examples/llc_validation.rs`): the switching node's voltage oscillated
 /// between roughly +/-3000V for the entire ~200ns MOSFET dead-time window every period, while
 /// every other tracked quantity (notably the actual circuit output) stayed smooth and
@@ -485,10 +485,10 @@ fn step_with_fallback(
 
 /// Solves the DC operating point of a netlist containing linear devices, ordinary `D` diodes
 /// (`diodes`), and any number of `Mosfet` instances (`mosfets`), each with its own known gate
-/// state (see [`GateState`], a re-export of `elspice_mna::SwitchState` — the same concept: an
+/// state (see [`GateState`], a re-export of `general_mna::SwitchState` — the same concept: an
 /// exogenous, externally-decided mode, not something the LCP resolves).
 ///
-/// A gated-on MOSFET is stamped as a plain `r_on` switch (reusing `elspice-mna`'s existing
+/// A gated-on MOSFET is stamped as a plain `r_on` switch (reusing `general-mna`'s existing
 /// switch mechanism — every gated-on MOSFET in one call shares `shared_r_on`, matching that
 /// mechanism's own single-shared-resistance design; per-instance `Ron` is a possible future
 /// extension, not needed yet). A gated-off MOSFET is folded into the LCP exactly like an
@@ -524,7 +524,7 @@ pub fn solve_dc_with_mosfets(
 /// once per MOSFET per timestep to get that instance's [`GateState`] at time `t`; the caller
 /// owns the PWM logic entirely (duty cycle, frequency, phase — this crate has no opinion).
 ///
-/// Because a gate state change means the *symbolic* `elspice-mna` system itself must be
+/// Because a gate state change means the *symbolic* `general-mna` system itself must be
 /// rebuilt (a switch and a `'D'`-stamped diode are structurally different stamps, not just
 /// different numeric values — see `docs/architecture.md`), this rebuilds the system every
 /// timestep, unlike [`simulate_transient`]'s single build reused throughout. A documented
@@ -690,7 +690,7 @@ fn fold_and_solve(
     // depend on this step's own diode currents (those are added per-diode below, since
     // Trapezoidal's history term needs each diode's own B column). coupling_scale multiplies
     // how much *this* step's resolved diode current contributes to x/V — see Scheme::Trapezoidal.
-    let (a_eff, u_eff_base, coupling_scale): (elspice_mna::Matrix<f64>, Vec<f64>, f64) =
+    let (a_eff, u_eff_base, coupling_scale): (general_mna::Matrix<f64>, Vec<f64>, f64) =
         match scheme {
             Scheme::Dc => (numeric0.a.clone(), numeric0.u.clone(), 1.0),
             Scheme::BackwardEuler { x_prev, dt } => {

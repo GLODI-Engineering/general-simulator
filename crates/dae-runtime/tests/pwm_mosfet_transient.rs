@@ -25,8 +25,8 @@
 //! `Vc(1) = 9.3 * (1 - e^(-0.5))` from phase 1's formula.
 
 use dae_runtime::{simulate_transient_with_mosfets, GateState};
+use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
-use spice_core::Dialect;
 use std::collections::BTreeMap;
 
 #[test]

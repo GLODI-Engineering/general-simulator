@@ -6,10 +6,12 @@ members = [
     "crates/dae-runtime",
     "crates/continuous-blocks",
     "crates/cscript-ffi",
-    "crates/elspice-pwl-cli",
+    "crates/general-simulator-cli",
 ]
 
 [workspace.package]
 edition = "2021"
 license = "AGPL-3.0-or-later"
 publish = false
+repository = "https://github.com/Elvis-codeur/general-simulator"
+homepage = "https://github.com/Elvis-codeur/general-simulator"

@@ -1,6 +1,6 @@
 //! The same circuit and hand-derived expected values as
 //! `pwl-devices/tests/two_diode_circuit.rs`'s `two_pwl_diodes_reproduce_hand_derived_operating_point`,
-//! but this time built from real netlist text through `elspice-mna`'s `'D'` stamp and
+//! but this time built from real netlist text through `general-mna`'s `'D'` stamp and
 //! `dae-runtime`'s *generic* Thevenin/LCP fold, instead of a hand-typed `(M, q)` for this one
 //! topology. Reproducing the same, already-independently-verified numbers via a structurally
 //! different (general-purpose) code path is real evidence the generic fold is correct — not
@@ -9,8 +9,8 @@
 use std::collections::BTreeMap;
 
 use dae_runtime::solve_dc;
+use general_spice_core::Dialect;
 use pwl_devices::Diode;
-use spice_core::Dialect;
 
 #[test]
 fn generic_fold_reproduces_the_hand_derived_two_diode_operating_point() {

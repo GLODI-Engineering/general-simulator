@@ -6,8 +6,8 @@
 //! closed-form solution derived by hand before writing this test (see the module doc below).
 
 use dae_runtime::{simulate_transient, solve_dc, TimeStep};
+use general_spice_core::Dialect;
 use pwl_devices::Diode;
-use spice_core::Dialect;
 use std::collections::BTreeMap;
 
 /// A purely algebraic (no `L`/`C`) circuit has no dynamics at all: `K = 0` everywhere, so the

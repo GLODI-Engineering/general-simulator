@@ -29,7 +29,7 @@
 - [`dae-runtime`: circuit assembly and the transient loop](crate-dae-runtime.md)
 - [`continuous-blocks`: the block library](crate-continuous-blocks.md)
 - [`cscript-ffi`: the native escape hatch](crate-cscript-ffi.md)
-- [`elspice-pwl-cli`: the netlist-in/CSV-out runner](crate-elspice-pwl-cli.md)
+- [`general-simulator-cli`: the netlist-in/CSV-out runner](crate-general-simulator-cli.md)
 
 # Contributing
 

@@ -4,8 +4,8 @@
 
 ## What goes here
 - The dependency diagram: `lcp-solver` <- `pwl-devices` <- `dae-runtime` (also depends on
-  `continuous-blocks`, `cscript-ffi`) <- `elspice-pwl-cli`, plus the two read-only sibling repos
-  (`spice-lsp`/`spice-core`, `elspice-mna`) this workspace treats as external dependencies.
+  `continuous-blocks`, `cscript-ffi`) <- `general-simulator-cli`, plus the two read-only sibling repos
+  (`spice-lsp`/`general-spice-core`, `general-mna`) this workspace treats as external dependencies.
 - The "build up trust incrementally" verification order this crate was actually built in
   (`lcp-solver` trusted standalone first, then `pwl-devices` against it, etc.) — this ordering
   is itself part of the rationale for trusting the whole system, worth stating explicitly.

@@ -17,4 +17,4 @@
 - `crates/lcp-solver/src/tableau.rs` and `lemke.rs` doc comments.
 - `crates/lcp-solver/tests/fixtures.rs` — six tests, each already documented with what property
   it independently verifies.
-- `elspice-pwl`'s own journal, Milestone 1 entry, for the pivot-rule bug account.
+- `general-simulator`'s own journal, Milestone 1 entry, for the pivot-rule bug account.

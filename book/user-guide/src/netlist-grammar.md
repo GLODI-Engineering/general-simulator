@@ -17,5 +17,5 @@
   lists here.
 
 ## Source material to adapt from
-- `crates/elspice-pwl-cli/src/main.rs`'s module doc comment, roughly lines 1-40 (the grammar
+- `crates/general-simulator-cli/src/main.rs`'s module doc comment, roughly lines 1-40 (the grammar
   preamble before the per-kind detail) — this chapter is close to a direct port of that section.

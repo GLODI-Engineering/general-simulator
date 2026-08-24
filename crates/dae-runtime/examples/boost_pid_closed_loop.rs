@@ -10,8 +10,8 @@ use std::io::Write;
 
 use continuous_blocks::Pid;
 use dae_runtime::{sawtooth_carrier, simulate_closed_loop, GateState};
+use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
-use spice_core::Dialect;
 
 fn main() {
     let netlist = "V1 vin 0 12\nD1 vx 0 mosfetmodel\nD2 vx vout dmodel\nL1 vin vx 100u\nC1 vout 0 100u\nR1 vout 0 50";

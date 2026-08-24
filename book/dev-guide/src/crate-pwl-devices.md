@@ -16,4 +16,4 @@
 ## Source material to adapt from
 - `crates/pwl-devices/src/diode.rs` and `mosfet.rs` — both already carry this depth of
   rationale in their own doc comments; this chapter is largely curation.
-- `elspice-pwl`'s journal, the body-diode node-order fix entry, for the full incident account.
+- `general-simulator`'s journal, the body-diode node-order fix entry, for the full incident account.

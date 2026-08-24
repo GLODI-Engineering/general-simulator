@@ -1,15 +1,20 @@
 [package]
 name = "dae-runtime"
 version = "0.1.0"
-description = "Assembles a circuit's linear MNA system (via elspice-mna) with PWL device segments (via pwl-devices) into one LCP, solves it (via lcp-solver), and reports the resolved DC operating point -- no Newton-Raphson."
+description = "Assembles a circuit's linear MNA system (via general-mna) with PWL device segments (via pwl-devices) into one LCP, solves it (via lcp-solver), and reports the resolved DC operating point -- no Newton-Raphson."
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/dae-runtime"
+keywords = ["circuit-simulation", "dae", "spice"]
+categories = ["science", "simulation"]
 
 [dependencies]
 lcp-solver = { path = "../lcp-solver" }
 pwl-devices = { path = "../pwl-devices" }
 continuous-blocks = { path = "../continuous-blocks" }
 cscript-ffi = { path = "../cscript-ffi" }
-spice-core = { path = "../../../spice-lsp/servers/core" }
-elspice-mna = { path = "../../../elspice-mna" }
+general-spice-core = { path = "../../../spice-lsp/servers/core" }
+general-mna = { path = "../../../general-mna" }

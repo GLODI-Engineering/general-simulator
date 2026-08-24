@@ -3,11 +3,11 @@
 *(Skeleton — outline below; not yet written.)*
 
 ## What goes here
-- Every dynamic block compiles to a `StateSpace`: the same descriptor-DAE shape `elspice-mna`
+- Every dynamic block compiles to a `StateSpace`: the same descriptor-DAE shape `general-mna`
   uses for circuits ($A x + K \dot x = B u$, `K` called `e` for descriptor systems in code).
 - Why this is the organizing idea of the whole project, not just an implementation detail of
   one crate: a state-space block with $K=I$ is ordinary state-space; a "Descriptor State-Space"
-  block with $K=E$ is textually identical to `elspice-mna`'s own convention; a transfer function
+  block with $K=E$ is textually identical to `general-mna`'s own convention; a transfer function
   is realized once (controllable canonical form) into $(A,B,C,D)$ then handled identically.
 - What's deliberately *not* folded into this shape and why: `Vco` (wraparound is a genuine
   discontinuity), `Hysteresis` (a genuine discrete latch), `Pmsm` (bilinear coupling — its own

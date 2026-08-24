@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn write_netlist(name: &str, contents: &str) -> PathBuf {
-    let out_dir = std::env::temp_dir().join("elspice-pwl-cli-test-fixtures");
+    let out_dir = std::env::temp_dir().join("general-simulator-cli-test-fixtures");
     std::fs::create_dir_all(&out_dir).expect("create fixture output dir");
     let path = out_dir.join(format!(
         "python-list-syntax-{name}-{}.cir",
@@ -21,10 +21,10 @@ fn write_netlist(name: &str, contents: &str) -> PathBuf {
 }
 
 fn run(args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_elspice-pwl"))
+    Command::new(env!("CARGO_BIN_EXE_general-simulator"))
         .args(args)
         .output()
-        .expect("failed to run elspice-pwl binary")
+        .expect("failed to run general-simulator binary")
 }
 
 const DUMMY_MOSFET: &str = "DDUMMY dummy_a dummy_b mosfetmodel\n\

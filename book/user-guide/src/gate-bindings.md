@@ -15,4 +15,4 @@
 ## Source material to adapt from
 - `crates/dae-runtime/src/block_graph.rs`'s `GateBinding` enum doc comments — each variant is
   already documented at exactly this level of detail.
-- `crates/elspice-pwl-cli/src/main.rs`'s module doc comment, the `gate=` bullet list.
+- `crates/general-simulator-cli/src/main.rs`'s module doc comment, the `gate=` bullet list.

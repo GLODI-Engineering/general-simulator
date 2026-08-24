@@ -38,7 +38,7 @@
 //!
 //! // Optional. Return a deep copy of `state` (independent memory: mutating the copy through
 //! // future cscript_output() calls must never affect the original, and vice versa). Only
-//! // needed to use this block under elspice-pwl's adaptive step-size control, which retries a
+//! // needed to use this block under general-simulator's adaptive step-size control, which retries a
 //! // rejected trial step from an independent copy of every block's state -- see "Adaptive
 //! // step-size control and instance cloning" below.
 //! void *cscript_clone(void *state);
@@ -46,7 +46,7 @@
 //!
 //! ## Adaptive step-size control and instance cloning
 //!
-//! elspice-pwl's adaptive step-size control retries a rejected trial step from scratch: every
+//! general-simulator's adaptive step-size control retries a rejected trial step from scratch: every
 //! block's state is cloned before the trial, the trial runs against the clone, and if rejected
 //! the clone is discarded and a fresh one is taken for the next, smaller attempt -- never
 //! mutating the real, confirmed state until a trial is actually accepted. That is exactly
@@ -291,7 +291,7 @@ impl Clone for CScriptInstance {
         self.try_clone().unwrap_or_else(|| {
             panic!(
                 "cannot clone a CScriptInstance whose library does not export cscript_clone \
-                 (required for elspice-pwl's adaptive step-size control); either export \
+                 (required for general-simulator's adaptive step-size control); either export \
                  cscript_clone from this library or run with a fixed --dt"
             )
         })

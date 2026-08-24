@@ -19,8 +19,8 @@
 use std::collections::BTreeMap;
 
 use continuous_blocks::StateSpace;
+use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
-use spice_core::Dialect;
 
 use crate::{
     classify_segments, step_with_fallback, DaeError, GateState, OperatingPoint, Segment,

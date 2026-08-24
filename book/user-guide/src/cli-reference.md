@@ -13,4 +13,4 @@
   operating point).
 
 ## Source material to adapt from
-- `crates/elspice-pwl-cli/src/main.rs`'s `usage()` function and its argument-parsing code.
+- `crates/general-simulator-cli/src/main.rs`'s `usage()` function and its argument-parsing code.

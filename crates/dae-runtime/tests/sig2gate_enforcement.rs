@@ -11,8 +11,8 @@ use dae_runtime::{
     simulate_transient_with_blocks, BlockInstance, BlockKind, DaeError, GateBinding, Signal,
     TimeStep,
 };
+use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
-use spice_core::Dialect;
 
 fn dummy_mosfets() -> BTreeMap<String, Mosfet> {
     let mut m = BTreeMap::new();

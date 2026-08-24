@@ -5,6 +5,11 @@ description = "Piecewise-linear device companion models (diode, MOSFET) in Chua-
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/pwl-devices"
+keywords = ["spice", "diode", "mosfet", "circuit-simulation"]
+categories = ["science", "simulation"]
 
 [dependencies]
 lcp-solver = { path = "../lcp-solver" }

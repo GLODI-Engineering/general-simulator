@@ -1,4 +1,4 @@
-//! Thin runner for `elspice-pwl`: `elspice-pwl <netlist> [--devices <file>] --mode
+//! Thin runner for `general-simulator`: `general-simulator <netlist> [--devices <file>] --mode
 //! {dc|transient} [--tfinal T] [--dt DT | --dt-max/--dt-min/--dt-init/--reltol/--abstol]`
 //! prints a CSV waveform (`t,V(node1),V(node2),...`) to stdout, one row per resolved timestep
 //! (a single row for `--mode dc`). `--dt` fixes the step size; omit it for adaptive step-size
@@ -8,7 +8,7 @@
 //!
 //! **The netlist is the one file** — PWL device parameters and any controller block graph
 //! live directly inside it, the same way a real SPICE deck is self-contained, not split across
-//! files by convention. `spice-core` enforces real SPICE grammar (see its own docs), which has
+//! files by convention. `general-spice-core` enforces real SPICE grammar (see its own docs), which has
 //! no syntax for `kind=mosfet r_on=...` or a block graph, so those lines are written as
 //! ordinary SPICE comments — anything starting with `*` — with a leading `kind=...` key/value
 //! declaration (a small hand-rolled format, no serde/TOML dependency needed for something this
@@ -26,16 +26,16 @@
 //! ```
 //!
 //! Any other tool — a real SPICE simulator, a text editor, a diff — sees exactly what a `*`
-//! line always means: an ordinary comment, safely ignored. `elspice-pwl-cli` is the only thing
+//! line always means: an ordinary comment, safely ignored. `general-simulator-cli` is the only thing
 //! that additionally reads these lines as device/block declarations (stripping the leading `*`;
 //! a line without `kind=` — including a genuine comment that happens to start with `*` — is
-//! left alone). This is the whole netlist: run `elspice-pwl-cli some.cir --mode transient` with
+//! left alone). This is the whole netlist: run `general-simulator-cli some.cir --mode transient` with
 //! no `--devices` at all and it looks for these lines in `some.cir` itself. `--devices <file>`
 //! remains available for the rarer case of sharing one controller/PWL-parameter file across
 //! several netlists, but is not the default or the expected common case.
 //!
 //! `#`/`;`-prefixed lines (not `*`) and blank lines in either file are plain devices-file
-//! comments, invisible to `elspice-pwl-cli` itself, not SPICE comments — use `*` for anything
+//! comments, invisible to `general-simulator-cli` itself, not SPICE comments — use `*` for anything
 //! meant to also survive being read by a real SPICE tool. Every MOSFET must declare the same
 //! `r_on` — `dae-runtime`'s switch mechanism uses one shared on-resistance per call (see
 //! `dae_runtime::solve_dc_with_mosfets`'s doc comment).
@@ -107,7 +107,7 @@
 //! - `kind=sig2voltage in=<signal>` / `kind=sig2current in=<signal>` are the **only** legal way a
 //!   signal-domain block drives an independent voltage/current source's own magnitude — name
 //!   the converter block directly as that source's own literal value in the netlist, e.g. `V1 a
-//!   0 VDRV` where `VDRV kind=sig2voltage in=CTRL` was declared earlier (`elspice-mna` already
+//!   0 VDRV` where `VDRV kind=sig2voltage in=CTRL` was declared earlier (`general-mna` already
 //!   accepts a bare symbol there; no change was needed on that side). `V` sources need
 //!   `sig2voltage`, `I` sources need `sig2current` — a mismatch, or naming any other kind of
 //!   block, is rejected
@@ -271,7 +271,7 @@
 //! ```
 //!
 //! A real SPICE tool opening this file sees eleven ordinary comment lines and an otherwise
-//! unremarkable LLC deck. `elspice-pwl-cli some.cir --mode transient` (no `--devices`) sees the
+//! unremarkable LLC deck. `general-simulator-cli some.cir --mode transient` (no `--devices`) sees the
 //! complete closed loop.
 //!
 //! `--mode dc` cannot resolve any gate at all now that every gate is block-driven: a DC
@@ -292,8 +292,8 @@ use dae_runtime::{
     simulate_transient, simulate_transient_with_blocks, solve_dc, AdaptiveConfig, BlockInstance,
     BlockKind, GateBinding, PidClamp, ProbeTarget, Signal, TimeStep, TransientFunction,
 };
+use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
-use spice_core::Dialect;
 
 enum Kind {
     Diode(Diode),
@@ -750,7 +750,7 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
         }
         // A device/block line embedded directly in a `.cir` file (so the same file is both
         // the netlist and the device/block source -- see this file's module doc comment)
-        // needs a leading `*`, a plain SPICE comment marker, so spice-core's own parser skips
+        // needs a leading `*`, a plain SPICE comment marker, so general-spice-core's own parser skips
         // it as an ordinary comment. Strip that marker here before parsing.
         if let Some(rest) = line.strip_prefix('*') {
             line = rest.trim_start();
@@ -886,7 +886,7 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
                 })
             }
             // "sinwave"/"pulsewave"/"expwave"/"sffmwave": the electrical domain's other four
-            // time-varying source forms (see `elspice_mna::TransientFunction`'s own doc comment
+            // time-varying source forms (see `general_mna::TransientFunction`'s own doc comment
             // for the exact formula each implements), reused directly rather than
             // reimplemented, with the same field names/order/defaults as ngspice/Xyce's own
             // SIN()/PULSE()/EXP()/SFFM() -- so a `kind=sinwave ...` reference schedule and a
@@ -1468,7 +1468,7 @@ fn parse_devices(text: &str) -> Result<Vec<(String, Kind)>, String> {
 }
 
 fn usage() -> String {
-    "usage: elspice-pwl <netlist> [--devices <file>] [--mode dc|transient] [--tfinal T] \
+    "usage: general-simulator <netlist> [--devices <file>] [--mode dc|transient] [--tfinal T] \
      [--dt DT | --dt-max T --dt-min T --dt-init T --reltol R --abstol A]\n\
      \n\
      --dt fixes the step size every step (deterministic, exactly reproducible). Omit it (and \

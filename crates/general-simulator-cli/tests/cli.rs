@@ -1,4 +1,4 @@
-//! Runs the actual built `elspice-pwl` binary as a subprocess (the standard way to test a CLI)
+//! Runs the actual built `general-simulator` binary as a subprocess (the standard way to test a CLI)
 //! against fixture netlists that are the *exact same circuits* already hand-verified in
 //! `dae-runtime`'s own tests — so the expected output here isn't a fresh hand derivation, it's
 //! a cross-check that the CLI's argument parsing, device-file parsing, and CSV formatting
@@ -14,13 +14,13 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn run(args: &[&str]) -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_elspice-pwl"))
+    let output = Command::new(env!("CARGO_BIN_EXE_general-simulator"))
         .args(args)
         .output()
-        .expect("failed to run elspice-pwl binary");
+        .expect("failed to run general-simulator binary");
     assert!(
         output.status.success(),
-        "elspice-pwl exited with {:?}\nstdout: {}\nstderr: {}",
+        "general-simulator exited with {:?}\nstdout: {}\nstderr: {}",
         output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)

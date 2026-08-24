@@ -12,9 +12,9 @@
 
 use std::collections::BTreeMap;
 
-use elspice_mna::MnaSystem;
+use general_mna::MnaSystem;
+use general_spice_core::Dialect;
 use pwl_devices::Diode;
-use spice_core::Dialect;
 
 use crate::{
     classify_segments, fold_and_solve, is_ringing, DaeError, OperatingPoint, Scheme, Segment,

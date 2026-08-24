@@ -12,7 +12,7 @@
   (block graph wasn't evaluated at all — no MOSFET declared — see CLI reference).
 
 ## Source material to adapt from
-- `crates/elspice-pwl-cli/src/main.rs`'s CSV-writing code and its comments on the
+- `crates/general-simulator-cli/src/main.rs`'s CSV-writing code and its comments on the
   `block_names`/extra-output-column logic.
 - Any `internal-archive` experiment's `plot_*.py` as a concrete worked example of
   parsing the CSV (e.g. `experiments/elspice-pwl-pfc-three-phase-vsc/code/plot_stage1.py`).

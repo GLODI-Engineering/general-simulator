@@ -1,14 +1,14 @@
-//! Extracts each `D` element's two terminal node names from a netlist. `elspice-mna` parses
-//! this same information internally (`spice_core::ast::ElementInstance::nodes`) but doesn't
+//! Extracts each `D` element's two terminal node names from a netlist. `general-mna` parses
+//! this same information internally (`general_spice_core::ast::ElementInstance::nodes`) but doesn't
 //! expose per-device topology in its public API (only the resulting unknown/input names) —
 //! this crate needs the raw node names to know which two MNA unknowns a diode's voltage is
-//! the difference of, so it re-parses via `spice-core` directly rather than duplicating any
-//! of `elspice-mna`'s own stamping logic.
+//! the difference of, so it re-parses via `general-spice-core` directly rather than duplicating any
+//! of `general-mna`'s own stamping logic.
 
 use std::collections::BTreeMap;
 
-use spice_core::ast::Statement;
-use spice_core::{lexer, parser, Dialect};
+use general_spice_core::ast::Statement;
+use general_spice_core::{lexer, parser, Dialect};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiodeNodes {
@@ -44,8 +44,8 @@ pub fn is_ground(node: &str) -> bool {
 }
 
 /// Finds `node`'s index among `unknowns` (which store node unknowns as `"V(<name>)"`),
-/// matching case-insensitively the same way `elspice-mna` itself normalizes node names.
-/// `None` for a ground node, matching `elspice-mna`'s own convention of never allocating an
+/// matching case-insensitively the same way `general-mna` itself normalizes node names.
+/// `None` for a ground node, matching `general-mna`'s own convention of never allocating an
 /// unknown for ground.
 pub fn node_index(unknowns: &[String], node: &str) -> Option<usize> {
     if is_ground(node) {

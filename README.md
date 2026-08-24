@@ -1,6 +1,6 @@
-# elspice-pwl
+# general-simulator
 
-`elspice-pwl` is an educational Rust simulator for piecewise-linear (PWL) circuits and
+`general-simulator` is an educational Rust simulator for piecewise-linear (PWL) circuits and
 mixed circuit/block-diagram systems that never runs Newton-Raphson on device physics, and
 therefore never needs SPICE-style voltage limiting.
 
@@ -24,22 +24,22 @@ approach commercial power-electronics simulators use — instead of continuous N
 
 ## Relationship to the sibling repos
 
-Path deps, read-only, same convention `elspice-mna` already uses for `spice-core`:
+Path deps, read-only, same convention `general-mna` already uses for `general-spice-core`:
 
 ```
 Électronique/
-├── elspice-pwl/        (this repo)
-├── elspice-mna/         symbolic MNA + converter averaging
-└── spice-lsp/            spice-core: the ngspice/Xyce parser
+├── general-simulator/        (this repo)
+├── general-mna/         symbolic MNA + converter averaging
+└── spice-lsp/            general-spice-core: the ngspice/Xyce parser
 ```
 
-- `spice-core` remains the sole netlist-parsing authority.
-- `elspice-mna` remains the sole implementation of *linear*-device MNA stamping
+- `general-spice-core` remains the sole netlist-parsing authority.
+- `general-mna` remains the sole implementation of *linear*-device MNA stamping
   (R, C, L, V, I, G, E, F, H) and numeric Schur-complement reduction — this repo reuses those
   directly rather than re-deriving them.
-- `elspice-pwl` adds exactly two new things: PWL device segments resolved via LCP, and a
+- `general-simulator` adds exactly two new things: PWL device segments resolved via LCP, and a
   continuous-block library (transfer function, state-space, PID, ...) compiled into descriptor
-  DAE fragments of the same `A x + K dx/dt = B u` shape `elspice-mna` already uses.
+  DAE fragments of the same `A x + K dx/dt = B u` shape `general-mna` already uses.
 
 ## Status
 
@@ -56,7 +56,7 @@ including bugs caught and fixed along the way):
   `continuous-blocks` controller (e.g. a PID) driving a switching gate.
 - `crates/continuous-blocks` — transfer function / state-space / PID / integrator / math-op
   compilation into the same descriptor-DAE shape circuits use, standalone and verified.
-- `crates/elspice-pwl-cli` (binary `elspice-pwl`) — netlist-in/CSV-waveform-out runner.
+- `crates/general-simulator-cli` (binary `general-simulator`) — netlist-in/CSV-waveform-out runner.
 
 Open: validation against the Xyce/ngspice baselines already captured in the sibling
 `internal-archive` repo's `experiments/` folder, full converter benchmarks, and the

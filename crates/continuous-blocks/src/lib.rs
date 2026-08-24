@@ -9,12 +9,12 @@
 //! of these blocks.
 //!
 //! Every dynamic block compiles to a [`StateSpace`] — the same descriptor-DAE shape
-//! `elspice-mna` already uses for circuits (`A x + K dx/dt = B u`, with `K` here called `e`
+//! `general-mna` already uses for circuits (`A x + K dx/dt = B u`, with `K` here called `e`
 //! for descriptor systems). See `docs/architecture.md`, "One descriptor system for circuit
 //! and continuous blocks alike," for why this is the organizing idea of the whole
-//! `elspice-pwl` project, not just this crate.
+//! `general-simulator` project, not just this crate.
 //!
-//! This crate is deliberately standalone (no dependency on `elspice-mna`, `pwl-devices`, or
+//! This crate is deliberately standalone (no dependency on `general-mna`, `pwl-devices`, or
 //! `dae-runtime`): block parameters (gains, pole/zero locations, PID coefficients) are known
 //! numbers at model-build time, not symbolic netlist parameters, and every block here is
 //! verified against a hand-derived result on its own before anything wires it into a whole

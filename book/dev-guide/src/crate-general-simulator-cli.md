@@ -1,4 +1,4 @@
-# `elspice-pwl-cli`: the netlist-in/CSV-out runner
+# `general-simulator-cli`: the netlist-in/CSV-out runner
 
 *(Skeleton — outline below; not yet written.)*
 
@@ -16,5 +16,5 @@
   derivation, and why that distinction matters for what these tests actually prove.
 
 ## Source material to adapt from
-- `crates/elspice-pwl-cli/src/main.rs` module doc comment and the `GateSpec`/`Kind` types.
-- `crates/elspice-pwl-cli/tests/cli.rs` doc comment for the testing-strategy framing.
+- `crates/general-simulator-cli/src/main.rs` module doc comment and the `GateSpec`/`Kind` types.
+- `crates/general-simulator-cli/tests/cli.rs` doc comment for the testing-strategy framing.

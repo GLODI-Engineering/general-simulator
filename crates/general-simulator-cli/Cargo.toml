@@ -1,0 +1,22 @@
+[package]
+name = "general-simulator-cli"
+version = "0.1.0"
+description = "Thin runner for general-simulator: netlist + a small PWL-device params file in, a waveform CSV out."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/general-simulator-cli"
+keywords = ["circuit-simulation", "spice", "cli"]
+categories = ["science", "simulation", "command-line-utilities"]
+
+[[bin]]
+name = "general-simulator"
+path = "src/main.rs"
+
+[dependencies]
+continuous-blocks = { path = "../continuous-blocks" }
+dae-runtime = { path = "../dae-runtime" }
+pwl-devices = { path = "../pwl-devices" }
+general-spice-core = { path = "../../../spice-lsp/servers/core" }
