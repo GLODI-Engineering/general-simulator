@@ -533,6 +533,8 @@ pub fn simulate_transient_with_blocks(
     t_final: f64,
     step: TimeStep,
 ) -> Result<Vec<TransientWithBlocksStep>, DaeError> {
+    let statements = general_mna::parse_and_flatten(source, dialect).map_err(DaeError::Parse)?;
+
     // A CScript, CoordinateTransform, or Pmsm block's own `.name` is only its *primary* output
     // alias; `output_names` may also register extra named outputs (see evaluate_blocks' arms
     // for all three) that a gate binding is just as free to reference directly -- all need to
@@ -577,7 +579,7 @@ pub fn simulate_transient_with_blocks(
         .map(|(name, m)| (name.clone(), (*m, GateState::Off)))
         .collect();
     let (system0, _) =
-        crate::build_with_mosfets(source, dialect, diodes, &initial_states, shared_r_on)?;
+        crate::build_with_mosfets(&statements, dialect, diodes, &initial_states, shared_r_on)?;
 
     // Signal-to-PS enforcement for a `V`/`I` source's own literal value: `general-mna` already
     // accepts a bare symbol there (`Expression::Symbol`), stamped verbatim into that source's
@@ -728,11 +730,10 @@ pub fn simulate_transient_with_blocks(
                 let forced = step_index == 0 || gate_changed || ringing_cooldown > 0;
 
                 let (system, all_diodes) =
-                    crate::build_with_mosfets(source, dialect, diodes, &states, shared_r_on)?;
+                    crate::build_with_mosfets(&statements, dialect, diodes, &states, shared_r_on)?;
                 let (point, used_backward_euler) = step_with_fallback(
                     &system,
-                    source,
-                    dialect,
+                    &statements,
                     &all_diodes,
                     x_prev_prev.as_deref(),
                     &x_prev,
@@ -794,12 +795,16 @@ pub fn simulate_transient_with_blocks(
                     let gate_changed = prev_gate_states.as_ref() != Some(&gate_states);
                     let forced = step_index == 0 || gate_changed || ringing_cooldown > 0;
 
-                    let (system, all_diodes) =
-                        crate::build_with_mosfets(source, dialect, diodes, &states, shared_r_on)?;
+                    let (system, all_diodes) = crate::build_with_mosfets(
+                        &statements,
+                        dialect,
+                        diodes,
+                        &states,
+                        shared_r_on,
+                    )?;
                     let attempt = step_control::lte_attempt(
                         &system,
-                        source,
-                        dialect,
+                        &statements,
                         &all_diodes,
                         x_prev_prev.as_deref(),
                         &x_prev,

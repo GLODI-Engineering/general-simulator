@@ -81,6 +81,8 @@ pub fn simulate_closed_loop(
     t_final: f64,
     dt: f64,
 ) -> Result<Vec<(f64, OperatingPoint, f64)>, DaeError> {
+    let statements = general_mna::parse_and_flatten(source, dialect).map_err(DaeError::Parse)?;
+
     // A zero initial gate assignment (no measurement exists yet) just to learn `order` for the
     // default x_initial and to get a first OperatingPoint to seed `measure`/the loop with.
     let initial_states: BTreeMap<String, (Mosfet, GateState)> = mosfets
@@ -88,15 +90,14 @@ pub fn simulate_closed_loop(
         .map(|(name, m)| (name.clone(), (*m, GateState::Off)))
         .collect();
     let (system0, all_diodes0) =
-        crate::build_with_mosfets(source, dialect, diodes, &initial_states, shared_r_on)?;
+        crate::build_with_mosfets(&statements, dialect, diodes, &initial_states, shared_r_on)?;
     let mut x_prev = match x_initial {
         Some(x) => x.to_vec(),
         None => vec![0.0; system0.order()],
     };
     let (mut point_prev, _) = step_with_fallback(
         &system0,
-        source,
-        dialect,
+        &statements,
         &all_diodes0,
         None,
         &x_prev,
@@ -155,11 +156,10 @@ pub fn simulate_closed_loop(
         let forced = step_index == 0 || gate_changed || ringing_cooldown > 0;
 
         let (system, all_diodes) =
-            crate::build_with_mosfets(source, dialect, diodes, &states, shared_r_on)?;
+            crate::build_with_mosfets(&statements, dialect, diodes, &states, shared_r_on)?;
         let (point, used_backward_euler) = step_with_fallback(
             &system,
-            source,
-            dialect,
+            &statements,
             &all_diodes,
             x_prev_prev.as_deref(),
             &x_prev,

@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 
 use general_mna::MnaSystem;
-use general_spice_core::Dialect;
+use general_spice_core::ast::Statement;
 use pwl_devices::Diode;
 
 use crate::{
@@ -117,8 +117,7 @@ pub(crate) struct LteAttempt {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn lte_attempt(
     system: &MnaSystem,
-    source: &str,
-    dialect: Dialect,
+    statements: &[Statement],
     diodes: &BTreeMap<String, Diode>,
     x_prev_prev: Option<&[f64]>,
     x_prev: &[f64],
@@ -135,8 +134,7 @@ pub(crate) fn lte_attempt(
     if force_backward_euler {
         let point = fold_and_solve(
             system,
-            source,
-            dialect,
+            statements,
             diodes,
             &Scheme::BackwardEuler { x_prev, dt },
             t,
@@ -154,8 +152,7 @@ pub(crate) fn lte_attempt(
 
     let be = fold_and_solve(
         system,
-        source,
-        dialect,
+        statements,
         diodes,
         &Scheme::BackwardEuler { x_prev, dt },
         t,
@@ -164,8 +161,7 @@ pub(crate) fn lte_attempt(
     )?;
     let trap = fold_and_solve(
         system,
-        source,
-        dialect,
+        statements,
         diodes,
         &Scheme::Trapezoidal {
             x_prev,
@@ -230,8 +226,7 @@ pub(crate) fn lte_attempt(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn adaptive_step(
     system: &MnaSystem,
-    source: &str,
-    dialect: Dialect,
+    statements: &[Statement],
     diodes: &BTreeMap<String, Diode>,
     x_prev_prev: Option<&[f64]>,
     x_prev: &[f64],
@@ -247,8 +242,7 @@ pub(crate) fn adaptive_step(
     loop {
         let attempt = lte_attempt(
             system,
-            source,
-            dialect,
+            statements,
             diodes,
             x_prev_prev,
             x_prev,

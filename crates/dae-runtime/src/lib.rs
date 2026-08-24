@@ -40,6 +40,7 @@ pub use step_control::{AdaptiveConfig, TimeStep};
 use std::collections::BTreeMap;
 
 use general_mna::{BuildError, BuildOptions, EvaluationError, Expression, MnaBuilder, MnaSystem};
+use general_spice_core::ast::Statement;
 use general_spice_core::Dialect;
 use lcp_solver::LcpError;
 use linsolve::{dense_solve, SingularMatrix};
@@ -74,6 +75,12 @@ impl OperatingPoint {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DaeError {
+    /// Parsing/hierarchy-flattening the netlist itself failed — see
+    /// [`general_mna::parse_and_flatten`]; a `.subckt`/`X` structural error (undefined
+    /// subcircuit, node-count mismatch, a recursive instantiation, ...) surfaces here, distinct
+    /// from [`DaeError::Build`]'s "parsed fine, but this statement has no valid electrical
+    /// stamp" class of error.
+    Parse(String),
     Build(BuildError),
     Evaluate(EvaluationError),
     Linear(SingularMatrix),
@@ -149,13 +156,13 @@ pub fn solve_dc(
     dialect: Dialect,
     diodes: &BTreeMap<String, Diode>,
 ) -> Result<OperatingPoint, DaeError> {
+    let statements = general_mna::parse_and_flatten(source, dialect).map_err(DaeError::Parse)?;
     let system = MnaBuilder::new(dialect)
-        .build_fragment(source)
+        .build_statements(&statements)
         .map_err(DaeError::Build)?;
     fold_and_solve(
         &system,
-        source,
-        dialect,
+        &statements,
         diodes,
         &Scheme::Dc,
         0.0,
@@ -244,8 +251,9 @@ pub fn simulate_transient(
     t_final: f64,
     step: TimeStep,
 ) -> Result<Vec<(f64, OperatingPoint)>, DaeError> {
+    let statements = general_mna::parse_and_flatten(source, dialect).map_err(DaeError::Parse)?;
     let system = MnaBuilder::new(dialect)
-        .build_fragment(source)
+        .build_statements(&statements)
         .map_err(DaeError::Build)?;
 
     let mut x_prev = match x_initial {
@@ -269,8 +277,7 @@ pub fn simulate_transient(
                 let forced = step_index == 0 || ringing_cooldown > 0;
                 let (point, used_backward_euler) = step_with_fallback(
                     &system,
-                    source,
-                    dialect,
+                    &statements,
                     diodes,
                     x_prev_prev.as_deref(),
                     &x_prev,
@@ -307,8 +314,7 @@ pub fn simulate_transient(
                 let forced = step_index == 0 || ringing_cooldown > 0;
                 let (point, used_backward_euler, dt_used, next_dt) = step_control::adaptive_step(
                     &system,
-                    source,
-                    dialect,
+                    &statements,
                     diodes,
                     x_prev_prev.as_deref(),
                     &x_prev,
@@ -423,8 +429,7 @@ const RINGING_COOLDOWN_STEPS: u32 = 3;
 #[allow(clippy::too_many_arguments)]
 fn step_with_fallback(
     system: &MnaSystem,
-    source: &str,
-    dialect: Dialect,
+    statements: &[Statement],
     diodes: &BTreeMap<String, Diode>,
     x_prev_prev: Option<&[f64]>,
     x_prev: &[f64],
@@ -439,8 +444,7 @@ fn step_with_fallback(
     if force_backward_euler {
         return fold_and_solve(
             system,
-            source,
-            dialect,
+            statements,
             diodes,
             &Scheme::BackwardEuler { x_prev, dt },
             t,
@@ -451,8 +455,7 @@ fn step_with_fallback(
     }
     let trial = fold_and_solve(
         system,
-        source,
-        dialect,
+        statements,
         diodes,
         &Scheme::Trapezoidal {
             x_prev,
@@ -469,8 +472,7 @@ fn step_with_fallback(
     if segments_changed || ringing {
         fold_and_solve(
             system,
-            source,
-            dialect,
+            statements,
             diodes,
             &Scheme::BackwardEuler { x_prev, dt },
             t,
@@ -505,11 +507,12 @@ pub fn solve_dc_with_mosfets(
     mosfets: &BTreeMap<String, (Mosfet, GateState)>,
     shared_r_on: f64,
 ) -> Result<OperatingPoint, DaeError> {
-    let (system, all_diodes) = build_with_mosfets(source, dialect, diodes, mosfets, shared_r_on)?;
+    let statements = general_mna::parse_and_flatten(source, dialect).map_err(DaeError::Parse)?;
+    let (system, all_diodes) =
+        build_with_mosfets(&statements, dialect, diodes, mosfets, shared_r_on)?;
     fold_and_solve(
         &system,
-        source,
-        dialect,
+        &statements,
         &all_diodes,
         &Scheme::Dc,
         0.0,
@@ -556,7 +559,9 @@ pub fn simulate_transient_with_mosfets(
             .collect()
     };
 
-    let (system0, _) = build_with_mosfets(source, dialect, diodes, &states_at(0.0), shared_r_on)?;
+    let statements = general_mna::parse_and_flatten(source, dialect).map_err(DaeError::Parse)?;
+    let (system0, _) =
+        build_with_mosfets(&statements, dialect, diodes, &states_at(0.0), shared_r_on)?;
     let mut x_prev = match x_initial {
         Some(x) => x.to_vec(),
         None => vec![0.0; system0.order()],
@@ -581,11 +586,10 @@ pub fn simulate_transient_with_mosfets(
         let forced = step_index == 0 || gate_changed || ringing_cooldown > 0;
 
         let (system, all_diodes) =
-            build_with_mosfets(source, dialect, diodes, &states, shared_r_on)?;
+            build_with_mosfets(&statements, dialect, diodes, &states, shared_r_on)?;
         let (point, used_backward_euler) = step_with_fallback(
             &system,
-            source,
-            dialect,
+            &statements,
             &all_diodes,
             x_prev_prev.as_deref(),
             &x_prev,
@@ -618,7 +622,7 @@ pub fn simulate_transient_with_mosfets(
 }
 
 fn build_with_mosfets(
-    source: &str,
+    statements: &[Statement],
     dialect: Dialect,
     diodes: &BTreeMap<String, Diode>,
     mosfets: &BTreeMap<String, (Mosfet, GateState)>,
@@ -640,7 +644,7 @@ fn build_with_mosfets(
     }
 
     let system = MnaBuilder::with_options(dialect, options)
-        .build_fragment(source)
+        .build_statements(statements)
         .map_err(DaeError::Build)?;
     Ok((system, all_diodes))
 }
@@ -648,15 +652,14 @@ fn build_with_mosfets(
 #[allow(clippy::too_many_arguments)]
 fn fold_and_solve(
     system: &MnaSystem,
-    source: &str,
-    dialect: Dialect,
+    statements: &[Statement],
     diodes: &BTreeMap<String, Diode>,
     scheme: &Scheme,
     t: f64,
     extra_values: &BTreeMap<String, f64>,
     extra_values_prev: &BTreeMap<String, f64>,
 ) -> Result<OperatingPoint, DaeError> {
-    let nodes = topology::diode_nodes(source, dialect);
+    let nodes = topology::diode_nodes(statements);
     let order = system.order();
 
     // Fix every diode's conductance at its canonical reference slope and its Norton current at
@@ -900,8 +903,9 @@ mod scheme_tests {
     /// scheme throughout, and returns the error against the closed-form solution at `t_final`.
     fn rc_final_error(kind: &Kind, dt: f64, t_final: f64) -> f64 {
         let source = "V1 a 0 5\nR1 a b 1\nC1 b 0 1";
+        let statements = general_mna::parse_and_flatten(source, Dialect::Ngspice).unwrap();
         let system = MnaBuilder::new(Dialect::Ngspice)
-            .build_fragment(source)
+            .build_statements(&statements)
             .unwrap();
         let diodes = BTreeMap::new();
         let steps = (t_final / dt).round() as usize;
@@ -913,8 +917,7 @@ mod scheme_tests {
             let point = if use_be {
                 fold_and_solve(
                     &system,
-                    source,
-                    Dialect::Ngspice,
+                    &statements,
                     &diodes,
                     &Scheme::BackwardEuler { x_prev: &x, dt },
                     t,
@@ -924,8 +927,7 @@ mod scheme_tests {
             } else {
                 fold_and_solve(
                     &system,
-                    source,
-                    Dialect::Ngspice,
+                    &statements,
                     &diodes,
                     &Scheme::Trapezoidal {
                         x_prev: &x,

@@ -1,14 +1,17 @@
-//! Extracts each `D` element's two terminal node names from a netlist. `general-mna` parses
-//! this same information internally (`general_spice_core::ast::ElementInstance::nodes`) but doesn't
-//! expose per-device topology in its public API (only the resulting unknown/input names) —
-//! this crate needs the raw node names to know which two MNA unknowns a diode's voltage is
-//! the difference of, so it re-parses via `general-spice-core` directly rather than duplicating any
-//! of `general-mna`'s own stamping logic.
+//! Extracts each `D` element's two terminal node names from an already-parsed (and, per
+//! `general-mna`'s `hierarchy::flatten`, already hierarchy-resolved) statement list.
+//! `general-mna` parses this same information internally
+//! (`general_spice_core::ast::ElementInstance::nodes`) but doesn't expose per-device topology in
+//! its public API (only the resulting unknown/input names) — this crate needs the raw node
+//! names to know which two MNA unknowns a diode's voltage is the difference of. Operating on the
+//! caller's own already-parsed `statements` (rather than re-parsing raw text here) is what keeps
+//! this in sync with whatever `MnaSystem` the caller built from that same statement list — in
+//! particular, a diode declared inside a `.subckt` body only exists under its flattened,
+//! dotted-path name (e.g. `X1.D1`), which a fresh from-scratch text re-parse would never see.
 
 use std::collections::BTreeMap;
 
 use general_spice_core::ast::Statement;
-use general_spice_core::{lexer, parser, Dialect};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiodeNodes {
@@ -16,11 +19,10 @@ pub struct DiodeNodes {
     pub negative: String,
 }
 
-pub fn diode_nodes(source: &str, dialect: Dialect) -> BTreeMap<String, DiodeNodes> {
-    let lines = lexer::preprocess(source, dialect);
+pub fn diode_nodes(statements: &[Statement]) -> BTreeMap<String, DiodeNodes> {
     let mut result = BTreeMap::new();
-    for parsed in parser::parse(&lines, dialect) {
-        let Ok(Statement::ElementInstance(element)) = parsed else {
+    for statement in statements {
+        let Statement::ElementInstance(element) = statement else {
             continue;
         };
         if element.device_letter != 'D' {
