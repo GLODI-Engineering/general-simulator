@@ -12,11 +12,11 @@
   (stateless), `coordinate_transforms.rs`.
 - The `CoordinateTransform` design specifically: why it's a dispatch enum
   (`MathFn1`/`MathFn2`-style) rather than one `BlockKind` variant per transform, and why
-  `angle_wrapped` lives in `MathFn2` instead of becoming a seventh `CoordinateTransform`
+  `anglewrap` lives in `MathFn2` instead of becoming a seventh `CoordinateTransform`
   variant (single-output vs. multi-output as the deciding factor).
 
 ## Source material to adapt from
 - `crates/continuous-blocks/src/lib.rs` module doc comment.
 - `crates/continuous-blocks/src/coordinate_transforms.rs` module doc comment.
-- `elspice-pwl`'s journal entries for `CoordinateTransform`/`Pmsm`/`angle_wrapped` (the design
+- `elspice-pwl`'s journal entries for `CoordinateTransform`/`Pmsm`/`anglewrap` (the design
   reasoning for each was recorded there as it was built).

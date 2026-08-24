@@ -78,7 +78,7 @@ impl Pmsm {
     }
 
     /// This block's own electrical angle, wrapped to `[0, 2*pi)` — matches
-    /// [`crate::coordinate_transforms::angle_wrapped`]'s own convention, so a downstream `Park`/
+    /// [`crate::coordinate_transforms::anglewrap`]'s own convention, so a downstream `Park`/
     /// `ClarkePark` block can consume either interchangeably.
     pub fn theta_e_wrapped(theta_e: f64) -> f64 {
         theta_e.rem_euclid(2.0 * PI)
@@ -213,7 +213,7 @@ mod tests {
     }
 
     #[test]
-    fn theta_e_wraps_to_0_2pi_matching_angle_wrapped_convention() {
+    fn theta_e_wraps_to_0_2pi_matching_anglewrap_convention() {
         assert!((Pmsm::theta_e_wrapped(0.5) - 0.5).abs() < 1e-12);
         assert!((Pmsm::theta_e_wrapped(2.0 * PI + 0.5) - 0.5).abs() < 1e-12);
         assert!((Pmsm::theta_e_wrapped(-0.5) - (2.0 * PI - 0.5)).abs() < 1e-12);

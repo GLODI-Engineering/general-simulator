@@ -2,8 +2,8 @@
 //! `abc` signal, its stationary two-axis `alpha`/`beta` (plus zero-sequence) projection, and a
 //! rotating `d`/`q` (plus zero-sequence) frame locked to a reference angle `theta`. Used to turn
 //! a three-phase grid or motor-drive quantity into DC-like `d`/`q` values a `Pid` can regulate
-//! directly, and the matching angle-tracking utility (`angle_wrapped`) that closes the loop
-//! (a synchronous-reference-frame PLL is `Clarke -> angle_wrapped -> Park`, feeding a `Pid` on
+//! directly, and the matching angle-tracking utility (`anglewrap`) that closes the loop
+//! (a synchronous-reference-frame PLL is `Clarke -> anglewrap -> Park`, feeding a `Pid` on
 //! the `q` output back into the tracked angle).
 //!
 //! Every function here is a pure, stateless function of its instantaneous inputs (no
@@ -83,7 +83,7 @@ pub fn clarke_park_inv(d: f64, q: f64, zero: f64, theta: f64) -> [f64; 3] {
 /// synchronous-reference-frame PLL: `atan2(beta, alpha)`, shifted by a full turn when negative
 /// instead of the usual `(-pi, pi]` range, so `theta` is a monotonically-sensible input to
 /// [`park`]/[`clarke_park`] across a full mechanical/electrical revolution.
-pub fn angle_wrapped(alpha: f64, beta: f64) -> f64 {
+pub fn anglewrap(alpha: f64, beta: f64) -> f64 {
     let theta = beta.atan2(alpha);
     if theta >= 0.0 {
         theta
@@ -263,21 +263,21 @@ mod tests {
     }
 
     #[test]
-    fn angle_wrapped_matches_hand_derived_quadrants_and_wraps_negative_into_0_2pi() {
+    fn anglewrap_matches_hand_derived_quadrants_and_wraps_negative_into_0_2pi() {
         // First quadrant: alpha=1, beta=1 -> 45 degrees = pi/4.
-        assert!((angle_wrapped(1.0, 1.0) - PI / 4.0).abs() < TOL);
+        assert!((anglewrap(1.0, 1.0) - PI / 4.0).abs() < TOL);
         // Straight up: alpha=0, beta=1 -> pi/2.
-        assert!((angle_wrapped(0.0, 1.0) - PI / 2.0).abs() < TOL);
+        assert!((anglewrap(0.0, 1.0) - PI / 2.0).abs() < TOL);
         // Third quadrant would be a negative atan2 result (-3pi/4); wrapped, it's 5pi/4.
-        assert!((angle_wrapped(-1.0, -1.0) - 5.0 * PI / 4.0).abs() < TOL);
+        assert!((anglewrap(-1.0, -1.0) - 5.0 * PI / 4.0).abs() < TOL);
         // Straight down: alpha=0, beta=-1 -> raw atan2 is -pi/2, wrapped is 3pi/2.
-        assert!((angle_wrapped(0.0, -1.0) - 3.0 * PI / 2.0).abs() < TOL);
+        assert!((anglewrap(0.0, -1.0) - 3.0 * PI / 2.0).abs() < TOL);
     }
 
     #[test]
-    fn angle_wrapped_tracks_a_full_rotation_consistent_with_clarke() {
+    fn anglewrap_tracks_a_full_rotation_consistent_with_clarke() {
         // theta swept across a full turn: clarke() of a balanced signal at that theta should
-        // recover the same theta via angle_wrapped (alpha/beta live on the unit circle scaled
+        // recover the same theta via anglewrap (alpha/beta live on the unit circle scaled
         // by amplitude, so their angle is theta itself).
         let amplitude = 1.0_f64;
         for &theta in &[0.0, 0.1, PI / 2.0, PI, 3.0 * PI / 2.0 + 0.2, 2.0 * PI - 0.1] {
@@ -285,7 +285,7 @@ mod tests {
             let b = amplitude * (theta - 2.0 * PI / 3.0).cos();
             let c = amplitude * (theta + 2.0 * PI / 3.0).cos();
             let [alpha, beta, _zero] = clarke(a, b, c);
-            let recovered = angle_wrapped(alpha, beta);
+            let recovered = anglewrap(alpha, beta);
             assert!(
                 (recovered - theta).abs() < 1e-6,
                 "theta={theta}: recovered={recovered}"

@@ -262,7 +262,7 @@ impl MathFn1 {
 pub enum MathFn2 {
     Atan2,
     /// `(alpha, beta) -> theta`, wrapped to `[0, 2*pi)` — see
-    /// [`crate::coordinate_transforms::angle_wrapped`], the angle-tracking half of a
+    /// [`crate::coordinate_transforms::anglewrap`], the angle-tracking half of a
     /// synchronous-reference-frame PLL. Grouped here rather than with the other Clarke/Park
     /// transforms since, unlike those, it is single-output — an ordinary two-argument function
     /// like every other [`MathFn2`], just implemented in `coordinate_transforms` because it's
@@ -282,7 +282,7 @@ impl MathFn2 {
         use MathFn2::*;
         Some(match name {
             "atan2" => Atan2,
-            "angle_wrapped" => AngleWrapped,
+            "anglewrap" => AngleWrapped,
             "hypot" => Hypot,
             "max" => Max,
             "min" => Min,
@@ -298,7 +298,7 @@ impl MathFn2 {
         use MathFn2::*;
         match self {
             Atan2 => "atan2",
-            AngleWrapped => "angle_wrapped",
+            AngleWrapped => "anglewrap",
             Hypot => "hypot",
             Max => "max",
             Min => "min",
@@ -312,7 +312,7 @@ impl MathFn2 {
         use MathFn2::*;
         match self {
             Atan2 => x.atan2(y),
-            AngleWrapped => crate::coordinate_transforms::angle_wrapped(x, y),
+            AngleWrapped => crate::coordinate_transforms::anglewrap(x, y),
             Hypot => x.hypot(y),
             Max => x.max(y),
             Min => x.min(y),
@@ -428,15 +428,12 @@ mod tests {
     }
 
     #[test]
-    fn angle_wrapped_dispatch_matches_direct_call() {
+    fn anglewrap_dispatch_matches_direct_call() {
         assert_eq!(
             MathFn2::AngleWrapped.call(-1.0, -1.0),
-            crate::coordinate_transforms::angle_wrapped(-1.0, -1.0)
+            crate::coordinate_transforms::anglewrap(-1.0, -1.0)
         );
-        assert_eq!(
-            MathFn2::from_name("angle_wrapped"),
-            Some(MathFn2::AngleWrapped)
-        );
+        assert_eq!(MathFn2::from_name("anglewrap"), Some(MathFn2::AngleWrapped));
     }
 
     #[test]

@@ -7,7 +7,7 @@
   (`time -> gain -> sin`) spelled out once, since it recurs constantly in examples.
 - Stateless math ops: `sum`, `gain`, `product`, `saturation`, `table`.
 - The full waveform-arithmetic function reference (`cos`/`sin`/`tan`/`exp`/`ln`/... , `atan2`/
-  `hypot`/`pow`/`min`/`max`/`angle_wrapped`, `if`/`limit`) as one compact table with arities.
+  `hypot`/`pow`/`min`/`max`/`anglewrap`, `if`/`limit`) as one compact table with arities.
 - What's deliberately *not* here and why (no derivative block, no noise/random — link to the
   dev guide's rationale rather than re-arguing it).
 

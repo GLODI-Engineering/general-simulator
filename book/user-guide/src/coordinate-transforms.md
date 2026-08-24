@@ -7,10 +7,10 @@
   `clarkeparkinv`): field reference (`inputs=`, ordered per transform), and the
   `outputs=`/default-naming convention (primary output aliases the block's own name; the rest
   get `<name>_<suffix>` unless named explicitly).
-- `angle_wrapped` (the PLL angle-tracking half): what it computes, and that it's an
+- `anglewrap` (the PLL angle-tracking half): what it computes, and that it's an
   *instantaneous* algebraic function, not a filtered/tracking PLL — set expectations correctly
   (no settling transient to plot, by design).
-- A minimal worked SRF-PLL recipe: `clarke -> angle_wrapped -> park`, feeding a `pid` on `q`
+- A minimal worked SRF-PLL recipe: `clarke -> anglewrap -> park`, feeding a `pid` on `q`
   back into a tracked angle — reference the PFC experiment's own Stage 1 for the full worked,
   verified version rather than re-deriving it here.
 - Amplitude convention called out explicitly: the standard "2/3" (non-power-invariant) scaling.

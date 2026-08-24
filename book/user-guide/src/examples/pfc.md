@@ -3,7 +3,7 @@
 *(Skeleton — outline below; not yet written.)*
 
 ## What goes here
-- Stage 1 (ideal): the Clarke->angle_wrapped->Park sync chain and a decoupled dq current loop,
+- Stage 1 (ideal): the Clarke->anglewrap->Park sync chain and a decoupled dq current loop,
   validated against hand-derived results, no power circuit — a good "here's how you'd unit-test
   a control chain before building the power stage" pattern worth teaching explicitly.
 - Stage 2 (real switching bridge): topology, `gate=dutyctrl`/`dutyctrlcomplement` per leg, the

@@ -150,8 +150,8 @@
 //! a real-valued scalar function (`cos`, `sin`, `tan`, `exp`, `ln`, `log10`, `sqrt`, `abs`,
 //! `sinh`/`cosh`/`tanh`, `asin`/`acos`/`atan`, `asinh`/`acosh`/`atanh`, `floor`/`ceil`/`round`/
 //! `int`, `sgn`, `u`/`uramp` (unit step / ramp), `buf`/`inv` (threshold at 0.5) — each with
-//! `in=<signal>`; `atan2`/`angle_wrapped`/`hypot`/`pow`/`pwr`/`pwrs`/`min`/`max` — each with
-//! `in1=`/`in2=` (`angle_wrapped(alpha, beta)` is `atan2` wrapped to `[0, 2*pi)` — the
+//! `in=<signal>`; `atan2`/`anglewrap`/`hypot`/`pow`/`pwr`/`pwrs`/`min`/`max` — each with
+//! `in1=`/`in2=` (`anglewrap(alpha, beta)` is `atan2` wrapped to `[0, 2*pi)` — the
 //! angle-tracking half of a synchronous-reference-frame PLL, feeding a `kind=park`/
 //! `kind=clarkepark` block's `theta` input);
 //! `if`/`limit` — each with `in1=`/`in2=`/`in3=`) resolves to that function as a block, no
