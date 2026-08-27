@@ -10,7 +10,9 @@
 - Per-instance MOSFET `Ron` (today every MOSFET in one call shares `shared_r_on`).
 - MIMO `StateSpace`/`TransferFunction` in the block graph (the underlying `continuous_blocks::
   StateSpace` type already supports general `(A,B,C,D)`; `block_graph.rs`'s own dispatch
-  currently hardcodes single-input/single-output).
+  currently hardcodes single-input/single-output) — folded into
+  [`vector-signals.md`](vector-signals.md)'s own survey as the natural home for real MIMO
+  support, rather than a bespoke elementwise rule.
 - PFC Stage 2's own open bug (q-axis current divergence) as a currently-open, actively-being-
   debugged item — link to the `internal-archive` experiment's README rather than
   duplicating the account here; update this entry once resolved.
