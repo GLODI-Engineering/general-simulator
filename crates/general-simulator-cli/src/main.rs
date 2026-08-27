@@ -507,11 +507,26 @@ fn run_transient_with_mosfets(
             _ => {}
         }
     }
-    if let Some((_, first, _)) = trace.first() {
+    // A name whose value is a SignalValue::Vector expands into one CSV column per element
+    // (NAME[0], NAME[1], ...) rather than one column holding the whole vector -- arity is fixed
+    // for the whole run once a block declares it (see book/dev-guide/src/vector-signals.md), so
+    // deriving each name's own column count from the *first* step's resolved shape is exactly
+    // as valid as a separate static analysis would be, and reuses this function's own existing
+    // "build the header from trace.first()" convention rather than a new mechanism.
+    if let Some((_, first, first_outputs)) = trace.first() {
         if block_names.is_empty() {
             print_header(&first.unknowns);
         } else {
-            println!("t,{},{}", first.unknowns.join(","), block_names.join(","));
+            let headers: Vec<String> = block_names
+                .iter()
+                .flat_map(|name| match first_outputs.get(name) {
+                    Some(dae_runtime::SignalValue::Vector(v)) => (0..v.len())
+                        .map(|i| format!("{name}[{i}]"))
+                        .collect::<Vec<_>>(),
+                    _ => vec![name.clone()],
+                })
+                .collect();
+            println!("t,{},{}", first.unknowns.join(","), headers.join(","));
         }
     }
     for (t, point, outputs) in &trace {
@@ -521,7 +536,13 @@ fn run_transient_with_mosfets(
             let values: Vec<String> = point.x.iter().map(|v| v.to_string()).collect();
             let block_values: Vec<String> = block_names
                 .iter()
-                .map(|name| outputs.get(name).copied().unwrap_or(f64::NAN).to_string())
+                .flat_map(|name| match outputs.get(name) {
+                    Some(dae_runtime::SignalValue::Scalar(x)) => vec![x.to_string()],
+                    Some(dae_runtime::SignalValue::Vector(v)) => {
+                        v.iter().map(|x| x.to_string()).collect()
+                    }
+                    None => vec![f64::NAN.to_string()],
+                })
                 .collect();
             println!("{t},{},{}", values.join(","), block_values.join(","));
         }

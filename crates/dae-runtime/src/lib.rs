@@ -31,8 +31,8 @@ mod step_control;
 mod topology;
 
 pub use block_graph::{
-    simulate_transient_with_blocks, BlockInstance, BlockKind, GateBinding, PidClamp, ProbeTarget,
-    Signal, TransientWithBlocksStep,
+    simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, GainValue, GateBinding,
+    PidClamp, ProbeTarget, Signal, SignalValue, TransientWithBlocksStep,
 };
 pub use closed_loop::{sawtooth_carrier, simulate_closed_loop};
 pub use step_control::{AdaptiveConfig, TimeStep};
@@ -145,6 +145,24 @@ pub enum DaeError {
     /// the later one win, so a `Signal::Block(name)` reference would silently resolve to the
     /// wrong block instead of failing loudly.
     DuplicateBlockName(String),
+    /// A [`block_graph::BlockKind`] that requires a `SignalValue::Scalar` input (or a specific
+    /// operand shape, e.g. `Sum`/`Product`'s "all-scalar or all-vector, never mixed" rule, or a
+    /// matrix `Gain`'s own required vector length) received a `SignalValue::Vector` it can't
+    /// accept — the default, fail-closed rule for any block kind without an elementwise/
+    /// broadcast rule of its own. See `book/dev-guide/src/vector-signals.md` for exactly which
+    /// block kinds accept a `Vector` and under what rule.
+    VectorSignalNotSupported {
+        block: String,
+    },
+    /// Two (or more) `SignalValue::Vector`s feeding the same block disagree in length (e.g.
+    /// `Sum`'s own inputs, `MathFn2`'s two operands), or a `Vector`'s own length doesn't match
+    /// a fixed arity the block itself declares (a matrix `Gain`'s own column count, a
+    /// `StateSpace`'s own declared input count).
+    VectorSignalSizeMismatch {
+        block: String,
+        expected: usize,
+        got: usize,
+    },
 }
 
 /// Solves the DC operating point of a netlist containing linear devices plus any number of

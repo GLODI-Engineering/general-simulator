@@ -68,7 +68,7 @@ fn probe_voltage_and_current_match_hand_derived_rc_charging_curve() {
     let mut prev_vout = 0.0_f64;
     for (t, point, outputs) in &trace {
         let expected_vout_prev = 10.0 * (1.0 - (-(t - dt) / tau).exp());
-        let probed_vout = outputs["VOUT_PROBE"];
+        let probed_vout = outputs["VOUT_PROBE"].as_scalar().unwrap();
         assert!(
             (probed_vout - prev_vout).abs() < 1e-12,
             "t={t}: probe VOUT_PROBE={probed_vout} disagrees with the previous step's own \
@@ -91,13 +91,13 @@ fn probe_voltage_and_current_match_hand_derived_rc_charging_curve() {
     let (_, _, second_outputs) = &trace[1];
     let (_, _, last_outputs) = trace.last().unwrap();
     assert!(
-        second_outputs["I_V1_PROBE"].abs() > 0.005,
+        second_outputs["I_V1_PROBE"].as_scalar().unwrap().abs() > 0.005,
         "expected substantial charging current shortly after t=0, got {}",
-        second_outputs["I_V1_PROBE"]
+        second_outputs["I_V1_PROBE"].as_scalar().unwrap()
     );
     assert!(
-        last_outputs["I_V1_PROBE"].abs() < 1e-4,
+        last_outputs["I_V1_PROBE"].as_scalar().unwrap().abs() < 1e-4,
         "expected charging current to have decayed near zero by t_final, got {}",
-        last_outputs["I_V1_PROBE"]
+        last_outputs["I_V1_PROBE"].as_scalar().unwrap()
     );
 }

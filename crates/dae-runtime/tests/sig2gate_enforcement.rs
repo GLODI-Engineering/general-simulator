@@ -8,8 +8,8 @@
 use std::collections::BTreeMap;
 
 use dae_runtime::{
-    simulate_transient_with_blocks, BlockInstance, BlockKind, DaeError, GateBinding, Signal,
-    TimeStep,
+    simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, DaeError, GateBinding,
+    Signal, TimeStep,
 };
 use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
@@ -31,7 +31,7 @@ fn naming_a_raw_block_directly_is_rejected_before_any_step_runs() {
 
     let blocks = vec![BlockInstance {
         name: "DUTY".to_string(),
-        kind: BlockKind::Const(0.3),
+        kind: BlockKind::Const(ConstValue::Scalar(0.3)),
         inputs: vec![],
     }];
     let mut gates = BTreeMap::new();
@@ -78,7 +78,7 @@ fn wrapping_the_same_block_in_sig2gate_makes_it_work() {
     let blocks = vec![
         BlockInstance {
             name: "DUTY".to_string(),
-            kind: BlockKind::Const(0.3),
+            kind: BlockKind::Const(ConstValue::Scalar(0.3)),
             inputs: vec![],
         },
         BlockInstance {

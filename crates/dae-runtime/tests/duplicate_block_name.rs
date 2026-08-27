@@ -8,7 +8,8 @@
 use std::collections::BTreeMap;
 
 use dae_runtime::{
-    simulate_transient_with_blocks, BlockInstance, BlockKind, DaeError, Signal, TimeStep,
+    simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, DaeError, Signal,
+    TimeStep,
 };
 use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
@@ -47,12 +48,12 @@ fn two_blocks_sharing_a_name_are_rejected() {
     let blocks = vec![
         BlockInstance {
             name: "A".to_string(),
-            kind: BlockKind::Const(1.0),
+            kind: BlockKind::Const(ConstValue::Scalar(1.0)),
             inputs: vec![],
         },
         BlockInstance {
             name: "A".to_string(),
-            kind: BlockKind::Const(2.0),
+            kind: BlockKind::Const(ConstValue::Scalar(2.0)),
             inputs: vec![],
         },
     ];
@@ -68,12 +69,12 @@ fn a_pwm_complement_alias_colliding_with_another_blocks_name_is_rejected() {
     let blocks = vec![
         BlockInstance {
             name: "DUTY".to_string(),
-            kind: BlockKind::Const(0.5),
+            kind: BlockKind::Const(ConstValue::Scalar(0.5)),
             inputs: vec![],
         },
         BlockInstance {
             name: "TAKEN".to_string(),
-            kind: BlockKind::Const(3.0),
+            kind: BlockKind::Const(ConstValue::Scalar(3.0)),
             inputs: vec![],
         },
         BlockInstance {

@@ -14,7 +14,9 @@
 
 use std::collections::BTreeMap;
 
-use dae_runtime::{simulate_transient_with_blocks, BlockInstance, BlockKind, PidClamp, TimeStep};
+use dae_runtime::{
+    simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, PidClamp, TimeStep,
+};
 use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
 
@@ -41,17 +43,17 @@ fn dynamic_clamp_matches_fixed_clamp_at_the_same_constant_bound() {
         vec![
             BlockInstance {
                 name: "ERR".to_string(),
-                kind: BlockKind::Const(100.0),
+                kind: BlockKind::Const(ConstValue::Scalar(100.0)),
                 inputs: vec![],
             },
             BlockInstance {
                 name: "LO".to_string(),
-                kind: BlockKind::Const(-5.0),
+                kind: BlockKind::Const(ConstValue::Scalar(-5.0)),
                 inputs: vec![],
             },
             BlockInstance {
                 name: "HI".to_string(),
-                kind: BlockKind::Const(5.0),
+                kind: BlockKind::Const(ConstValue::Scalar(5.0)),
                 inputs: vec![],
             },
             BlockInstance {
@@ -103,7 +105,10 @@ fn dynamic_clamp_matches_fixed_clamp_at_the_same_constant_bound() {
     }
     // Confirm the clamp is actually engaged (not just coincidentally equal), i.e. the run truly
     // saturated at the bound rather than staying comfortably inside it.
-    assert_eq!(fixed_trace.last().unwrap().2["PID1"], 5.0);
+    assert_eq!(
+        fixed_trace.last().unwrap().2["PID1"].as_scalar().unwrap(),
+        5.0
+    );
 }
 
 #[test]
@@ -115,12 +120,12 @@ fn dynamic_clamp_respects_a_bound_that_shrinks_mid_run() {
     let blocks = vec![
         BlockInstance {
             name: "ERR".to_string(),
-            kind: BlockKind::Const(100.0),
+            kind: BlockKind::Const(ConstValue::Scalar(100.0)),
             inputs: vec![],
         },
         BlockInstance {
             name: "LO".to_string(),
-            kind: BlockKind::Const(-1000.0),
+            kind: BlockKind::Const(ConstValue::Scalar(-1000.0)),
             inputs: vec![],
         },
         // HI starts wide open (1000) so the PID's output is free to run up near it, then drops
@@ -170,17 +175,17 @@ fn dynamic_clamp_respects_a_bound_that_shrinks_mid_run() {
         .find(|(t, ..)| *t < 1e-3)
         .expect("at least one step before t=1ms");
     assert!(
-        before["PID1"] > 20.0,
+        before["PID1"].as_scalar().unwrap() > 20.0,
         "expected PID1 to have grown well past 5 while HI=1000, got {}",
-        before["PID1"]
+        before["PID1"].as_scalar().unwrap()
     );
 
     // From the first step at/after the bound shrinks onward, output must never exceed 5.0.
     for (t, _, outputs) in trace.iter().filter(|(t, ..)| *t >= 1e-3) {
         assert!(
-            outputs["PID1"] <= 5.0 + 1e-9,
+            outputs["PID1"].as_scalar().unwrap() <= 5.0 + 1e-9,
             "t={t}: PID1={} exceeds the shrunk HI=5.0 bound",
-            outputs["PID1"]
+            outputs["PID1"].as_scalar().unwrap()
         );
     }
 }

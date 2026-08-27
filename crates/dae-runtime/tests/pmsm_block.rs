@@ -8,7 +8,9 @@
 
 use std::collections::BTreeMap;
 
-use dae_runtime::{simulate_transient_with_blocks, BlockInstance, BlockKind, Signal, TimeStep};
+use dae_runtime::{
+    simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, Signal, TimeStep,
+};
 use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
 
@@ -25,17 +27,17 @@ fn pmsm_block_matches_hand_derived_rl_circuit_when_decoupled() {
     let blocks = vec![
         BlockInstance {
             name: "VD".to_string(),
-            kind: BlockKind::Const(vd),
+            kind: BlockKind::Const(ConstValue::Scalar(vd)),
             inputs: vec![],
         },
         BlockInstance {
             name: "VQ".to_string(),
-            kind: BlockKind::Const(0.0),
+            kind: BlockKind::Const(ConstValue::Scalar(0.0)),
             inputs: vec![],
         },
         BlockInstance {
             name: "TLOAD".to_string(),
-            kind: BlockKind::Const(0.0),
+            kind: BlockKind::Const(ConstValue::Scalar(0.0)),
             inputs: vec![],
         },
         BlockInstance {
@@ -81,20 +83,24 @@ fn pmsm_block_matches_hand_derived_rl_circuit_when_decoupled() {
 
     let tol = 1e-6;
     assert!(
-        (outputs["M1"] - expected_id).abs() < tol,
+        (outputs["M1"].as_scalar().unwrap() - expected_id).abs() < tol,
         "id={}, expected={}",
-        outputs["M1"],
+        outputs["M1"].as_scalar().unwrap(),
         expected_id
     );
-    assert!(outputs["M1_iq"].abs() < tol, "iq={}", outputs["M1_iq"]);
     assert!(
-        outputs["M1_omega"].abs() < tol,
-        "omega_m={}",
-        outputs["M1_omega"]
+        outputs["M1_iq"].as_scalar().unwrap().abs() < tol,
+        "iq={}",
+        outputs["M1_iq"].as_scalar().unwrap()
     );
     assert!(
-        outputs["M1_theta"].abs() < tol,
+        outputs["M1_omega"].as_scalar().unwrap().abs() < tol,
+        "omega_m={}",
+        outputs["M1_omega"].as_scalar().unwrap()
+    );
+    assert!(
+        outputs["M1_theta"].as_scalar().unwrap().abs() < tol,
         "theta_e={}",
-        outputs["M1_theta"]
+        outputs["M1_theta"].as_scalar().unwrap()
     );
 }

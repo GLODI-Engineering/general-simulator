@@ -48,8 +48,121 @@ use crate::{
 
 use general_mna::block_graph::block_kind_name;
 pub use general_mna::block_graph::{
-    BlockInstance, BlockKind, GateBinding, PidClamp, ProbeTarget, Signal,
+    BlockInstance, BlockKind, ConstValue, GainValue, GateBinding, PidClamp, ProbeTarget, Signal,
+    SignalValue,
 };
+
+/// Every input must be `Scalar` — the default rule for a `BlockKind` that has no elementwise/
+/// broadcast/flattening rule of its own (`Pid`, `Vco`, `Hysteresis`, `TransferFunction`, `Pwm`,
+/// `PhaseShiftPwm`, `Sig2Gate`, `Sig2Voltage`, `Sig2Current`). Returns the plain `f64` values in
+/// order, or a clear error naming the block the moment any input is a `Vector`.
+fn require_all_scalar(block_name: &str, input_vals: &[SignalValue]) -> Result<Vec<f64>, DaeError> {
+    input_vals
+        .iter()
+        .map(|v| {
+            v.as_scalar()
+                .ok_or_else(|| DaeError::VectorSignalNotSupported {
+                    block: block_name.to_string(),
+                })
+        })
+        .collect()
+}
+
+/// Flattens `input_vals` (each independently `Scalar` or `Vector`) into one `Vec<f64>`, in
+/// order — the input-bundling convention `StateSpace`, `CoordinateTransform`, `Pmsm`, and
+/// `cscript` all share: a downstream block wanting several upstream values can list them one
+/// per `Signal`, mixing scalar and vector references freely, and this is where they get
+/// concatenated into the flat vector each of those blocks' own math actually consumes.
+fn flatten(input_vals: &[SignalValue]) -> Vec<f64> {
+    input_vals
+        .iter()
+        .flat_map(|v| v.as_slice().iter().copied())
+        .collect()
+}
+
+/// The common vector length among `operands` (every `Vector` operand must share one length; a
+/// lone `Scalar` operand broadcasts against it) — `None` if every operand is `Scalar` (no
+/// broadcasting needed, the block should just compute its ordinary scalar result). Used by
+/// `MathFn2`/`MathFn3`, which — unlike `Sum`/`Product` — always have an unambiguous pairing for
+/// a lone scalar operand, so broadcasting it is the right default rather than an error.
+fn common_vector_len(
+    block_name: &str,
+    operands: &[&SignalValue],
+) -> Result<Option<usize>, DaeError> {
+    let mut common: Option<usize> = None;
+    for v in operands {
+        if let SignalValue::Vector(xs) = v {
+            match common {
+                None => common = Some(xs.len()),
+                Some(n) if n == xs.len() => {}
+                Some(n) => {
+                    return Err(DaeError::VectorSignalSizeMismatch {
+                        block: block_name.to_string(),
+                        expected: n,
+                        got: xs.len(),
+                    })
+                }
+            }
+        }
+    }
+    Ok(common)
+}
+
+/// `v`'s own value at element `i` — its single scalar if `v` is `Scalar` (the broadcast case),
+/// or `v`'s own `i`-th element if `v` is `Vector`. Panics if `v` is a `Vector` shorter than
+/// `i + 1`; callers only ever index up to the common length `common_vector_len` already
+/// validated every `Vector` operand agrees with, so this is never actually out of bounds.
+fn broadcast_at(v: &SignalValue, i: usize) -> f64 {
+    match v {
+        SignalValue::Scalar(x) => *x,
+        SignalValue::Vector(xs) => xs[i],
+    }
+}
+
+/// Every input must be a `Vector`, all the same length — `Sum`/`Product`'s own rule, distinct
+/// from `common_vector_len`'s broadcast: an N-input reduction has no unambiguous placement for
+/// a lone scalar once more than one vector is already present, so a mix of `Scalar` and
+/// `Vector` inputs is rejected outright rather than guessed at (see
+/// `book/dev-guide/src/vector-signals.md`, category 3).
+fn require_uniform_vectors(
+    block_name: &str,
+    input_vals: &[SignalValue],
+) -> Result<usize, DaeError> {
+    let mut common: Option<usize> = None;
+    for v in input_vals {
+        let SignalValue::Vector(xs) = v else {
+            return Err(DaeError::VectorSignalNotSupported {
+                block: block_name.to_string(),
+            });
+        };
+        match common {
+            None => common = Some(xs.len()),
+            Some(n) if n == xs.len() => {}
+            Some(n) => {
+                return Err(DaeError::VectorSignalSizeMismatch {
+                    block: block_name.to_string(),
+                    expected: n,
+                    got: xs.len(),
+                })
+            }
+        }
+    }
+    Ok(common.unwrap_or(0))
+}
+
+/// Filters a block-graph output map down to its `Scalar` entries only, discarding any `Vector`
+/// ones — used specifically where a `V`/`I` source's own literal value needs a scalar-only
+/// symbol table (`fold_and_solve`'s `extra_values`/`extra_values_prev`): the *only* symbols
+/// that can legitimately appear there are a `Sig2Voltage`/`Sig2Current` converter's own name,
+/// and both are guaranteed `Scalar` (they reject a `Vector` input at evaluation time — see
+/// their own `evaluate_blocks` arm), so dropping any `Vector` entry here is safe, not a silent
+/// bug: nothing that could legitimately need one is ever filtered out.
+fn scalar_only(outputs: &BTreeMap<String, SignalValue>) -> BTreeMap<String, f64> {
+    outputs
+        .iter()
+        .filter_map(|(k, v)| v.as_scalar().map(|x| (k.clone(), x)))
+        .collect()
+}
 
 #[derive(Clone)]
 enum BlockState {
@@ -105,7 +218,7 @@ enum BlockState {
 /// One step's result: `(t, OperatingPoint, block_outputs)`, where `block_outputs` is every
 /// block's value that step (by name) — useful for plotting a controller's internal signals
 /// (e.g. a `Vco`'s commanded frequency) without needing to separately re-derive them.
-pub type TransientWithBlocksStep = (f64, OperatingPoint, BTreeMap<String, f64>);
+pub type TransientWithBlocksStep = (f64, OperatingPoint, BTreeMap<String, SignalValue>);
 
 /// Name -> block index, including a [`BlockKind::CScript`]/[`BlockKind::CoordinateTransform`]/
 /// [`BlockKind::Pmsm`]'s extra `output_names` (aliasing the index of the block that declared
@@ -250,13 +363,16 @@ fn periodic_time(t: f64, points: &[(f64, f64)], repeat: bool) -> f64 {
 /// `complement` output under `output_names[1]` (inserted here, if given). One implementation so
 /// a third gate-driving modulator only has to call this, not re-derive the convention.
 fn emit_complementary_pair(
-    outputs: &mut BTreeMap<String, f64>,
+    outputs: &mut BTreeMap<String, SignalValue>,
     output_names: &[String],
     main: bool,
     complement: bool,
 ) -> f64 {
     if let Some(name) = output_names.get(1) {
-        outputs.insert(name.clone(), if complement { 1.0 } else { 0.0 });
+        outputs.insert(
+            name.clone(),
+            SignalValue::Scalar(if complement { 1.0 } else { 0.0 }),
+        );
     }
     if main {
         1.0
@@ -270,43 +386,51 @@ fn evaluate_blocks(
     order: &[usize],
     block_states: &mut [BlockState],
     point_prev: &OperatingPoint,
-    prev_outputs: &BTreeMap<String, f64>,
+    prev_outputs: &BTreeMap<String, SignalValue>,
     t: f64,
     dt: f64,
-) -> Result<BTreeMap<String, f64>, DaeError> {
-    let mut outputs: BTreeMap<String, f64> = BTreeMap::new();
-    let resolve = |outputs: &BTreeMap<String, f64>, signal: &Signal| -> Result<f64, DaeError> {
+) -> Result<BTreeMap<String, SignalValue>, DaeError> {
+    let mut outputs: BTreeMap<String, SignalValue> = BTreeMap::new();
+    let resolve = |outputs: &BTreeMap<String, SignalValue>,
+                   signal: &Signal|
+     -> Result<SignalValue, DaeError> {
         match signal {
             Signal::Block(name) => outputs
                 .get(name)
-                .copied()
+                .cloned()
                 .ok_or_else(|| DaeError::UnknownBlockInput(name.clone())),
-            Signal::BlockPrev(name) => Ok(prev_outputs.get(name).copied().unwrap_or(0.0)),
+            Signal::BlockPrev(name) => Ok(prev_outputs
+                .get(name)
+                .cloned()
+                .unwrap_or(SignalValue::Scalar(0.0))),
         }
     };
 
     for &i in order {
         let block = &blocks[i];
         let state = &mut block_states[i];
-        let input_vals: Vec<f64> = block
+        let input_vals: Vec<SignalValue> = block
             .inputs
             .iter()
             .map(|s| resolve(&outputs, s))
             .collect::<Result<_, _>>()?;
 
-        let value = match (&block.kind, state) {
-            (BlockKind::Const(v), _) => *v,
-            (BlockKind::Time, _) => t,
-            (BlockKind::Probe(target), _) => match target {
+        let value: SignalValue = match (&block.kind, state) {
+            (BlockKind::Const(v), _) => match v {
+                ConstValue::Scalar(x) => SignalValue::Scalar(*x),
+                ConstValue::Vector(xs) => SignalValue::Vector(xs.clone()),
+            },
+            (BlockKind::Time, _) => SignalValue::Scalar(t),
+            (BlockKind::Probe(target), _) => SignalValue::Scalar(match target {
                 ProbeTarget::Voltage(node) => {
                     point_prev.value(&format!("V({node})")).unwrap_or(0.0)
                 }
                 ProbeTarget::Current(branch) => {
                     point_prev.value(&format!("I({branch})")).unwrap_or(0.0)
                 }
-            },
+            }),
             (BlockKind::Sig2Gate | BlockKind::Sig2Voltage | BlockKind::Sig2Current, _) => {
-                input_vals[0]
+                SignalValue::Scalar(require_all_scalar(&block.name, &input_vals)?[0])
             }
             (BlockKind::Pwc { points, repeat }, _) => {
                 let t_eval = periodic_time(t, points, *repeat);
@@ -318,11 +442,11 @@ fn evaluate_blocks(
                         break;
                     }
                 }
-                v
+                SignalValue::Scalar(v)
             }
             (BlockKind::Pwl { points, repeat }, _) => {
                 let t_eval = periodic_time(t, points, *repeat);
-                match points.as_slice() {
+                SignalValue::Scalar(match points.as_slice() {
                     [] => 0.0,
                     [(_, v)] => *v,
                     _ if t_eval <= points[0].0 => points[0].1,
@@ -343,12 +467,75 @@ fn evaluate_blocks(
                         }
                         v
                     }
+                })
+            }
+            (BlockKind::Waveform(f), _) => SignalValue::Scalar(f.value_at(t)),
+            (BlockKind::Sum(signs), _) => {
+                if input_vals
+                    .iter()
+                    .all(|v| matches!(v, SignalValue::Scalar(_)))
+                {
+                    let scalars = require_all_scalar(&block.name, &input_vals)?;
+                    SignalValue::Scalar(math_ops::sum(&scalars, signs))
+                } else {
+                    let n = require_uniform_vectors(&block.name, &input_vals)?;
+                    let out: Vec<f64> = (0..n)
+                        .map(|i| {
+                            let elems: Vec<f64> =
+                                input_vals.iter().map(|v| broadcast_at(v, i)).collect();
+                            math_ops::sum(&elems, signs)
+                        })
+                        .collect();
+                    SignalValue::Vector(out)
                 }
             }
-            (BlockKind::Waveform(f), _) => f.value_at(t),
-            (BlockKind::Sum(signs), _) => math_ops::sum(&input_vals, signs),
-            (BlockKind::Gain(k), _) => math_ops::gain(*k, input_vals[0]),
-            (BlockKind::Product, _) => math_ops::product(&input_vals),
+            (BlockKind::Gain(k), _) => match k {
+                GainValue::Scalar(k) => match &input_vals[0] {
+                    SignalValue::Scalar(x) => SignalValue::Scalar(math_ops::gain(*k, *x)),
+                    SignalValue::Vector(xs) => {
+                        SignalValue::Vector(xs.iter().map(|&x| math_ops::gain(*k, x)).collect())
+                    }
+                },
+                GainValue::Matrix(mat) => {
+                    let n = mat.first().map_or(0, |row| row.len());
+                    let SignalValue::Vector(x) = &input_vals[0] else {
+                        return Err(DaeError::VectorSignalNotSupported {
+                            block: block.name.clone(),
+                        });
+                    };
+                    if x.len() != n {
+                        return Err(DaeError::VectorSignalSizeMismatch {
+                            block: block.name.clone(),
+                            expected: n,
+                            got: x.len(),
+                        });
+                    }
+                    let y: Vec<f64> = mat
+                        .iter()
+                        .map(|row| row.iter().zip(x).map(|(a, b)| a * b).sum())
+                        .collect();
+                    SignalValue::Vector(y)
+                }
+            },
+            (BlockKind::Product, _) => {
+                if input_vals
+                    .iter()
+                    .all(|v| matches!(v, SignalValue::Scalar(_)))
+                {
+                    let scalars = require_all_scalar(&block.name, &input_vals)?;
+                    SignalValue::Scalar(math_ops::product(&scalars))
+                } else {
+                    let n = require_uniform_vectors(&block.name, &input_vals)?;
+                    let out: Vec<f64> = (0..n)
+                        .map(|i| {
+                            let elems: Vec<f64> =
+                                input_vals.iter().map(|v| broadcast_at(v, i)).collect();
+                            math_ops::product(&elems)
+                        })
+                        .collect();
+                    SignalValue::Vector(out)
+                }
+            }
             (
                 BlockKind::Pwm {
                     freq_hz,
@@ -359,60 +546,151 @@ fn evaluate_blocks(
                 _,
             ) => {
                 let theta = sawtooth_carrier(t, *freq_hz);
-                let duty = input_vals[0];
+                let duty = require_all_scalar(&block.name, &input_vals)?[0];
                 let (main, complement) = math_ops::complementary_pwm_with_deadtime(
                     theta,
                     duty,
                     red * freq_hz,
                     fed * freq_hz,
                 );
-                emit_complementary_pair(&mut outputs, output_names, main, complement)
+                SignalValue::Scalar(emit_complementary_pair(
+                    &mut outputs,
+                    output_names,
+                    main,
+                    complement,
+                ))
             }
-            (BlockKind::Saturation(limit), _) => math_ops::saturation(input_vals[0], *limit),
-            (BlockKind::Table(points), _) => {
-                continuous_blocks::waveform_arithmetic::table(input_vals[0], points)
+            (BlockKind::Saturation(limit), _) => match &input_vals[0] {
+                SignalValue::Scalar(x) => SignalValue::Scalar(math_ops::saturation(*x, *limit)),
+                SignalValue::Vector(xs) => SignalValue::Vector(
+                    xs.iter()
+                        .map(|&x| math_ops::saturation(x, *limit))
+                        .collect(),
+                ),
+            },
+            (BlockKind::Table(points), _) => match &input_vals[0] {
+                SignalValue::Scalar(x) => {
+                    SignalValue::Scalar(continuous_blocks::waveform_arithmetic::table(*x, points))
+                }
+                SignalValue::Vector(xs) => SignalValue::Vector(
+                    xs.iter()
+                        .map(|&x| continuous_blocks::waveform_arithmetic::table(x, points))
+                        .collect(),
+                ),
+            },
+            (BlockKind::MathFn1(f), _) => match &input_vals[0] {
+                SignalValue::Scalar(x) => SignalValue::Scalar(f.call(*x)),
+                SignalValue::Vector(xs) => {
+                    SignalValue::Vector(xs.iter().map(|&x| f.call(x)).collect())
+                }
+            },
+            (BlockKind::MathFn2(f), _) => {
+                match common_vector_len(&block.name, &[&input_vals[0], &input_vals[1]])? {
+                    None => SignalValue::Scalar(f.call(
+                        input_vals[0].as_scalar().expect("checked Scalar above"),
+                        input_vals[1].as_scalar().expect("checked Scalar above"),
+                    )),
+                    Some(n) => SignalValue::Vector(
+                        (0..n)
+                            .map(|i| {
+                                f.call(
+                                    broadcast_at(&input_vals[0], i),
+                                    broadcast_at(&input_vals[1], i),
+                                )
+                            })
+                            .collect(),
+                    ),
+                }
             }
-            (BlockKind::MathFn1(f), _) => f.call(input_vals[0]),
-            (BlockKind::MathFn2(f), _) => f.call(input_vals[0], input_vals[1]),
-            (BlockKind::MathFn3(f), _) => f.call(input_vals[0], input_vals[1], input_vals[2]),
+            (BlockKind::MathFn3(f), _) => {
+                match common_vector_len(
+                    &block.name,
+                    &[&input_vals[0], &input_vals[1], &input_vals[2]],
+                )? {
+                    None => SignalValue::Scalar(f.call(
+                        input_vals[0].as_scalar().expect("checked Scalar above"),
+                        input_vals[1].as_scalar().expect("checked Scalar above"),
+                        input_vals[2].as_scalar().expect("checked Scalar above"),
+                    )),
+                    Some(n) => SignalValue::Vector(
+                        (0..n)
+                            .map(|i| {
+                                f.call(
+                                    broadcast_at(&input_vals[0], i),
+                                    broadcast_at(&input_vals[1], i),
+                                    broadcast_at(&input_vals[2], i),
+                                )
+                            })
+                            .collect(),
+                    ),
+                }
+            }
             (BlockKind::CoordinateTransform { kind, output_names }, _) => {
-                let outs = kind.call(&input_vals);
+                let flat = flatten(&input_vals);
+                let outs = kind.call(&flat);
                 // Same convention as BlockKind::CScript below: the block's own name is bound to
                 // the primary (first) output, any remaining output_names are inserted directly
-                // under their own names.
+                // under their own names. Output side stays scalar-only by design -- see
+                // book/dev-guide/src/vector-signals.md, category 9.
                 for (name, v) in output_names.iter().zip(outs.iter()).skip(1) {
-                    outputs.insert(name.clone(), *v);
+                    outputs.insert(name.clone(), SignalValue::Scalar(*v));
                 }
-                outs[0]
+                SignalValue::Scalar(outs[0])
             }
             (BlockKind::Pid { clamp, .. }, BlockState::Dynamic { state_space, x }) => {
+                let scalars = require_all_scalar(&block.name, &input_vals)?;
                 let (lo, hi) = match clamp {
                     PidClamp::Fixed(lo, hi) => (*lo, *hi),
-                    PidClamp::Dynamic => (input_vals[1], input_vals[2]),
+                    PidClamp::Dynamic => (scalars[1], scalars[2]),
                 };
-                let error = [input_vals[0]];
+                let error = [scalars[0]];
                 let tentative_x = state_space.rk4_step(x, &error, dt);
                 let tentative_output = state_space.output(&tentative_x, &error)[0];
                 let saturating_further = (tentative_output >= hi && error[0] > 0.0)
                     || (tentative_output <= lo && error[0] < 0.0);
-                if saturating_further {
+                SignalValue::Scalar(if saturating_further {
                     state_space.output(x, &error)[0].clamp(lo, hi)
                 } else {
                     *x = tentative_x;
                     tentative_output
+                })
+            }
+            (BlockKind::TransferFunction(_), BlockState::Dynamic { state_space, x }) => {
+                // Genuinely SISO by definition -- a rational N(s)/D(s) has no matrix
+                // generalization the way StateSpace's own (A,B,C,D) does. Reject a Vector input
+                // the same way Pid/Vco/Hysteresis do, rather than silently flattening.
+                let u = require_all_scalar(&block.name, &input_vals)?;
+                *x = state_space.rk4_step(x, &u, dt);
+                SignalValue::Scalar(state_space.output(x, &u)[0])
+            }
+            (BlockKind::StateSpace(_), BlockState::Dynamic { state_space, x }) => {
+                // Genuinely MIMO: state_space.inputs()/outputs() are not constrained to 1 --
+                // see BlockKind::StateSpace's own doc comment. Inputs flatten the same way
+                // CoordinateTransform/Pmsm/cscript's do; the *total* flattened length must
+                // match this system's own declared input count exactly (a mismatch can only be
+                // known here, not at parse time, since a vector-valued upstream signal's own
+                // length isn't visible from netlist text alone).
+                let u = flatten(&input_vals);
+                let expected = state_space.inputs();
+                if u.len() != expected {
+                    return Err(DaeError::VectorSignalSizeMismatch {
+                        block: block.name.clone(),
+                        expected,
+                        got: u.len(),
+                    });
+                }
+                *x = state_space.rk4_step(x, &u, dt);
+                let y = state_space.output(x, &u);
+                if y.len() == 1 {
+                    SignalValue::Scalar(y[0])
+                } else {
+                    SignalValue::Vector(y)
                 }
             }
-            (
-                BlockKind::StateSpace(_) | BlockKind::TransferFunction(_),
-                BlockState::Dynamic { state_space, x },
-            ) => {
-                let u = [input_vals[0]];
-                *x = state_space.rk4_step(x, &u, dt);
-                state_space.output(x, &u)[0]
-            }
             (BlockKind::Vco(_), BlockState::Vco { vco, phase }) => {
-                *phase = vco.step(*phase, input_vals[0], dt);
-                *phase
+                let u = require_all_scalar(&block.name, &input_vals)?;
+                *phase = vco.step(*phase, u[0], dt);
+                SignalValue::Scalar(*phase)
             }
             (
                 BlockKind::PhaseShiftPwm {
@@ -423,9 +701,10 @@ fn evaluate_blocks(
                 },
                 BlockState::PhaseShiftPwm { osc, phase },
             ) => {
-                let freq_command = input_vals[0];
-                let phase_offset = input_vals[1];
-                let duty = input_vals[2];
+                let u = require_all_scalar(&block.name, &input_vals)?;
+                let freq_command = u[0];
+                let phase_offset = u[1];
+                let duty = u[2];
                 *phase = osc.step(*phase, freq_command, dt);
                 let actual_freq = freq_command.clamp(osc.f_min, osc.f_max);
                 let theta = (*phase + phase_offset).rem_euclid(1.0);
@@ -435,24 +714,27 @@ fn evaluate_blocks(
                     red * actual_freq,
                     fed * actual_freq,
                 );
-                emit_complementary_pair(&mut outputs, output_names, main, complement)
+                SignalValue::Scalar(emit_complementary_pair(
+                    &mut outputs,
+                    output_names,
+                    main,
+                    complement,
+                ))
             }
             (BlockKind::Pmsm { output_names, .. }, BlockState::Pmsm { pmsm, x }) => {
-                *x = pmsm.step(*x, input_vals[0], input_vals[1], input_vals[2], dt);
+                let flat = flatten(&input_vals);
+                *x = pmsm.step(*x, flat[0], flat[1], flat[2], dt);
                 let [id, iq, omega_m, theta_e] = *x;
                 let full = [id, iq, omega_m, Pmsm::theta_e_wrapped(theta_e)];
                 for (name, v) in output_names.iter().zip(full.iter()).skip(1) {
-                    outputs.insert(name.clone(), *v);
+                    outputs.insert(name.clone(), SignalValue::Scalar(*v));
                 }
-                full[0]
+                SignalValue::Scalar(full[0])
             }
             (BlockKind::Hysteresis(_), BlockState::Hysteresis { hysteresis, on }) => {
-                *on = hysteresis.step(*on, input_vals[0]);
-                if *on {
-                    1.0
-                } else {
-                    0.0
-                }
+                let u = require_all_scalar(&block.name, &input_vals)?;
+                *on = hysteresis.step(*on, u[0]);
+                SignalValue::Scalar(if *on { 1.0 } else { 0.0 })
             }
             (
                 BlockKind::CScript {
@@ -492,25 +774,32 @@ fn evaluate_blocks(
                     }
                 };
                 if due {
+                    // Flattened the same way StateSpace/CoordinateTransform/Pmsm's inputs are --
+                    // each declared `inputs=` entry independently scalar or vector, concatenated
+                    // in order into the flat array cscript_output/cscript_output_xc/
+                    // cscript_derivative already expect. No C ABI change needed for this.
+                    let flat = flatten(&input_vals);
                     *last_output = if *xc_count > 0 {
                         // Step xc first, then compute output from the *new* xc -- the same
                         // "step state, then compute output from the updated state" ordering
                         // BlockKind::StateSpace/TransferFunction's own arm above uses.
-                        *xc = instance.rk4_step_xc(xc, &input_vals, elapsed);
-                        instance.call_xc(&input_vals, elapsed, xc, output_names.len())
+                        *xc = instance.rk4_step_xc(xc, &flat, elapsed);
+                        instance.call_xc(&flat, elapsed, xc, output_names.len())
                     } else {
-                        instance.call(&input_vals, elapsed, output_names.len())
+                        instance.call(&flat, elapsed, output_names.len())
                     };
                 }
                 // The primary value (this block's own name) is last_output[0], inserted below
                 // like every other block; any additional declared output_names are inserted
                 // here under their own names, so a downstream block can reference them
                 // directly via Signal::Block(name) without needing to know they came from a
-                // CScript block.
+                // CScript block. Output side stays scalar-only by design (same as
+                // CoordinateTransform/Pmsm above) -- see book/dev-guide/src/vector-signals.md,
+                // category 10.
                 for (name, v) in output_names.iter().zip(last_output.iter()).skip(1) {
-                    outputs.insert(name.clone(), *v);
+                    outputs.insert(name.clone(), SignalValue::Scalar(*v));
                 }
-                last_output.first().copied().unwrap_or(0.0)
+                SignalValue::Scalar(last_output.first().copied().unwrap_or(0.0))
             }
             _ => unreachable!("BlockState variant always matches its BlockKind"),
         };
@@ -521,7 +810,7 @@ fn evaluate_blocks(
 
 fn resolve_gates(
     gates: &BTreeMap<String, GateBinding>,
-    outputs: &BTreeMap<String, f64>,
+    outputs: &BTreeMap<String, SignalValue>,
 ) -> BTreeMap<String, GateState> {
     gates
         .iter()
@@ -727,7 +1016,7 @@ pub fn simulate_transient_with_blocks(
     // Empty on the first step, matching every dynamic block's own "starts at rest" convention
     // -- any Signal::BlockPrev reference resolves to 0.0 before any block has ever produced an
     // output.
-    let mut prev_outputs: BTreeMap<String, f64> = BTreeMap::new();
+    let mut prev_outputs: BTreeMap<String, SignalValue> = BTreeMap::new();
 
     let mut trace = Vec::new();
     let mut t = 0.0;
@@ -774,8 +1063,8 @@ pub fn simulate_transient_with_blocks(
                     &prev_segments,
                     forced,
                     t,
-                    &outputs,
-                    &prev_outputs,
+                    &scalar_only(&outputs),
+                    &scalar_only(&prev_outputs),
                 )?;
                 if used_backward_euler && !forced {
                     ringing_cooldown = RINGING_COOLDOWN_STEPS;
@@ -846,8 +1135,8 @@ pub fn simulate_transient_with_blocks(
                         forced,
                         &config,
                         t,
-                        &outputs,
-                        &prev_outputs,
+                        &scalar_only(&outputs),
+                        &scalar_only(&prev_outputs),
                     )?;
 
                     if !attempt.accept {

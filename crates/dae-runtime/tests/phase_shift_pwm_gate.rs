@@ -20,7 +20,8 @@
 use std::collections::BTreeMap;
 
 use dae_runtime::{
-    simulate_transient_with_blocks, BlockInstance, BlockKind, GateBinding, Signal, TimeStep,
+    simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, GateBinding, Signal,
+    TimeStep,
 };
 use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
@@ -36,17 +37,17 @@ fn phase_shift_pwm_gate_matches_hand_computed_switching_instants() {
     let blocks = vec![
         BlockInstance {
             name: "FREQ".to_string(),
-            kind: BlockKind::Const(100_000.0),
+            kind: BlockKind::Const(ConstValue::Scalar(100_000.0)),
             inputs: vec![],
         },
         BlockInstance {
             name: "PHASE".to_string(),
-            kind: BlockKind::Const(0.25),
+            kind: BlockKind::Const(ConstValue::Scalar(0.25)),
             inputs: vec![],
         },
         BlockInstance {
             name: "DUTY".to_string(),
-            kind: BlockKind::Const(0.5),
+            kind: BlockKind::Const(ConstValue::Scalar(0.5)),
             inputs: vec![],
         },
         BlockInstance {

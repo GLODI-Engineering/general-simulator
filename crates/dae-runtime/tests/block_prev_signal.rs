@@ -12,7 +12,10 @@
 
 use std::collections::BTreeMap;
 
-use dae_runtime::{simulate_transient_with_blocks, BlockInstance, BlockKind, Signal, TimeStep};
+use dae_runtime::{
+    simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, GainValue, Signal,
+    TimeStep,
+};
 use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
 
@@ -26,7 +29,7 @@ fn block_prev_self_reference_builds_an_exact_discrete_accumulator() {
     let blocks = vec![
         BlockInstance {
             name: "IN".to_string(),
-            kind: BlockKind::Const(1.0),
+            kind: BlockKind::Const(ConstValue::Scalar(1.0)),
             inputs: vec![],
         },
         BlockInstance {
@@ -61,9 +64,9 @@ fn block_prev_self_reference_builds_an_exact_discrete_accumulator() {
     for (i, (_, _, outputs)) in trace.iter().enumerate() {
         let expected = (i + 1) as f64; // step 1 -> ACC=1, step 2 -> ACC=2, ...
         assert!(
-            (outputs["ACC"] - expected).abs() < 1e-12,
+            (outputs["ACC"].as_scalar().unwrap() - expected).abs() < 1e-12,
             "step {i}: ACC={}, expected={expected}",
-            outputs["ACC"]
+            outputs["ACC"].as_scalar().unwrap()
         );
     }
 }
@@ -80,7 +83,7 @@ fn block_prev_of_an_unevaluated_block_is_zero_before_the_first_step() {
 
     let blocks = vec![BlockInstance {
         name: "OUT".to_string(),
-        kind: BlockKind::Gain(2.0),
+        kind: BlockKind::Gain(GainValue::Scalar(2.0)),
         inputs: vec![Signal::BlockPrev("NOWHERE".to_string())],
     }];
 
@@ -99,5 +102,5 @@ fn block_prev_of_an_unevaluated_block_is_zero_before_the_first_step() {
     .unwrap();
 
     let (_, _, outputs) = trace.first().unwrap();
-    assert_eq!(outputs["OUT"], 0.0);
+    assert_eq!(outputs["OUT"].as_scalar().unwrap(), 0.0);
 }

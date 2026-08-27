@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use dae_runtime::{simulate_transient_with_blocks, BlockInstance, BlockKind, TimeStep};
+use dae_runtime::{simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, TimeStep};
 use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
 
@@ -26,22 +26,22 @@ fn coordinate_transform_block_exposes_all_outputs_by_name() {
     let blocks = vec![
         BlockInstance {
             name: "A".to_string(),
-            kind: BlockKind::Const(1.0),
+            kind: BlockKind::Const(ConstValue::Scalar(1.0)),
             inputs: vec![],
         },
         BlockInstance {
             name: "B".to_string(),
-            kind: BlockKind::Const(-0.5),
+            kind: BlockKind::Const(ConstValue::Scalar(-0.5)),
             inputs: vec![],
         },
         BlockInstance {
             name: "C".to_string(),
-            kind: BlockKind::Const(-0.5),
+            kind: BlockKind::Const(ConstValue::Scalar(-0.5)),
             inputs: vec![],
         },
         BlockInstance {
             name: "THETA".to_string(),
-            kind: BlockKind::Const(0.0),
+            kind: BlockKind::Const(ConstValue::Scalar(0.0)),
             inputs: vec![],
         },
         BlockInstance {
@@ -97,13 +97,25 @@ fn coordinate_transform_block_exposes_all_outputs_by_name() {
 
     let tol = 1e-9;
     assert!(
-        (outputs["CLARKE"] - 1.0).abs() < tol,
+        (outputs["CLARKE"].as_scalar().unwrap() - 1.0).abs() < tol,
         "alpha (primary output)"
     );
-    assert!(outputs["CLARKE_beta"].abs() < tol, "beta");
-    assert!(outputs["CLARKE_zero"].abs() < tol, "zero");
+    assert!(
+        outputs["CLARKE_beta"].as_scalar().unwrap().abs() < tol,
+        "beta"
+    );
+    assert!(
+        outputs["CLARKE_zero"].as_scalar().unwrap().abs() < tol,
+        "zero"
+    );
 
-    assert!((outputs["DQ0"] - 1.0).abs() < tol, "d (primary output)");
-    assert!(outputs["DQ0_q"].abs() < tol, "q");
-    assert!(outputs["DQ0_zero"].abs() < tol, "zero (fused Clarke-Park)");
+    assert!(
+        (outputs["DQ0"].as_scalar().unwrap() - 1.0).abs() < tol,
+        "d (primary output)"
+    );
+    assert!(outputs["DQ0_q"].as_scalar().unwrap().abs() < tol, "q");
+    assert!(
+        outputs["DQ0_zero"].as_scalar().unwrap().abs() < tol,
+        "zero (fused Clarke-Park)"
+    );
 }

@@ -10,7 +10,8 @@
 use std::collections::BTreeMap;
 
 use dae_runtime::{
-    simulate_transient_with_blocks, BlockInstance, BlockKind, GateBinding, Signal, TimeStep,
+    simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, GateBinding, Signal,
+    TimeStep,
 };
 use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
@@ -34,7 +35,7 @@ fn pwm_blocks(freq_hz: f64, red: f64, fed: f64) -> Vec<BlockInstance> {
     vec![
         BlockInstance {
             name: "DUTY".to_string(),
-            kind: BlockKind::Const(0.3),
+            kind: BlockKind::Const(ConstValue::Scalar(0.3)),
             inputs: vec![],
         },
         BlockInstance {

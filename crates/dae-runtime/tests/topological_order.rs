@@ -9,7 +9,8 @@
 use std::collections::BTreeMap;
 
 use dae_runtime::{
-    simulate_transient_with_blocks, BlockInstance, BlockKind, DaeError, Signal, TimeStep,
+    simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, DaeError, GainValue,
+    Signal, TimeStep,
 };
 use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
@@ -58,21 +59,21 @@ fn a_block_declared_before_its_own_dependency_still_computes_correctly() {
         },
         BlockInstance {
             name: "A".to_string(),
-            kind: BlockKind::Const(7.0),
+            kind: BlockKind::Const(ConstValue::Scalar(7.0)),
             inputs: vec![],
         },
         BlockInstance {
             name: "B".to_string(),
-            kind: BlockKind::Const(3.0),
+            kind: BlockKind::Const(ConstValue::Scalar(3.0)),
             inputs: vec![],
         },
     ];
 
     let trace = run(&blocks).unwrap();
     let (_, _, outputs) = trace.first().unwrap();
-    assert_eq!(outputs["SUM"], 4.0);
-    assert_eq!(outputs["A"], 7.0);
-    assert_eq!(outputs["B"], 3.0);
+    assert_eq!(outputs["SUM"].as_scalar().unwrap(), 4.0);
+    assert_eq!(outputs["A"].as_scalar().unwrap(), 7.0);
+    assert_eq!(outputs["B"].as_scalar().unwrap(), 3.0);
 }
 
 #[test]
@@ -80,17 +81,17 @@ fn a_three_block_cycle_is_rejected_with_the_exact_closing_path() {
     let blocks = vec![
         BlockInstance {
             name: "A".to_string(),
-            kind: BlockKind::Gain(1.0),
+            kind: BlockKind::Gain(GainValue::Scalar(1.0)),
             inputs: vec![Signal::Block("C".to_string())],
         },
         BlockInstance {
             name: "B".to_string(),
-            kind: BlockKind::Gain(1.0),
+            kind: BlockKind::Gain(GainValue::Scalar(1.0)),
             inputs: vec![Signal::Block("A".to_string())],
         },
         BlockInstance {
             name: "C".to_string(),
-            kind: BlockKind::Gain(1.0),
+            kind: BlockKind::Gain(GainValue::Scalar(1.0)),
             inputs: vec![Signal::Block("B".to_string())],
         },
     ];
@@ -115,7 +116,7 @@ fn a_three_block_cycle_is_rejected_with_the_exact_closing_path() {
 fn a_self_referencing_block_is_rejected_as_a_length_one_cycle() {
     let blocks = vec![BlockInstance {
         name: "A".to_string(),
-        kind: BlockKind::Gain(1.0),
+        kind: BlockKind::Gain(GainValue::Scalar(1.0)),
         inputs: vec![Signal::Block("A".to_string())],
     }];
 
@@ -144,17 +145,17 @@ fn a_cycle_broken_by_block_prev_is_not_a_cycle_at_all() {
         },
         BlockInstance {
             name: "SEED".to_string(),
-            kind: BlockKind::Const(1.0),
+            kind: BlockKind::Const(ConstValue::Scalar(1.0)),
             inputs: vec![],
         },
         BlockInstance {
             name: "B".to_string(),
-            kind: BlockKind::Gain(1.0),
+            kind: BlockKind::Gain(GainValue::Scalar(1.0)),
             inputs: vec![Signal::Block("A".to_string())],
         },
         BlockInstance {
             name: "C".to_string(),
-            kind: BlockKind::Gain(1.0),
+            kind: BlockKind::Gain(GainValue::Scalar(1.0)),
             inputs: vec![Signal::Block("B".to_string())],
         },
     ];
@@ -162,10 +163,10 @@ fn a_cycle_broken_by_block_prev_is_not_a_cycle_at_all() {
     let trace = run(&blocks).unwrap();
     // First step: prev:C is 0.0 (nothing evaluated yet), so A = 0 + 1 = 1.
     let (_, _, first) = trace.first().unwrap();
-    assert_eq!(first["A"], 1.0);
-    assert_eq!(first["B"], 1.0);
-    assert_eq!(first["C"], 1.0);
+    assert_eq!(first["A"].as_scalar().unwrap(), 1.0);
+    assert_eq!(first["B"].as_scalar().unwrap(), 1.0);
+    assert_eq!(first["C"].as_scalar().unwrap(), 1.0);
     // Second step: prev:C is now 1.0 (from the first step), so A = 1 + 1 = 2.
     let (_, _, second) = &trace[1];
-    assert_eq!(second["A"], 2.0);
+    assert_eq!(second["A"].as_scalar().unwrap(), 2.0);
 }

@@ -15,7 +15,8 @@
 use std::collections::BTreeMap;
 
 use dae_runtime::{
-    simulate_transient_with_blocks, BlockInstance, BlockKind, DaeError, Signal, TimeStep,
+    simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, DaeError, Signal,
+    TimeStep,
 };
 use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
@@ -84,7 +85,7 @@ fn sig2current_drives_a_current_source_matching_ohms_law_exactly() {
     let blocks = vec![
         BlockInstance {
             name: "CMD".to_string(),
-            kind: BlockKind::Const(0.01), // 10mA
+            kind: BlockKind::Const(ConstValue::Scalar(0.01)), // 10mA
             inputs: vec![],
         },
         BlockInstance {
@@ -129,7 +130,7 @@ fn a_voltage_source_naming_a_sig2current_block_is_rejected() {
     let blocks = vec![
         BlockInstance {
             name: "CMD".to_string(),
-            kind: BlockKind::Const(5.0),
+            kind: BlockKind::Const(ConstValue::Scalar(5.0)),
             inputs: vec![],
         },
         BlockInstance {
@@ -177,7 +178,7 @@ fn a_voltage_source_naming_a_plain_block_directly_is_rejected() {
 
     let blocks = vec![BlockInstance {
         name: "CMD".to_string(),
-        kind: BlockKind::Const(5.0),
+        kind: BlockKind::Const(ConstValue::Scalar(5.0)),
         inputs: vec![],
     }];
 

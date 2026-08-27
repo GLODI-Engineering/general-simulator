@@ -93,6 +93,70 @@ fn statespace_a_b_c_parse_as_python_lists_and_match_hand_derived_rc_response() {
 }
 
 #[test]
+fn statespace_mimo_b_c_matrices_parse_and_csv_columns_expand_per_element() {
+    // A=0, B=I, C=I, D=0 (given as genuine 2x2 matrices, not the SISO flat-list shorthand) --
+    // two independent pure integrators, x1'=u1, x2'=u2, y=x. x'=const is exactly linear, so
+    // y(t)=u*t exactly -- a real closed-form check on the whole MIMO parsing path (b=/c=
+    // matrix detection, multi-input `inputs=`, the flattened-input length check), not just "it
+    // runs." Also checks the CSV header expands a Vector-valued name into one column per
+    // element (Y[0], Y[1]) rather than a single "Y" column.
+    let netlist = write_netlist(
+        "statespace-mimo",
+        &format!(
+            "{DUMMY_MOSFET}V1 a 0 5\nR1 a 0 1000\n\
+             U1 kind=const value=2\n\
+             U2 kind=const value=-1\n\
+             Y kind=statespace a=[[0,0],[0,0]] b=[[1,0],[0,1]] c=[[1,0],[0,1]] \
+             d=[[0,0],[0,0]] inputs=U1,U2\n"
+        ),
+    );
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "2e-3",
+        "--dt",
+        "1e-4",
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = stdout.lines().collect();
+    let header: Vec<&str> = lines[0].split(',').collect();
+    assert!(
+        header.contains(&"Y[0]") && header.contains(&"Y[1]"),
+        "expected Y[0]/Y[1] columns, got header: {header:?}"
+    );
+    assert!(
+        !header.contains(&"Y"),
+        "a Vector-valued name should not also appear as a single bare column: {header:?}"
+    );
+    let t_idx = header.iter().position(|h| *h == "t").unwrap();
+    let y0 = column(&stdout, "Y[0]");
+    let y1 = column(&stdout, "Y[1]");
+    let ts: Vec<f64> = lines[1..]
+        .iter()
+        .map(|line| line.split(',').nth(t_idx).unwrap().parse().unwrap())
+        .collect();
+    for ((t, a), b) in ts.iter().zip(y0.iter()).zip(y1.iter()) {
+        assert!(
+            (a - 2.0 * t).abs() < 1e-9,
+            "Y[0] at t={t}: {a} vs {}",
+            2.0 * t
+        );
+        assert!(
+            (b - (-1.0 * t)).abs() < 1e-9,
+            "Y[1] at t={t}: {b} vs {}",
+            -t
+        );
+    }
+}
+
+#[test]
 fn tf_num_den_parse_as_python_lists_and_match_statespace_on_the_same_pole() {
     // Same single-pole plant as above, given instead as a rational tf: 1000/(s+1000).
     let netlist = write_netlist(
