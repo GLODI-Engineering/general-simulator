@@ -30,6 +30,7 @@
 - [`continuous-blocks`: the block library](crate-continuous-blocks.md)
 - [`cscript-ffi`: the native escape hatch](crate-cscript-ffi.md)
 - [`pyblock-ffi`: the Python escape hatch](python-blocks.md)
+- [`pyblock-ffi`: pure-function blocks (`kind=pyfunc`)](pyfunc-blocks.md)
 - [`general-simulator-cli`: the netlist-in/CSV-out runner](crate-general-simulator-cli.md)
 
 # Contributing

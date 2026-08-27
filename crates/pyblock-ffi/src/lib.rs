@@ -478,3 +478,163 @@ fn exec_fresh_module<'py>(
     )?;
     PyModule::from_code(py, &code, &filename, &module_name)
 }
+
+/// A genuinely separate, additive contract from [`PyBlockInstance`] above — never modifies or
+/// reuses its own lifecycle (no `start`, no `state`, no `t`/`dt`), for a plain, pure, stateless
+/// Python function: the closest equivalent to a named-input/named-output function block in
+/// other block-diagram tools (`function [Y1, Y2] = f(X1, X2) ... end`-style):
+///
+/// ```python
+/// def compute_gate_pattern(phase_degrees):
+///     phase = phase_degrees % 360
+///     if phase == 0:
+///         return 9, 6
+///     elif 0 < phase < 180:
+///         return 2066, 1057
+///     # ...
+///     return AQCTLA, AQCTLB
+/// ```
+///
+/// [`PyFunctionRegistry::instantiate`] resolves whichever function name is given and calls it
+/// **positionally** (`f(*inputs)`, one declared `inputs=` entry per positional argument — never
+/// bundled into one list the way [`PyBlockInstance::call`]'s own `inputs` parameter is), so a
+/// function with N named parameters, one with `*args`, or any mix, all work unchanged: there is
+/// no parameter-*name* matching against the netlist's own signal names, only positional order,
+/// the same way every other block in this graph maps `inputs=A,B,C` to its own computation by
+/// position. A single return value or a tuple/list of them (multiple outputs) both work, via
+/// the same [`extract_outputs`] this module's other contract already uses.
+///
+/// Being genuinely stateless, [`PyFunctionInstance`] is always cheaply, trivially cloneable
+/// (just `clone_ref`ing the function handle) — unlike [`PyBlockInstance::try_clone`], there is
+/// no `copy.deepcopy` call and no way for it to fail.
+mod pure_function {
+    use std::path::{Path, PathBuf};
+
+    use pyo3::prelude::*;
+    use pyo3::types::PyTuple;
+
+    use super::{exec_fresh_module, extract_outputs, py_traceback, PyBlockError, PyInput};
+
+    // Deliberately not shared with `super::build_args` (which builds a `PyList` bundling every
+    // input into *one* list argument, for `PyBlockInstance`'s own `output(state, t, dt,
+    // inputs)` contract) -- this module never touches that function or its behavior, only
+    // reads the same `PyInput` values a completely independent way (one positional argument
+    // per input, via a `PyTuple`).
+    fn build_positional_args<'py>(
+        py: Python<'py>,
+        inputs: &[PyInput],
+    ) -> PyResult<pyo3::Bound<'py, PyTuple>> {
+        use numpy::PyArray1;
+        let mut items: Vec<Py<PyAny>> = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            let obj: Py<PyAny> = match input {
+                PyInput::Scalar(x) => x.into_pyobject(py)?.into_any().unbind(),
+                PyInput::Vector(xs) => PyArray1::from_slice(py, xs).into_any().unbind(),
+            };
+            items.push(obj);
+        }
+        PyTuple::new(py, items)
+    }
+
+    /// Caches each `.py` file's own source text by path, same convention as
+    /// [`super::PyBlockRegistry`] — a fresh [`PyFunctionInstance`] execs it into its own new
+    /// namespace per instance.
+    #[derive(Default)]
+    pub struct PyFunctionRegistry {
+        sources: std::collections::BTreeMap<PathBuf, String>,
+    }
+
+    impl PyFunctionRegistry {
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        fn load_source(&mut self, path: &Path) -> Result<String, PyBlockError> {
+            if let Some(source) = self.sources.get(path) {
+                return Ok(source.clone());
+            }
+            let source = std::fs::read_to_string(path).map_err(|e| PyBlockError::Load {
+                path: path.to_path_buf(),
+                message: e.to_string(),
+            })?;
+            self.sources.insert(path.to_path_buf(), source.clone());
+            Ok(source)
+        }
+
+        /// Loads `path` if not already cached, resolves `function_name` as a callable, and
+        /// returns a fresh [`PyFunctionInstance`] — no `start()` call, no state at all.
+        pub fn instantiate(
+            &mut self,
+            path: &Path,
+            function_name: &str,
+        ) -> Result<PyFunctionInstance, PyBlockError> {
+            let source = self.load_source(path)?;
+            PyFunctionInstance::new(path, &source, function_name)
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct PyFunctionInstance {
+        path: PathBuf,
+        function_name: String,
+        function: Py<PyAny>,
+    }
+
+    impl PyFunctionInstance {
+        fn new(path: &Path, source: &str, function_name: &str) -> Result<Self, PyBlockError> {
+            Python::attach(|py| {
+                let module =
+                    exec_fresh_module(py, path, source).map_err(|e| PyBlockError::Load {
+                        path: path.to_path_buf(),
+                        message: py_traceback(py, &e),
+                    })?;
+                let function = module
+                    .getattr(function_name)
+                    .map_err(|_| PyBlockError::MissingFunction {
+                        path: path.to_path_buf(),
+                        name: "function",
+                        message: format!("`{function_name}` not found"),
+                    })?
+                    .unbind();
+                Ok(PyFunctionInstance {
+                    path: path.to_path_buf(),
+                    function_name: function_name.to_string(),
+                    function,
+                })
+            })
+        }
+
+        /// Calls the function positionally with `inputs`, in declared order (`f(*inputs)`),
+        /// returning `out_len` values.
+        pub fn call(&self, inputs: &[PyInput], out_len: usize) -> Result<Vec<f64>, PyBlockError> {
+            Python::attach(|py| {
+                let args = build_positional_args(py, inputs).map_err(|e| self.exception(py, e))?;
+                let result = self
+                    .function
+                    .bind(py)
+                    .call1(args)
+                    .map_err(|e| self.exception(py, e))?;
+                extract_outputs(result, out_len).map_err(|e| self.exception(py, e))
+            })
+        }
+
+        fn exception(&self, py: Python<'_>, err: PyErr) -> PyBlockError {
+            PyBlockError::Exception {
+                path: self.path.clone(),
+                function: "call",
+                message: format!("in `{}`: {}", self.function_name, py_traceback(py, &err)),
+            }
+        }
+    }
+
+    impl Clone for PyFunctionInstance {
+        fn clone(&self) -> Self {
+            Python::attach(|py| PyFunctionInstance {
+                path: self.path.clone(),
+                function_name: self.function_name.clone(),
+                function: self.function.clone_ref(py),
+            })
+        }
+    }
+}
+pub use pure_function::{PyFunctionInstance, PyFunctionRegistry};

@@ -225,6 +225,17 @@ enum BlockState {
         last_output: Vec<f64>,
         xc: Vec<f64>,
     },
+    /// The counterpart to `PyBlock` above for [`BlockKind::PyFunction`] — a genuinely separate
+    /// variant (not reusing `PyBlock`'s own fields), since a stateless
+    /// [`pyblock_ffi::PyFunctionInstance`] has no `xc` and cloning it is always trivially cheap
+    /// (`clone_ref`, never `copy.deepcopy`, never fallible) — see that type's own doc comment.
+    /// Still needs the same zero-order-hold `sample_time` bookkeeping every other zero-order-
+    /// hold block has.
+    PyFunction {
+        instance: pyblock_ffi::PyFunctionInstance,
+        time_since_sample: f64,
+        last_output: Vec<f64>,
+    },
 }
 
 /// One step's result: `(t, OperatingPoint, block_outputs)`, where `block_outputs` is every
@@ -248,6 +259,7 @@ fn block_index_by_name(blocks: &[BlockInstance]) -> Result<BTreeMap<&str, usize>
         let extra: &[String] = match &b.kind {
             BlockKind::CScript { output_names, .. }
             | BlockKind::PyBlock { output_names, .. }
+            | BlockKind::PyFunction { output_names, .. }
             | BlockKind::CoordinateTransform { output_names, .. }
             | BlockKind::Pmsm { output_names, .. }
             | BlockKind::Pwm { output_names, .. }
@@ -873,6 +885,51 @@ fn evaluate_blocks(
                 }
                 SignalValue::Scalar(last_output.first().copied().unwrap_or(0.0))
             }
+            (
+                BlockKind::PyFunction {
+                    output_names,
+                    sample_time,
+                    ..
+                },
+                BlockState::PyFunction {
+                    instance,
+                    time_since_sample,
+                    last_output,
+                },
+            ) => {
+                // Same sample_time gating as every other zero-order-hold block, just for *when*
+                // this block is due -- unlike every other gated block, the elapsed time itself
+                // is discarded: PyFunctionInstance::call has no dt parameter at all (a pure
+                // function has no notion of elapsed time to hand it), so only `due` matters here.
+                let due = match sample_time {
+                    None => true,
+                    Some(ts) => {
+                        *time_since_sample += dt;
+                        if *time_since_sample + 1e-15 >= *ts {
+                            *time_since_sample = 0.0;
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                };
+                if due {
+                    let py_inputs: Vec<pyblock_ffi::PyInput> = input_vals
+                        .iter()
+                        .map(|v| match v {
+                            SignalValue::Scalar(x) => pyblock_ffi::PyInput::Scalar(*x),
+                            SignalValue::Vector(xs) => pyblock_ffi::PyInput::Vector(xs),
+                        })
+                        .collect();
+                    *last_output = instance
+                        .call(&py_inputs, output_names.len())
+                        .map_err(DaeError::PyBlock)?;
+                }
+                for (name, v) in output_names.iter().zip(last_output.iter()).skip(1) {
+                    outputs.insert(name.clone(), SignalValue::Scalar(*v));
+                }
+                SignalValue::Scalar(last_output.first().copied().unwrap_or(0.0))
+            }
             _ => unreachable!("BlockState variant always matches its BlockKind"),
         };
         outputs.insert(block.name.clone(), value);
@@ -1012,6 +1069,7 @@ pub fn simulate_transient_with_blocks(
 
     let mut cscript_registry = CScriptRegistry::new();
     let mut pyblock_registry = pyblock_ffi::PyBlockRegistry::new();
+    let mut pyfunction_registry = pyblock_ffi::PyFunctionRegistry::new();
     let mut block_states: Vec<BlockState> = Vec::with_capacity(blocks.len());
     for b in blocks {
         let dynamic = |state_space: StateSpace| {
@@ -1097,6 +1155,24 @@ pub fn simulate_transient_with_blocks(
                     time_since_sample: sample_time.unwrap_or(0.0),
                     last_output: vec![0.0; output_names.len()],
                     xc: vec![0.0; *xc_count],
+                }
+            }
+            BlockKind::PyFunction {
+                path,
+                function,
+                output_names,
+                sample_time,
+            } => {
+                // Genuinely separate registry from pyblock's own -- see
+                // BlockKind::PyFunction's own doc comment for why this isn't just PyBlock with
+                // xc_count implicitly 0.
+                let instance = pyfunction_registry
+                    .instantiate(path, function)
+                    .map_err(DaeError::PyBlock)?;
+                BlockState::PyFunction {
+                    instance,
+                    time_since_sample: sample_time.unwrap_or(0.0),
+                    last_output: vec![0.0; output_names.len()],
                 }
             }
             _ => BlockState::Stateless,
