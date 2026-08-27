@@ -1,9 +1,10 @@
-//! `GateBinding` targets must resolve to a `BlockKind::Sig2Gate` converter, never a raw
-//! control block directly — the enforced Signal-to-PS boundary for a discrete physical
-//! actuation. Checks both that the wrong kind is rejected before any step runs
-//! (`DaeError::GateTargetNotSig2Gate`, naming the actual offending block and kind) and that the
-//! correct kind (wrapped in `Sig2Gate`) works exactly as the pre-enforcement direct reference
-//! used to.
+//! `GateBinding` targets must resolve to a `BlockKind::Sig2Voltage` converter, never a raw
+//! control block directly — a MOSFET's gate is itself a voltage, so it shares the same
+//! Signal-to-PS boundary a V-source's own magnitude uses; no separate gate-only converter
+//! exists. Checks both that the wrong kind is rejected before any step runs
+//! (`DaeError::GateTargetNotSig2Voltage`, naming the actual offending block and kind) and that
+//! the correct kind (wrapped in `Sig2Voltage`) works exactly as the pre-enforcement direct
+//! reference used to.
 
 use std::collections::BTreeMap;
 
@@ -37,7 +38,7 @@ fn naming_a_raw_block_directly_is_rejected_before_any_step_runs() {
     let mut gates = BTreeMap::new();
     gates.insert(
         "D1".to_string(),
-        // raw Const, not wrapped in Sig2Gate -- must be rejected
+        // raw Const, not wrapped in Sig2Voltage -- must be rejected
         GateBinding::Block("DUTY".to_string()),
     );
 
@@ -56,7 +57,7 @@ fn naming_a_raw_block_directly_is_rejected_before_any_step_runs() {
     .unwrap_err();
 
     match err {
-        DaeError::GateTargetNotSig2Gate {
+        DaeError::GateTargetNotSig2Voltage {
             gate,
             block,
             found_kind,
@@ -65,12 +66,12 @@ fn naming_a_raw_block_directly_is_rejected_before_any_step_runs() {
             assert_eq!(block, "DUTY");
             assert_eq!(found_kind, "const");
         }
-        other => panic!("expected GateTargetNotSig2Gate, got {other:?}"),
+        other => panic!("expected GateTargetNotSig2Voltage, got {other:?}"),
     }
 }
 
 #[test]
-fn wrapping_the_same_block_in_sig2gate_makes_it_work() {
+fn wrapping_the_same_block_in_sig2voltage_makes_it_work() {
     let netlist = "V1 a 0 5\nD1 a b mosfetmodel\nR1 b 0 1000";
     let mosfets = dummy_mosfets();
     let diodes = BTreeMap::new();
@@ -83,7 +84,7 @@ fn wrapping_the_same_block_in_sig2gate_makes_it_work() {
         },
         BlockInstance {
             name: "DUTY_GATE".to_string(),
-            kind: BlockKind::Sig2Gate,
+            kind: BlockKind::Sig2Voltage,
             inputs: vec![Signal::Block("DUTY".to_string())],
         },
     ];

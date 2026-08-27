@@ -123,12 +123,13 @@ pub enum DaeError {
     /// as an ordinary [`pyblock_ffi::PyBlockError::Exception`].
     PyBlock(pyblock_ffi::PyBlockError),
     /// A [`block_graph::GateBinding`] names a block that exists but isn't a
-    /// [`block_graph::BlockKind::Sig2Gate`] — the enforced physical/signal-domain boundary: any
-    /// signal driving a MOSFET's exogenous gate command must first pass through an explicit
-    /// `Sig2Gate` converter, never a raw `Pid`/`Vco`/`Hysteresis`/etc. block directly. `gate` is
-    /// the MOSFET this binding belongs to; `block` and `found_kind` name the offending target
-    /// and (for a human-readable message) what it actually is.
-    GateTargetNotSig2Gate {
+    /// [`block_graph::BlockKind::Sig2Voltage`] — the enforced physical/signal-domain boundary:
+    /// a MOSFET's gate is itself a voltage, so any signal driving it must first pass through
+    /// the same `Sig2Voltage` converter a `V`-source's own magnitude uses, never a raw
+    /// `Pid`/`Vco`/`Hysteresis`/etc. block directly. `gate` is the MOSFET this binding belongs
+    /// to; `block` and `found_kind` name the offending target and (for a human-readable
+    /// message) what it actually is.
+    GateTargetNotSig2Voltage {
         gate: String,
         block: String,
         found_kind: &'static str,

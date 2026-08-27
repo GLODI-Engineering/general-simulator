@@ -66,7 +66,7 @@ fn phase_shift_pwm_gate_matches_hand_computed_switching_instants() {
         },
         BlockInstance {
             name: "MOD_MAIN_GATE".to_string(),
-            kind: BlockKind::Sig2Gate,
+            kind: BlockKind::Sig2Voltage,
             // The primary output is always bound to the block's own name ("MOD"), not
             // output_names[0] -- see evaluate_blocks' own `outputs.insert(block.name...)`.
             inputs: vec![Signal::Block("MOD".to_string())],

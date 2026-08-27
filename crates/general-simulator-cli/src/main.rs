@@ -16,11 +16,11 @@
 //! ```text
 //! D1 kind=diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1
 //! ONVAL kind=const value=1
-//! ONGATE kind=sig2gate in=ONVAL
+//! ONGATE kind=sig2voltage in=ONVAL
 //! D2 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=block ctrl=ONGATE
 //! DUTY kind=const value=0.6
 //! PWM1 kind=pwm freq=10000 in=DUTY outputs=PWM1_ON,PWM1_OFF
-//! PWM1G kind=sig2gate in=PWM1_ON
+//! PWM1G kind=sig2voltage in=PWM1_ON
 //! D3 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=block ctrl=PWM1G
 //! ```
 //!
@@ -39,12 +39,14 @@
 //! ## Wiring a controller into a gate
 //!
 //! **There is no separate "closed-loop mode," and no non-block-driven gate at all.** Every
-//! MOSFET's gate is `gate=block ctrl=<sig2gate-name>` — always resolved the same way, every
+//! MOSFET's gate is `gate=block ctrl=<sig2voltage-name>` — always resolved the same way, every
 //! step, by reading the named block's current output (`>= 0.5` means on). Even a permanently-on
 //! or permanently-off gate is an ordinary block (`kind=const value=1`, wrapped in a
-//! `kind=sig2gate` like any other gate target), not a special fixed-state escape hatch — see
-//! "Physical/signal-domain converters" below for why every `ctrl=` target must specifically be a
-//! `sig2gate` converter. `continuous-blocks` supplies the vocabulary the device file wires
+//! `kind=sig2voltage` like any other gate target — a MOSFET's gate is itself a voltage, so it
+//! shares the same converter a `V`-source's own magnitude uses, not a dedicated gate-only
+//! type), not a special fixed-state escape hatch — see "Physical/signal-domain converters"
+//! below for why every `ctrl=` target must specifically be a `sig2voltage` converter.
+//! `continuous-blocks` supplies the vocabulary the device file wires
 //! together — `const`, `time` (zero-input, outputs the current step's own simulated time — the
 //! standard "clock" source, needed to build a `sin(2*pi*f*t)`-style signal via `MathFn1`/`Gain`
 //! since no block otherwise sees `t` directly), `pwc`/`pwl` (piecewise-constant/-linear
@@ -86,28 +88,30 @@
 //! **not the same kind of thing** and cannot be wired together directly — the same rule
 //! a reference tool/Simscape enforces with its own PS-a reference tool Converter / a reference tool-PS Converter
 //! blocks, applied here at the netlist level (a companion UI is intended to enforce the same
-//! rule visually later; this grammar is the ground truth). There are three converters, one per
-//! crossing:
+//! rule visually later; this grammar is the ground truth). There are two converters, one per
+//! crossing direction (read vs. write) — the write direction, `sig2voltage`/`sig2current`,
+//! covers both a gate command and a source's own magnitude, since a MOSFET's gate is itself a
+//! voltage rather than a distinct discrete-actuation signal domain:
 //!
 //! - `kind=probe node=<name>` (reads `V(node)`) or `kind=probe branch=<name>` (reads
 //!   `I(branch)`, mutually exclusive with `node=`) is the **only** way a circuit quantity enters
 //!   the signal domain. Zero inputs (a source block, like `const`/`time`); reference its output
 //!   afterward exactly like any other block's, e.g. `ERR kind=sum inputs=REF,VOUT_PROBE
 //!   signs=1,-1` where `VOUT_PROBE kind=probe node=vout` was declared earlier.
-//! - `kind=sig2gate in=<signal>` is the **only** legal target for a `gate=block ctrl=` field —
-//!   the named block must be a `sig2gate` converter, not a raw `pid`/`vco`/`pwm`/`hysteresis`/
-//!   etc. block directly (`dae_runtime::DaeError::GateTargetNotSig2Gate` otherwise). Purely an
-//!   identity pass-through numerically — its whole purpose is marking, in the netlist text,
-//!   exactly where a signal stops being "a number a controller computed" and starts being "a
-//!   command that actuates a physical switch."
 //! - `kind=sig2voltage in=<signal>` / `kind=sig2current in=<signal>` are the **only** legal way a
-//!   signal-domain block drives an independent voltage/current source's own magnitude — name
-//!   the converter block directly as that source's own literal value in the netlist, e.g. `V1 a
-//!   0 VDRV` where `VDRV kind=sig2voltage in=CTRL` was declared earlier (`general-mna` already
-//!   accepts a bare symbol there; no change was needed on that side). `V` sources need
-//!   `sig2voltage`, `I` sources need `sig2current` — a mismatch, or naming any other kind of
-//!   block, is rejected
-//!   (`dae_runtime::DaeError::SourceNotSig2PhysicalConverter`) before any step runs. This closes
+//!   signal-domain block drives an independent voltage/current source's own magnitude, *or* a
+//!   MOSFET's gate. For a source: name the converter block directly as that source's own literal
+//!   value in the netlist, e.g. `V1 a 0 VDRV` where `VDRV kind=sig2voltage in=CTRL` was declared
+//!   earlier (`general-mna` already accepts a bare symbol there; no change was needed on that
+//!   side). `V` sources need `sig2voltage`, `I` sources need `sig2current` — a mismatch, or
+//!   naming any other kind of block, is rejected
+//!   (`dae_runtime::DaeError::SourceNotSig2PhysicalConverter`) before any step runs. For a gate:
+//!   `gate=block ctrl=<name>` requires `<name>` to be a `sig2voltage` converter too, not a raw
+//!   `pid`/`vco`/`pwm`/`hysteresis`/etc. block directly
+//!   (`dae_runtime::DaeError::GateTargetNotSig2Voltage` otherwise). Purely an identity
+//!   pass-through numerically in both roles — its whole purpose is marking, in the netlist
+//!   text, exactly where a signal stops being "a number a controller computed" and starts being
+//!   a physical voltage, whether that voltage sources a node or gates a switch. This closes
 //!   a real, previously-open gap: without it, a block could only ever *observe* the circuit
 //!   (via `kind=probe`), never load or drive it — see `elspice-pwl-buck-dc-motor-cascade` in the
 //!   sibling `internal-archive` repo for the concrete limitation this fixes.
@@ -237,11 +241,11 @@
 //!   variable-frequency converter's own ZVS margin, not just bookkeeping. `outputs=` defaults
 //!   the same way as PWM Modulator 1.
 //!
-//! Both feed `gate=block ctrl=<sig2gate-name>` on each switch — one `sig2gate` wrapping
+//! Both feed `gate=block ctrl=<sig2voltage-name>` on each switch — one `sig2voltage` wrapping
 //! `main`, another wrapping `complement`, for a true half-bridge leg's two switches; a topology
 //! with only one actively-driven switch (a buck's own high-side, freewheeling through a diode)
 //! just leaves the `complement` output unwired. **Every `ctrl=` target must resolve to a
-//! `kind=sig2gate` converter** (see "Physical/signal-domain converters" above), never the raw
+//! `kind=sig2voltage` converter** (see "Physical/signal-domain converters" above), never the raw
 //! `pwm`/`pspwm`/`hysteresis`/etc. block directly.
 //!
 //! Example — a frequency-modulated half-bridge PID (LLC-family converters regulate by
@@ -262,8 +266,8 @@
 //! * ZEROPH  kind=const value=0
 //! * HALFDUTY kind=const value=0.48
 //! * LEG     kind=pspwm f_min=100000 f_max=130000 inputs=FREQ,ZEROPH,HALFDUTY outputs=LEG_MAIN,LEG_COMP
-//! * LEG_MAIN_G kind=sig2gate in=LEG_MAIN
-//! * LEG_COMP_G kind=sig2gate in=LEG_COMP
+//! * LEG_MAIN_G kind=sig2voltage in=LEG_MAIN
+//! * LEG_COMP_G kind=sig2voltage in=LEG_COMP
 //! ```
 //!
 //! A real SPICE tool opening this file sees eleven ordinary comment lines and an otherwise
@@ -426,7 +430,15 @@ fn run() -> Result<(), String> {
         print_header(&point.unknowns);
         print_row(0.0, &point);
     } else if mode == "transient" {
-        if mosfets.is_empty() {
+        // Either a MOSFET or a block alone is enough to need the block-graph-aware path below:
+        // a block-only netlist (no MOSFET at all, e.g. a pure controller/signal-processing
+        // study with nothing to gate) must still run its block graph, and a MOSFET-only netlist
+        // (no blocks) already did. `run_transient_with_mosfets`/`simulate_transient_with_blocks`
+        // itself tolerates empty `mosfets`/`gates` maps and an empty `blocks` slice equally well
+        // (see its own doc comment) -- only the truly block-free, MOSFET-free case still uses
+        // the plain `simulate_transient` path, since that's the one case with nothing for a
+        // block-graph step to resolve at all.
+        if mosfets.is_empty() && blocks.is_empty() {
             let trace = simulate_transient(&netlist, dialect, &diodes, None, t_final, step)
                 .map_err(|e| format!("{e:?}"))?;
             if let Some((_, first)) = trace.first() {
@@ -461,8 +473,11 @@ fn run() -> Result<(), String> {
 /// but every gate is now block-driven (`gate=block ctrl=<name>`, enforced by `general_mna::
 /// build_system` itself) — so a `.op`-style DC operating point with any MOSFET present has
 /// nothing to resolve its gate from and is unconditionally unsupported, not just for the cases
-/// that used to need a block. `--mode transient` with at least one MOSFET: resolves every gate
-/// (always block-driven) via [`dae_runtime::simulate_transient_with_blocks`] — see this file's
+/// that used to need a block. `--mode transient` with at least one MOSFET *or* at least one
+/// block declared (a MOSFET-free block-graph study is just as legitimate as a block-free
+/// MOSFET circuit — see this file's own `main` for the exact condition): resolves every gate
+/// (always block-driven) via [`dae_runtime::simulate_transient_with_blocks`], which tolerates
+/// an empty `mosfets`/`gates` map or an empty `blocks` slice equally well — see this file's
 /// module doc comment for why there's no separate mode for the block-driven case.
 #[allow(clippy::too_many_arguments)]
 fn run_transient_with_mosfets(

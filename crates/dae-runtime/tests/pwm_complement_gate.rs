@@ -2,7 +2,7 @@
 //! PWM (fused from the old `GateBinding::Pwm`/`PwmComplement` pair into one component with two
 //! outputs). Checks
 //! two independent MOSFETs, one gated off the `main` output and one off `complement`, both
-//! wired through their own `sig2gate` converter: with zero dead time, at every sampled instant
+//! wired through their own `sig2voltage` converter: with zero dead time, at every sampled instant
 //! exactly one of the two must be conducting (no shoot-through gap, no overlap); with nonzero
 //! dead time, both must be off during each dead-time gap, verified against hand-computed
 //! switching instants, the same way every other gate-timing behavior in this crate is checked.
@@ -50,14 +50,14 @@ fn pwm_blocks(freq_hz: f64, red: f64, fed: f64) -> Vec<BlockInstance> {
         },
         BlockInstance {
             name: "MOD_MAIN_GATE".to_string(),
-            kind: BlockKind::Sig2Gate,
+            kind: BlockKind::Sig2Voltage,
             // The primary output is always bound to the block's own name ("MOD"), not
             // output_names[0] -- see evaluate_blocks' own `outputs.insert(block.name...)`.
             inputs: vec![Signal::Block("MOD".to_string())],
         },
         BlockInstance {
             name: "MOD_COMP_GATE".to_string(),
-            kind: BlockKind::Sig2Gate,
+            kind: BlockKind::Sig2Voltage,
             inputs: vec![Signal::Block("MOD_COMP".to_string())],
         },
     ]

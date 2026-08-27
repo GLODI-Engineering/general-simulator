@@ -195,11 +195,11 @@ lowest-risk place to add real vector-signal value.
 
 ## Category 11 — Physical/signal-domain converters: not applicable
 
-**`Probe`, `Sig2Gate`, `Sig2Voltage`, `Sig2Current`** — each is tied to exactly one circuit
-quantity (one node voltage, one branch current, one gate's on/off state, one source's own
-magnitude). There is no vector generalization that means anything physically here. `Sig2Gate`/
-`Sig2Voltage`/`Sig2Current` **reject a `Vector` input** with a clear error; `Probe` has zero
-inputs and stays scalar-output-only.
+**`Probe`, `Sig2Voltage`, `Sig2Current`** — each is tied to exactly one circuit quantity (one
+node voltage, one branch current, one source's own magnitude — `Sig2Voltage` also covers a
+MOSFET gate's on/off state, no separate gate-only converter exists). There is no vector
+generalization that means anything physically here. `Sig2Voltage`/`Sig2Current` **reject a
+`Vector` input** with a clear error; `Probe` has zero inputs and stays scalar-output-only.
 
 ---
 

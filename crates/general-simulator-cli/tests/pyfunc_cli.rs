@@ -40,7 +40,7 @@ fn pyfunc_reproduces_the_truth_table_through_the_real_cli() {
     let py_path = fixture("gate_pattern.py");
     let devices = write_devices_file(&format!(
         "OFFVAL kind=const value=0\n\
-         OFFGATE kind=sig2gate in=OFFVAL\n\
+         OFFGATE kind=sig2voltage in=OFFVAL\n\
          D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
          PHASE kind=const value=270\n\
          AQ kind=pyfunc path={} function=compute_action_qualifier_180_degree in=PHASE outputs=AQCTLA,AQCTLB\n",

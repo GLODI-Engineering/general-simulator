@@ -2,7 +2,7 @@
 //! `GateBinding` — `Const`, `Time`, `Pwc`, `Pwl`, `Sin`, `Pulse`, `Exp`, `Sffm`, `Sum`, `Gain`,
 //! `Pid`, `StateSpace`, `TransferFunction`, `Vco`, `Pwm`, `PhaseShiftPwm`, `Product`,
 //! `Saturation`, `Table`, `MathFn1`/`2`/`3`, `Hysteresis`, `CoordinateTransform`, `Pmsm`,
-//! `CScript`, `Probe`, `Sig2Gate`, `Sig2Voltage`, `Sig2Current`), resolving every MOSFET's gate
+//! `CScript`, `Probe`, `Sig2Voltage`, `Sig2Current`), resolving every MOSFET's gate
 //! state each transient step. `general-mna` owns *what these types are* and *parsing them out
 //! of source text* (`general_mna::build_system`); this module owns *evaluating* the graph over
 //! time (`BlockState`, `evaluate_blocks`, `topological_order`,
@@ -54,7 +54,7 @@ pub use general_mna::block_graph::{
 
 /// Every input must be `Scalar` — the default rule for a `BlockKind` that has no elementwise/
 /// broadcast/flattening rule of its own (`Pid`, `Vco`, `Hysteresis`, `TransferFunction`, `Pwm`,
-/// `PhaseShiftPwm`, `Sig2Gate`, `Sig2Voltage`, `Sig2Current`). Returns the plain `f64` values in
+/// `PhaseShiftPwm`, `Sig2Voltage`, `Sig2Current`). Returns the plain `f64` values in
 /// order, or a clear error naming the block the moment any input is a `Vector`.
 fn require_all_scalar(block_name: &str, input_vals: &[SignalValue]) -> Result<Vec<f64>, DaeError> {
     input_vals
@@ -454,7 +454,7 @@ fn evaluate_blocks(
                     point_prev.value(&format!("I({branch})")).unwrap_or(0.0)
                 }
             }),
-            (BlockKind::Sig2Gate | BlockKind::Sig2Voltage | BlockKind::Sig2Current, _) => {
+            (BlockKind::Sig2Voltage | BlockKind::Sig2Current, _) => {
                 SignalValue::Scalar(require_all_scalar(&block.name, &input_vals)?[0])
             }
             (BlockKind::Pwc { points, repeat }, _) => {
@@ -983,14 +983,16 @@ pub fn simulate_transient_with_blocks(
             let Some(&idx) = block_names.get(needed) else {
                 return Err(DaeError::UnknownBlockInput(needed.to_string()));
             };
-            // A GateBinding's target must be an explicit Sig2Gate converter, never a raw
-            // control block directly -- the enforced Signal-to-PS boundary for a discrete
-            // physical actuation (see BlockKind::Sig2Gate's own doc comment). This also
-            // correctly rejects naming a CScript/CoordinateTransform/Pmsm block's own *extra*
-            // output alias directly (block_names maps those to the same index, whose kind is
-            // never Sig2Gate), so no separate check is needed for that case.
-            if !matches!(blocks[idx].kind, BlockKind::Sig2Gate) {
-                return Err(DaeError::GateTargetNotSig2Gate {
+            // A GateBinding's target must be an explicit Sig2Voltage converter, never a raw
+            // control block directly -- a MOSFET's gate is itself a voltage, so it shares the
+            // same Signal-to-PS boundary a V-source's own magnitude uses (see
+            // BlockKind::Sig2Voltage's own doc comment); no separate gate-only converter type
+            // exists. This also correctly rejects naming a CScript/CoordinateTransform/Pmsm
+            // block's own *extra* output alias directly (block_names maps those to the same
+            // index, whose kind is never Sig2Voltage), so no separate check is needed for that
+            // case.
+            if !matches!(blocks[idx].kind, BlockKind::Sig2Voltage) {
+                return Err(DaeError::GateTargetNotSig2Voltage {
                     gate: mosfet_name.clone(),
                     block: needed.to_string(),
                     found_kind: block_kind_name(&blocks[idx].kind),

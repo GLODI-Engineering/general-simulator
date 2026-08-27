@@ -25,7 +25,11 @@
     modeled directly on a reference tool/Simscape's PS-a reference tool/a reference tool-PS Converter split, enforced at
     the netlist/`dae-runtime` level (not just a UI convention) so a violation is a build-time
     error (`DaeError::GateTargetNotSig2Gate`/`SourceNotSig2PhysicalConverter`) regardless of
-    which tool produced the netlist.
+    which tool produced the netlist. **Revised 2026-08-27**: `Sig2Gate` was removed and merged
+    into `Sig2Voltage` (a MOSFET's gate is itself a voltage, not a distinct discrete-actuation
+    signal domain — no dedicated gate-only converter needed); `DaeError::GateTargetNotSig2Gate`
+    was renamed `GateTargetNotSig2Voltage` to match. Two converters remain (`Sig2Voltage`/
+    `Sig2Current`), not three.
   - **Signal-domain `pwc`/`pwl` source naming, resolved 2026-08-23** (`docs/journal/2026-08.md`,
     `2026-08-23 15:24`/`15:52`) — no longer an open question, this entry is now
     `## Signal-domain source naming: pwc vs. pwl` proper (not just a pointer): adding

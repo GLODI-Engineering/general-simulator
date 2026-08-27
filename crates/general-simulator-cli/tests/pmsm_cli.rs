@@ -51,7 +51,7 @@ fn pmsm_block_matches_hand_derived_rl_circuit_when_decoupled() {
 
     let devices = write_devices_file(&format!(
         "OFFVAL kind=const value=0\n\
-         OFFGATE kind=sig2gate in=OFFVAL\n\
+         OFFGATE kind=sig2voltage in=OFFVAL\n\
          D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 gate=block ctrl=OFFGATE\n\
          VD kind=const value={vd}\n\
          VQ kind=const value=0\n\
