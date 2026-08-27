@@ -126,6 +126,77 @@ fn clone_trait_panics_when_cscript_clone_is_missing() {
 }
 
 #[test]
+fn rk4_step_xc_matches_the_closed_form_exponential_decay() {
+    // dx/dt = -K*x, x0 = 1.0, K = 2.0 (see decay_xc.c): x(t) = exp(-K*t). Integrated in 200
+    // steps of dt=1e-3 (t_final=0.2), against a real compiled .so, not a Rust-side mock of the
+    // derivative function -- an end-to-end check of the whole xc contract, not just the RK4
+    // arithmetic in isolation.
+    let lib_path = compile_fixture("decay_xc");
+    let mut registry = CScriptRegistry::new();
+    let instance = registry
+        .instantiate_xc(&lib_path)
+        .expect("load decay_xc fixture via the xc contract");
+
+    let k = 2.0_f64;
+    let dt = 1e-3;
+    let mut xc = vec![1.0_f64];
+    let mut t = 0.0_f64;
+    for _ in 0..200 {
+        xc = instance.rk4_step_xc(&xc, &[0.0], dt);
+        t += dt;
+    }
+    let expected = (-k * t).exp();
+    assert!(
+        (xc[0] - expected).abs() < 1e-9,
+        "xc={}, expected exp(-K*t)={} at t={t}",
+        xc[0],
+        expected
+    );
+}
+
+#[test]
+fn call_xc_reads_the_given_xc_and_still_mutates_its_own_xd_state() {
+    let lib_path = compile_fixture("decay_xc");
+    let mut registry = CScriptRegistry::new();
+    let mut instance = registry
+        .instantiate_xc(&lib_path)
+        .expect("load decay_xc fixture via the xc contract");
+
+    let out1 = instance.call_xc(&[0.0], 1e-3, &[0.5], 2);
+    assert_eq!(out1, vec![0.5, 1.0]); // out[0] = xc[0] passed in; out[1] = call count (xd)
+    let out2 = instance.call_xc(&[0.0], 1e-3, &[0.25], 2);
+    assert_eq!(out2, vec![0.25, 2.0]); // xd keeps counting across calls, independent of xc
+}
+
+#[test]
+fn instantiate_rejects_an_xc_only_library_and_instantiate_xc_rejects_a_plain_one() {
+    // stateless_gain only exports cscript_output -- the plain contract -- so instantiate_xc
+    // must reject it (missing cscript_derivative), the mirror image of
+    // missing_required_symbol_is_a_clear_error_not_a_panic below.
+    let plain_lib = compile_fixture("stateless_gain");
+    let mut registry = CScriptRegistry::new();
+    let err = registry
+        .instantiate_xc(&plain_lib)
+        .expect_err("a plain cscript_output-only library must not satisfy the xc contract");
+    assert!(
+        err.to_string().contains("cscript_derivative"),
+        "error should name the missing symbol, got: {err}"
+    );
+
+    // decay_xc only exports cscript_output_xc/cscript_derivative -- the xc contract -- so
+    // plain instantiate must reject it (missing cscript_output).
+    let xc_lib = compile_fixture("decay_xc");
+    let mut registry2 = CScriptRegistry::new();
+    let err2 = registry2
+        .instantiate(&xc_lib)
+        .expect_err("an xc-only library must not satisfy the plain cscript_output contract");
+    assert!(
+        err2.to_string().contains("cscript_output"),
+        "error should name the missing symbol, got: {err2}"
+    );
+}
+
+#[test]
 fn missing_required_symbol_is_a_clear_error_not_a_panic() {
     // A block exporting only cscript_start, to exercise the MissingSymbol path for a
     // genuinely required symbol (cscript_output) -- generated straight into the temp output

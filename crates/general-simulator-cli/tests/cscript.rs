@@ -163,6 +163,60 @@ fn cscript_sample_time_holds_between_samples_zero_order() {
 }
 
 #[test]
+fn cscript_xc_matches_the_closed_form_step_response() {
+    // dx/dt = -K*x + u (K=2.0, see decay_xc.c), driven by a constant u=10 from a zero initial
+    // condition (xc always starts at rest -- the same convention every other dynamic block
+    // uses): a first-order step response, x(t) = (u/K)*(1 - exp(-K*t)) -- a real, independent
+    // closed-form check on the whole xc_count=1 path (netlist parsing -> BlockKind::CScript's
+    // xc_count field -> CScriptRegistry::instantiate_xc -> rk4_step_xc/call_xc), not just
+    // cscript-ffi's own lower-level unit test against the same fixture.
+    let lib = compile_fixture("cscript_decay_xc");
+    let devices = write_devices_file(&format!(
+        "OFFVAL kind=const value=0\n\
+         OFFGATE kind=sig2gate in=OFFVAL\n\
+         D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
+         SRC kind=const value=10\n\
+         CG kind=cscript lib={} in=SRC xc_count=1\n",
+        lib.display()
+    ));
+
+    let output = run(&[
+        fixture("cscript_decay_xc.cir").to_str().unwrap(),
+        "--devices",
+        devices.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "0.01",
+        "--dt",
+        "0.0001",
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(lines[0].ends_with(",CG"), "header: {}", lines[0]);
+
+    let k = 2.0_f64;
+    let u = 10.0_f64;
+    let dt = 0.0001_f64;
+    let mut max_err = 0.0_f64;
+    for (i, line) in lines[1..].iter().enumerate() {
+        let cg: f64 = line.split(',').next_back().unwrap().parse().unwrap();
+        let t = (i as f64 + 1.0) * dt;
+        let expected = (u / k) * (1.0 - (-k * t).exp());
+        max_err = max_err.max((cg - expected).abs());
+    }
+    assert!(
+        max_err < 1e-6,
+        "CG deviates from the closed-form step response by {max_err}"
+    );
+}
+
+#[test]
 fn cscript_without_clone_is_rejected_under_adaptive_step_not_silently_wrong() {
     let lib = compile_fixture("cscript_gain"); // exports no cscript_clone
     let devices = write_devices_file(&format!(

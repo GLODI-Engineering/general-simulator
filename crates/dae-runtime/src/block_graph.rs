@@ -85,16 +85,20 @@ enum BlockState {
     /// bookkeeping [`BlockKind::CScript`]'s `sample_time` needs: `time_since_sample` accumulates
     /// circuit `dt`s until it reaches the configured sample period (or is always "due" every
     /// step when `sample_time` is `None`), and `last_output` is what gets returned/held on
-    /// every step the block *doesn't* actually run `cscript_output`. Cloning this variant (only
-    /// ever needed by [`TimeStep::Adaptive`]'s retry loop, which clones the whole
+    /// every step the block *doesn't* actually run its output function. Cloning this variant
+    /// (only ever needed by [`TimeStep::Adaptive`]'s retry loop, which clones the whole
     /// `block_states` vector before every trial) calls into `cscript_clone` for `instance` and
     /// **panics** if the library doesn't export it — see
     /// [`simulate_transient_with_blocks`]'s own upfront check, which exists specifically so
-    /// that panic is unreachable in practice.
+    /// that panic is unreachable in practice. `xc` is the block's own continuous-state vector
+    /// (empty when `xc_count == 0`) — a plain, RK4-cloneable `Vec<f64>`, not part of the opaque
+    /// `void *state` `instance` owns; see `cscript_ffi`'s own module doc comment, "The optional
+    /// continuous-state (`xc`) contract."
     CScript {
         instance: cscript_ffi::CScriptInstance,
         time_since_sample: f64,
         last_output: Vec<f64>,
+        xc: Vec<f64>,
     },
 }
 
@@ -454,19 +458,26 @@ fn evaluate_blocks(
                 BlockKind::CScript {
                     output_names,
                     sample_time,
+                    xc_count,
                     ..
                 },
                 BlockState::CScript {
                     instance,
                     time_since_sample,
                     last_output,
+                    xc,
                 },
             ) => {
                 // sample_time = None: run every step, exactly like every other dynamic block.
                 // sample_time = Some(ts): accumulate circuit dt until ts is reached, then run
                 // once with the *accumulated* elapsed time as this call's dt (not the much
                 // finer circuit dt), and hold the result (zero-order hold) on every step in
-                // between -- see BlockKind::CScript's own doc comment for why.
+                // between -- see BlockKind::CScript's own doc comment for why. This same "due"
+                // gating governs xc's own RK4 step too: a block that wants xc to integrate
+                // continuously every circuit step should simply leave sample_time unset, the
+                // same way any other continuously-evaluated block already works here -- xc
+                // never advances on a step this block isn't "due" on, exactly like last_output
+                // is held rather than recomputed on those steps.
                 let (due, elapsed) = match sample_time {
                     None => (true, dt),
                     Some(ts) => {
@@ -481,7 +492,15 @@ fn evaluate_blocks(
                     }
                 };
                 if due {
-                    *last_output = instance.call(&input_vals, elapsed, output_names.len());
+                    *last_output = if *xc_count > 0 {
+                        // Step xc first, then compute output from the *new* xc -- the same
+                        // "step state, then compute output from the updated state" ordering
+                        // BlockKind::StateSpace/TransferFunction's own arm above uses.
+                        *xc = instance.rk4_step_xc(xc, &input_vals, elapsed);
+                        instance.call_xc(&input_vals, elapsed, xc, output_names.len())
+                    } else {
+                        instance.call(&input_vals, elapsed, output_names.len())
+                    };
                 }
                 // The primary value (this block's own name) is last_output[0], inserted below
                 // like every other block; any additional declared output_names are inserted
@@ -661,10 +680,19 @@ pub fn simulate_transient_with_blocks(
                 lib,
                 output_names,
                 sample_time,
+                xc_count,
             } => {
-                let instance = cscript_registry
-                    .instantiate(lib)
-                    .map_err(DaeError::CScript)?;
+                // xc_count == 0: the plain, single-function contract (cscript_output),
+                // unchanged from before xc existed. xc_count > 0: the continuous-state
+                // contract (cscript_derivative/cscript_output_xc instead) -- see
+                // cscript_ffi::CScriptRegistry::{instantiate,instantiate_xc}'s own doc
+                // comments for exactly which symbols each requires.
+                let instance = if *xc_count > 0 {
+                    cscript_registry.instantiate_xc(lib)
+                } else {
+                    cscript_registry.instantiate(lib)
+                }
+                .map_err(DaeError::CScript)?;
                 if matches!(step, TimeStep::Adaptive(_)) && !instance.supports_clone() {
                     return Err(DaeError::CScriptRequiresCloneForAdaptiveStep {
                         block_name: b.name.clone(),
@@ -681,6 +709,10 @@ pub fn simulate_transient_with_blocks(
                     // corrupting the block's own state with an infinite integration step.
                     time_since_sample: sample_time.unwrap_or(0.0),
                     last_output: vec![0.0; output_names.len()],
+                    // Starts at rest, matching every other dynamic block's own convention
+                    // (Pid/StateSpace/TransferFunction/Pmsm/Vco all start their own state at
+                    // zero too).
+                    xc: vec![0.0; *xc_count],
                 }
             }
             _ => BlockState::Stateless,
