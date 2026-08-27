@@ -213,6 +213,18 @@ enum BlockState {
         last_output: Vec<f64>,
         xc: Vec<f64>,
     },
+    /// The Python-hosted counterpart to `CScript` above — same zero-order-hold `sample_time`
+    /// bookkeeping, same `xc` continuous-state vector, `instance` a live
+    /// [`pyblock_ffi::PyBlockInstance`] instead of a C one. Cloning this variant uses Python's
+    /// own generic `copy.deepcopy` (see `pyblock_ffi`'s own module doc comment) — unlike
+    /// `CScript`, there is no "doesn't support clone" panic path, since `deepcopy` needs no
+    /// author opt-in.
+    PyBlock {
+        instance: pyblock_ffi::PyBlockInstance,
+        time_since_sample: f64,
+        last_output: Vec<f64>,
+        xc: Vec<f64>,
+    },
 }
 
 /// One step's result: `(t, OperatingPoint, block_outputs)`, where `block_outputs` is every
@@ -235,6 +247,7 @@ fn block_index_by_name(blocks: &[BlockInstance]) -> Result<BTreeMap<&str, usize>
         }
         let extra: &[String] = match &b.kind {
             BlockKind::CScript { output_names, .. }
+            | BlockKind::PyBlock { output_names, .. }
             | BlockKind::CoordinateTransform { output_names, .. }
             | BlockKind::Pmsm { output_names, .. }
             | BlockKind::Pwm { output_names, .. }
@@ -801,6 +814,65 @@ fn evaluate_blocks(
                 }
                 SignalValue::Scalar(last_output.first().copied().unwrap_or(0.0))
             }
+            (
+                BlockKind::PyBlock {
+                    output_names,
+                    sample_time,
+                    xc_count,
+                    ..
+                },
+                BlockState::PyBlock {
+                    instance,
+                    time_since_sample,
+                    last_output,
+                    xc,
+                },
+            ) => {
+                // Identical sample_time/xc gating to BlockKind::CScript's own arm above -- see
+                // its own comment for the full rationale, unchanged here.
+                let (due, elapsed) = match sample_time {
+                    None => (true, dt),
+                    Some(ts) => {
+                        *time_since_sample += dt;
+                        if *time_since_sample + 1e-15 >= *ts {
+                            let elapsed = *time_since_sample;
+                            *time_since_sample = 0.0;
+                            (true, elapsed)
+                        } else {
+                            (false, 0.0)
+                        }
+                    }
+                };
+                if due {
+                    // Unlike CScript's own flat C array, each declared input keeps its own
+                    // scalar/vector shape here -- Python can express "a list of values, each
+                    // either a float or an ndarray" naturally, so there's no need to flatten
+                    // (see pyblock_ffi's own module doc comment).
+                    let py_inputs: Vec<pyblock_ffi::PyInput> = input_vals
+                        .iter()
+                        .map(|v| match v {
+                            SignalValue::Scalar(x) => pyblock_ffi::PyInput::Scalar(*x),
+                            SignalValue::Vector(xs) => pyblock_ffi::PyInput::Vector(xs),
+                        })
+                        .collect();
+                    *last_output = if *xc_count > 0 {
+                        *xc = instance
+                            .rk4_step_xc(xc, t, &py_inputs, elapsed)
+                            .map_err(DaeError::PyBlock)?;
+                        instance
+                            .call_xc(t, elapsed, &py_inputs, xc, output_names.len())
+                            .map_err(DaeError::PyBlock)?
+                    } else {
+                        instance
+                            .call(t, elapsed, &py_inputs, output_names.len())
+                            .map_err(DaeError::PyBlock)?
+                    };
+                }
+                for (name, v) in output_names.iter().zip(last_output.iter()).skip(1) {
+                    outputs.insert(name.clone(), SignalValue::Scalar(*v));
+                }
+                SignalValue::Scalar(last_output.first().copied().unwrap_or(0.0))
+            }
             _ => unreachable!("BlockState variant always matches its BlockKind"),
         };
         outputs.insert(block.name.clone(), value);
@@ -939,6 +1011,7 @@ pub fn simulate_transient_with_blocks(
     let mut x_prev_prev: Option<Vec<f64>> = None;
 
     let mut cscript_registry = CScriptRegistry::new();
+    let mut pyblock_registry = pyblock_ffi::PyBlockRegistry::new();
     let mut block_states: Vec<BlockState> = Vec::with_capacity(blocks.len());
     for b in blocks {
         let dynamic = |state_space: StateSpace| {
@@ -1001,6 +1074,28 @@ pub fn simulate_transient_with_blocks(
                     // Starts at rest, matching every other dynamic block's own convention
                     // (Pid/StateSpace/TransferFunction/Pmsm/Vco all start their own state at
                     // zero too).
+                    xc: vec![0.0; *xc_count],
+                }
+            }
+            BlockKind::PyBlock {
+                path,
+                output_names,
+                sample_time,
+                xc_count,
+            } => {
+                // Same xc_count == 0 / > 0 contract split as CScript's own arm above; no
+                // "requires clone" upfront check here -- pyblock_ffi's own clone is generic
+                // (Python's copy.deepcopy), no author opt-in needed, so it's never missing.
+                let instance = if *xc_count > 0 {
+                    pyblock_registry.instantiate_xc(path)
+                } else {
+                    pyblock_registry.instantiate(path)
+                }
+                .map_err(DaeError::PyBlock)?;
+                BlockState::PyBlock {
+                    instance,
+                    time_since_sample: sample_time.unwrap_or(0.0),
+                    last_output: vec![0.0; output_names.len()],
                     xc: vec![0.0; *xc_count],
                 }
             }

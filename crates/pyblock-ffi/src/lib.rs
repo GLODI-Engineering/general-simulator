@@ -1,0 +1,480 @@
+//! Embeds a Python interpreter (PyO3's `auto-initialize` feature) and calls user-supplied
+//! Python functions once per resolved block-graph step -- the Python-hosted counterpart to
+//! `cscript_ffi`'s dynamically-linked C blocks. See `general-simulator`'s own
+//! `book/dev-guide/src/python-blocks.md` for the full design and the measurements behind it;
+//! this module doc comment covers the Python-side contract only.
+//!
+//! ## The Python-side contract
+//!
+//! A block's `.py` file must define:
+//!
+//! ```python
+//! def start():
+//!     # Called once, when this block instance is created. Return any Python object (a dict, a
+//!     # plain class instance, ...) as this instance's own persistent state, or None. Put every
+//!     # import, every precomputed table, every one-time-expensive thing here -- never in
+//!     # output(). See the module doc comment's own measurements for why this matters.
+//!     ...
+//!
+//! def output(state, t, dt, inputs):
+//!     # Called once per resolved step (or once per sample period under ts=, mirroring
+//!     # cscript's own zero-order-hold convention). `inputs` is a list, one entry per declared
+//!     # `inputs=` signal -- a float for a scalar signal, a numpy.ndarray for a vector one
+//!     # (never flattened into one array the way cscript's C `in[]` has to be -- Python can
+//!     # keep each declared input's own shape). Return a single float, or a tuple/list of
+//!     # floats matching this block's own declared `outputs=` count (deliberately scalar-only
+//!     # outputs -- see the design doc).
+//!     ...
+//! ```
+//!
+//! ## The optional continuous-state (`xc`) contract
+//!
+//! A block declaring `xc_count > 0` exports `derivative`/`output_xc` *instead of* `output` --
+//! the exact same split `cscript`'s own `xc` contract uses, for the same reason (a state the
+//! *solver* numerically integrates, not the block's own hand-rolled update):
+//!
+//! ```python
+//! def derivative(state, t, inputs, xc):
+//!     # xc: numpy.ndarray, this RK4 stage's own candidate continuous-state vector. Must not
+//!     # mutate `state` -- called up to four times per accepted step. Return dxc/dt,
+//!     # array-like, same length as xc.
+//!     ...
+//!
+//! def output_xc(state, t, dt, inputs, xc):
+//!     # xc: numpy.ndarray, this step's own already-integrated continuous state. May still
+//!     # mutate `state` for its own discrete bookkeeping, exactly like output() can.
+//!     ...
+//! ```
+//!
+//! ## State, cloning, and per-instance isolation
+//!
+//! Each instance gets its own Python namespace (`PyModule::from_code` execs the cached source
+//! text fresh per instance), so two instances of the same `.py` file never share module-level
+//! state -- while still sharing the *process-wide* `sys.modules` cache, so `import numpy`
+//! genuinely only pays its real cost once per process, not once per instance. The registry
+//! caches each file's own *source text* (avoiding repeat disk reads across instances), not a
+//! separately-compiled code object -- `from_code` recompiles per instance, which is fast enough
+//! (well under a millisecond for a block-sized file) not to be worth a second cache layer.
+//!
+//! Cloning (needed only for [`PyBlockInstance::try_clone`], itself only needed under adaptive
+//! step-size control's own trial-and-discard retry loop) uses Python's own generic
+//! `copy.deepcopy` on the instance's state object -- unlike `cscript`, there is no author
+//! opt-in required and no "doesn't support clone" rejection path: `deepcopy` works on ordinary
+//! Python state automatically. A state object that genuinely can't be deep-copied (an open file
+//! handle) surfaces as an ordinary Python exception -> [`PyBlockError::Exception`], not a panic.
+
+use std::ffi::CString;
+use std::path::{Path, PathBuf};
+
+use pyo3::prelude::*;
+use pyo3::types::PyModule;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PyBlockError {
+    Load {
+        path: PathBuf,
+        message: String,
+    },
+    MissingFunction {
+        path: PathBuf,
+        name: &'static str,
+        message: String,
+    },
+    Exception {
+        path: PathBuf,
+        function: &'static str,
+        message: String,
+    },
+}
+
+impl std::fmt::Display for PyBlockError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PyBlockError::Load { path, message } => {
+                write!(
+                    f,
+                    "failed to load Python block {}: {message}",
+                    path.display()
+                )
+            }
+            PyBlockError::MissingFunction {
+                path,
+                name,
+                message,
+            } => write!(
+                f,
+                "Python block {} is missing required function `{name}`: {message}",
+                path.display()
+            ),
+            PyBlockError::Exception {
+                path,
+                function,
+                message,
+            } => write!(
+                f,
+                "Python block {} raised in `{function}`: {message}",
+                path.display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PyBlockError {}
+
+/// One input value passed to a Python block's own `output`/`derivative` function -- a plain
+/// scalar or a fixed-length vector, converted to a Python `float`/`numpy.ndarray` respectively.
+/// Deliberately not `general_mna::block_graph::SignalValue` itself, to keep this crate free of
+/// a dependency on `general-mna` -- matching `cscript-ffi`'s own convention of taking plain
+/// `f64` slices and leaving any scalar/vector decision to the caller (`dae-runtime`).
+#[derive(Debug, Clone, Copy)]
+pub enum PyInput<'a> {
+    Scalar(f64),
+    Vector(&'a [f64]),
+}
+
+fn py_traceback(_py: Python<'_>, err: &PyErr) -> String {
+    err.to_string()
+}
+
+fn build_args<'py>(
+    py: Python<'py>,
+    inputs: &[PyInput],
+) -> PyResult<pyo3::Bound<'py, pyo3::types::PyList>> {
+    use numpy::PyArray1;
+    use pyo3::types::PyList;
+    let list = PyList::empty(py);
+    for input in inputs {
+        match input {
+            PyInput::Scalar(x) => list.append(*x)?,
+            PyInput::Vector(xs) => list.append(PyArray1::from_slice(py, xs))?,
+        }
+    }
+    Ok(list)
+}
+
+/// Extracts `output()`/`output_xc()`'s own return value: a bare `float` when the block
+/// declares exactly one output (the natural Python idiom -- `return x`, not `return [x]`), or a
+/// `tuple`/`list` of `float`s matching a multi-output block's own declared count.
+fn extract_outputs(result: pyo3::Bound<'_, PyAny>, out_len: usize) -> PyResult<Vec<f64>> {
+    if out_len <= 1 {
+        let v: f64 = result.extract()?;
+        return Ok(vec![v]);
+    }
+    extract_vector(result)
+}
+
+/// Extracts `derivative()`'s own return value: always array-like (`dxc/dt`, one entry per `xc`
+/// element), regardless of `xc`'s own length -- unlike [`extract_outputs`], a length-1
+/// continuous state is still a state *vector* conceptually, so `derivative()` never gets the
+/// bare-scalar shortcut (its own docstring says "array-like, same length as xc," not "a bare
+/// float when there's only one").
+fn extract_vector(result: pyo3::Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
+    let seq = result.try_iter()?;
+    let mut out = Vec::new();
+    for item in seq {
+        out.push(item?.extract::<f64>()?);
+    }
+    Ok(out)
+}
+
+/// Caches each `.py` file's own source text by path -- a fresh [`PyBlockInstance`] execs it
+/// into its own new namespace, so multiple instances of the same file never share module-level
+/// state (see the module doc comment, "State, cloning, and per-instance isolation").
+#[derive(Default)]
+pub struct PyBlockRegistry {
+    sources: std::collections::BTreeMap<PathBuf, String>,
+}
+
+impl PyBlockRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn load_source(&mut self, path: &Path) -> Result<String, PyBlockError> {
+        if let Some(source) = self.sources.get(path) {
+            return Ok(source.clone());
+        }
+        let source = std::fs::read_to_string(path).map_err(|e| PyBlockError::Load {
+            path: path.to_path_buf(),
+            message: e.to_string(),
+        })?;
+        self.sources.insert(path.to_path_buf(), source.clone());
+        Ok(source)
+    }
+
+    /// The plain contract: requires `start`/`output`, for a block with `xc_count == 0`.
+    pub fn instantiate(&mut self, path: &Path) -> Result<PyBlockInstance, PyBlockError> {
+        let source = self.load_source(path)?;
+        PyBlockInstance::new(path, &source, false)
+    }
+
+    /// The continuous-state (`xc`) contract: requires `start`/`derivative`/`output_xc`, for a
+    /// block with `xc_count > 0`.
+    pub fn instantiate_xc(&mut self, path: &Path) -> Result<PyBlockInstance, PyBlockError> {
+        let source = self.load_source(path)?;
+        PyBlockInstance::new(path, &source, true)
+    }
+}
+
+/// One block instance: its own Python namespace (a fresh module exec'd from the cached source),
+/// its own state object (`start()`'s own return value), and the specific function handles this
+/// instance's own contract (plain or `xc`) needs.
+#[derive(Debug)]
+pub struct PyBlockInstance {
+    path: PathBuf,
+    source: String,
+    state: Py<PyAny>,
+    output_fn: Option<Py<PyAny>>,
+    derivative_fn: Option<Py<PyAny>>,
+    output_xc_fn: Option<Py<PyAny>>,
+}
+
+impl PyBlockInstance {
+    fn new(path: &Path, source: &str, want_xc: bool) -> Result<Self, PyBlockError> {
+        Python::attach(|py| {
+            let module = exec_fresh_module(py, path, source).map_err(|e| PyBlockError::Load {
+                path: path.to_path_buf(),
+                message: py_traceback(py, &e),
+            })?;
+
+            let get = |name: &'static str| -> Option<Py<PyAny>> {
+                module.getattr(name).ok().map(|f| f.unbind())
+            };
+
+            let start_fn = get("start").ok_or_else(|| PyBlockError::MissingFunction {
+                path: path.to_path_buf(),
+                name: "start",
+                message: "not found".to_string(),
+            })?;
+            let output_fn = get("output");
+            let derivative_fn = get("derivative");
+            let output_xc_fn = get("output_xc");
+
+            if want_xc {
+                if derivative_fn.is_none() {
+                    return Err(PyBlockError::MissingFunction {
+                        path: path.to_path_buf(),
+                        name: "derivative",
+                        message: "required because this block declares xc_count > 0".to_string(),
+                    });
+                }
+                if output_xc_fn.is_none() {
+                    return Err(PyBlockError::MissingFunction {
+                        path: path.to_path_buf(),
+                        name: "output_xc",
+                        message: "required because this block declares xc_count > 0".to_string(),
+                    });
+                }
+            } else if output_fn.is_none() {
+                return Err(PyBlockError::MissingFunction {
+                    path: path.to_path_buf(),
+                    name: "output",
+                    message: "not found (or this block only implements the xc contract -- see \
+                              PyBlockRegistry::instantiate_xc)"
+                        .to_string(),
+                });
+            }
+
+            let state = start_fn
+                .bind(py)
+                .call0()
+                .map_err(|e| PyBlockError::Exception {
+                    path: path.to_path_buf(),
+                    function: "start",
+                    message: py_traceback(py, &e),
+                })?
+                .unbind();
+
+            Ok(PyBlockInstance {
+                path: path.to_path_buf(),
+                source: source.to_string(),
+                state,
+                output_fn,
+                derivative_fn,
+                output_xc_fn,
+            })
+        })
+    }
+
+    /// Calls `output(state, t, dt, inputs)`, returning `out_len` values (a single-element
+    /// `Vec` for a scalar return, or as many elements as the Python function's own returned
+    /// tuple/list has).
+    ///
+    /// # Panics
+    /// If this instance was created via [`PyBlockRegistry::instantiate_xc`] (no `output`
+    /// function resolved) -- unreachable in practice, since `dae-runtime` only ever calls this
+    /// on an instance created via the plain [`PyBlockRegistry::instantiate`].
+    pub fn call(
+        &mut self,
+        t: f64,
+        dt: f64,
+        inputs: &[PyInput],
+        out_len: usize,
+    ) -> Result<Vec<f64>, PyBlockError> {
+        if self.output_fn.is_none() {
+            panic!(
+                "call requires an instance created via PyBlockRegistry::instantiate (which \
+                 already requires `output` up front -- this should be unreachable)"
+            );
+        }
+        Python::attach(|py| {
+            let output_fn = self.output_fn.as_ref().unwrap().clone_ref(py);
+            let args = build_args(py, inputs).map_err(|e| self.exception(py, "output", e))?;
+            let result = output_fn
+                .bind(py)
+                .call1((self.state.bind(py), t, dt, args))
+                .map_err(|e| self.exception(py, "output", e))?;
+            extract_outputs(result, out_len).map_err(|e| self.exception(py, "output", e))
+        })
+    }
+
+    /// Calls `output_xc(state, t, dt, inputs, xc)`.
+    ///
+    /// # Panics
+    /// If this instance doesn't have an `output_xc` function resolved -- unreachable in
+    /// practice, since [`PyBlockRegistry::instantiate_xc`] already requires it up front.
+    pub fn call_xc(
+        &mut self,
+        t: f64,
+        dt: f64,
+        inputs: &[PyInput],
+        xc: &[f64],
+        out_len: usize,
+    ) -> Result<Vec<f64>, PyBlockError> {
+        if self.output_xc_fn.is_none() {
+            panic!(
+                "call_xc requires an instance created via PyBlockRegistry::instantiate_xc \
+                 (which already requires `output_xc` up front -- this should be unreachable)"
+            );
+        }
+        Python::attach(|py| {
+            let output_xc_fn = self.output_xc_fn.as_ref().unwrap().clone_ref(py);
+            let args = build_args(py, inputs).map_err(|e| self.exception(py, "output_xc", e))?;
+            let xc_arr = numpy::PyArray1::from_slice(py, xc);
+            let result = output_xc_fn
+                .bind(py)
+                .call1((self.state.bind(py), t, dt, args, xc_arr))
+                .map_err(|e| self.exception(py, "output_xc", e))?;
+            extract_outputs(result, out_len).map_err(|e| self.exception(py, "output_xc", e))
+        })
+    }
+
+    /// Evaluates `derivative(state, t, inputs, xc)` once: given the current continuous-state
+    /// vector `xc` and this step's already-resolved inputs, returns `dxc/dt`. Must not mutate
+    /// `state` (documented, not enforced, same as `cscript`'s equivalent contract).
+    ///
+    /// # Panics
+    /// If this instance doesn't have a `derivative` function resolved -- unreachable in
+    /// practice, since [`PyBlockRegistry::instantiate_xc`] already requires it up front.
+    pub fn derivative(
+        &self,
+        t: f64,
+        inputs: &[PyInput],
+        xc: &[f64],
+    ) -> Result<Vec<f64>, PyBlockError> {
+        if self.derivative_fn.is_none() {
+            panic!(
+                "derivative requires an instance created via PyBlockRegistry::instantiate_xc \
+                 (which already requires `derivative` up front -- this should be unreachable)"
+            );
+        }
+        Python::attach(|py| {
+            let derivative_fn = self.derivative_fn.as_ref().unwrap().clone_ref(py);
+            let args = build_args(py, inputs).map_err(|e| self.exception(py, "derivative", e))?;
+            let xc_arr = numpy::PyArray1::from_slice(py, xc);
+            let result = derivative_fn
+                .bind(py)
+                .call1((self.state.bind(py), t, args, xc_arr))
+                .map_err(|e| self.exception(py, "derivative", e))?;
+            extract_vector(result).map_err(|e| self.exception(py, "derivative", e))
+        })
+    }
+
+    /// RK4-integrates `xc` forward by `dt`, holding `t`/`inputs` fixed across all four stages --
+    /// the same zero-order-hold convention `cscript_ffi::CScriptInstance::rk4_step_xc`/
+    /// `continuous_blocks::StateSpace::rk4_step` both use for every other dynamic block.
+    pub fn rk4_step_xc(
+        &self,
+        xc: &[f64],
+        t: f64,
+        inputs: &[PyInput],
+        dt: f64,
+    ) -> Result<Vec<f64>, PyBlockError> {
+        let add = |a: &[f64], b: &[f64], scale: f64| -> Vec<f64> {
+            a.iter().zip(b).map(|(ai, bi)| ai + scale * bi).collect()
+        };
+        let k1 = self.derivative(t, inputs, xc)?;
+        let k2 = self.derivative(t, inputs, &add(xc, &k1, dt / 2.0))?;
+        let k3 = self.derivative(t, inputs, &add(xc, &k2, dt / 2.0))?;
+        let k4 = self.derivative(t, inputs, &add(xc, &k3, dt))?;
+        Ok((0..xc.len())
+            .map(|i| xc[i] + (dt / 6.0) * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]))
+            .collect())
+    }
+
+    /// A real, independent deep copy of this instance's state via Python's own generic
+    /// `copy.deepcopy` -- no author opt-in required, unlike `cscript_clone` (see the module doc
+    /// comment). `Err` if the state genuinely can't be deep-copied (e.g. an open file handle),
+    /// a normal Python exception, not a panic.
+    pub fn try_clone(&self) -> Result<PyBlockInstance, PyBlockError> {
+        Python::attach(|py| {
+            let module = exec_fresh_module(py, &self.path, &self.source).map_err(|e| {
+                PyBlockError::Load {
+                    path: self.path.clone(),
+                    message: py_traceback(py, &e),
+                }
+            })?;
+            let get = |name: &'static str| -> Option<Py<PyAny>> {
+                module.getattr(name).ok().map(|f| f.unbind())
+            };
+            let copy_mod = py
+                .import("copy")
+                .map_err(|e| self.exception(py, "try_clone", e))?;
+            let cloned_state = copy_mod
+                .call_method1("deepcopy", (self.state.bind(py),))
+                .map_err(|e| self.exception(py, "try_clone", e))?
+                .unbind();
+            Ok(PyBlockInstance {
+                path: self.path.clone(),
+                source: self.source.clone(),
+                state: cloned_state,
+                output_fn: get("output"),
+                derivative_fn: get("derivative"),
+                output_xc_fn: get("output_xc"),
+            })
+        })
+    }
+
+    fn exception(&self, py: Python<'_>, function: &'static str, err: PyErr) -> PyBlockError {
+        PyBlockError::Exception {
+            path: self.path.clone(),
+            function,
+            message: py_traceback(py, &err),
+        }
+    }
+}
+
+impl Clone for PyBlockInstance {
+    /// # Panics
+    /// If `copy.deepcopy` itself fails on this instance's own state -- see [`Self::try_clone`]
+    /// for the non-panicking form.
+    fn clone(&self) -> Self {
+        self.try_clone()
+            .unwrap_or_else(|e| panic!("cannot clone this PyBlockInstance: {e}"))
+    }
+}
+
+fn exec_fresh_module<'py>(
+    py: Python<'py>,
+    path: &Path,
+    source: &str,
+) -> PyResult<pyo3::Bound<'py, PyModule>> {
+    let code = CString::new(source)?;
+    let filename = CString::new(path.to_string_lossy().as_bytes())?;
+    let module_name = CString::new(
+        path.file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "pyblock".to_string()),
+    )?;
+    PyModule::from_code(py, &code, &filename, &module_name)
+}

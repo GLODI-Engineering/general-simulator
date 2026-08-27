@@ -498,6 +498,7 @@ fn run_transient_with_mosfets(
     for block in blocks {
         match &block.kind {
             BlockKind::CScript { output_names, .. }
+            | BlockKind::PyBlock { output_names, .. }
             | BlockKind::CoordinateTransform { output_names, .. }
             | BlockKind::Pmsm { output_names, .. }
             | BlockKind::Pwm { output_names, .. }

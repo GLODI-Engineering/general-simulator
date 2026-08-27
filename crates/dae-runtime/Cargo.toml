@@ -16,5 +16,6 @@ lcp-solver = { path = "../lcp-solver" }
 pwl-devices = { path = "../pwl-devices" }
 continuous-blocks = { path = "../continuous-blocks" }
 cscript-ffi = { path = "../cscript-ffi" }
+pyblock-ffi = { path = "../pyblock-ffi" }
 general-spice-core = { path = "../../../spice-lsp/servers/core" }
 general-mna = { path = "../../../general-mna" }

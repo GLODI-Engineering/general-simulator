@@ -115,6 +115,13 @@ pub enum DaeError {
     CScriptRequiresCloneForAdaptiveStep {
         block_name: String,
     },
+    /// Loading, calling into, or cloning a [`block_graph::BlockKind::PyBlock`]'s own `.py` file
+    /// failed — see [`pyblock_ffi::PyBlockError`]. Unlike [`Self::CScriptRequiresCloneForAdaptiveStep`],
+    /// there is no separate "doesn't support adaptive stepping" variant for `PyBlock`: cloning
+    /// uses Python's own generic `copy.deepcopy`, which needs no author opt-in, so a `PyBlock`
+    /// is always eligible — a genuine failure to deep-copy its own state instead surfaces here,
+    /// as an ordinary [`pyblock_ffi::PyBlockError::Exception`].
+    PyBlock(pyblock_ffi::PyBlockError),
     /// A [`block_graph::GateBinding`] names a block that exists but isn't a
     /// [`block_graph::BlockKind::Sig2Gate`] — the enforced physical/signal-domain boundary: any
     /// signal driving a MOSFET's exogenous gate command must first pass through an explicit
