@@ -1,6 +1,7 @@
 # Test fixture for dae-runtime's own kind=pyblock integration test: a hand-written discrete PI
-# controller (the exact kind of thing a a reference tool Function block is for), regulating error to zero
-# with anti-windup, checked against a plain Rust-side hand computation of the same recursion.
+# controller (the exact kind of thing a scripting-language code block is for), regulating error
+# to zero with anti-windup, checked against a plain Rust-side hand computation of the same
+# recursion.
 KP = 2.0
 KI = 50.0
 
