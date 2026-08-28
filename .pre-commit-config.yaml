@@ -2,7 +2,7 @@ repos:
   - repo: local
     hooks:
       - id: style-guard
-        name: no named reference-tool/reference tools in added lines
+        name: local style checks
         language: system
-        entry: bash scripts/style-guard-legacy.sh
+        entry: bash scripts/style-guard.sh
         pass_filenames: false

@@ -236,7 +236,7 @@ fn table_points_parse_as_a_python_list_of_xy_pairs_and_interpolate_correctly() {
 }
 
 #[test]
-fn old_a reference tool_style_matrix_syntax_is_rejected_with_a_clear_error() {
+fn old_bare_scalar_matrix_syntax_is_rejected_with_a_clear_error() {
     let netlist = write_netlist(
         "old-matrix",
         &format!(

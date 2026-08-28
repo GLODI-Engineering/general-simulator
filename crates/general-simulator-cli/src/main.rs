@@ -85,10 +85,10 @@
 //! ## Physical/signal-domain converters (enforced)
 //!
 //! A circuit quantity (a node voltage, a branch current) and a signal-domain block's output are
-//! **not the same kind of thing** and cannot be wired together directly — the same rule
-//! a reference tool/Simscape enforces with its own PS-a reference tool Converter / a reference tool-PS Converter
-//! blocks, applied here at the netlist level (a companion UI is intended to enforce the same
-//! rule visually later; this grammar is the ground truth). There are two converters, one per
+//! **not the same kind of thing** and cannot be wired together directly — the same rule a real
+//! block-diagram tool enforces with its own physical/signal converter blocks, applied here at
+//! the netlist level (a companion UI is intended to enforce the same rule visually later; this
+//! grammar is the ground truth). There are two converters, one per
 //! crossing direction (read vs. write) — the write direction, `sig2voltage`/`sig2current`,
 //! covers both a gate command and a source's own magnitude, since a MOSFET's gate is itself a
 //! voltage rather than a distinct discrete-actuation signal domain:

@@ -5,3 +5,6 @@
 /book/*/book/
 # Generated PDFs (regenerate with book/build-pdf.sh)
 /book/*.pdf
+
+# Local-only pre-commit hook script -- not published (kept out of the public repo on purpose).
+/scripts/style-guard.sh
