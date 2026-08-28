@@ -11,11 +11,33 @@ documentation = "https://docs.rs/dae-runtime"
 keywords = ["circuit-simulation", "dae", "spice"]
 categories = ["science", "simulation"]
 
+[features]
+default = []
+# pyblock-ffi embeds a Python interpreter (via pyo3), which needs a discoverable Python/libpython
+# at build/link time -- opt-in, not required for the core simulator (kind=cscript covers the
+# same "dynamically-loaded custom block" need without that build dependency). Mirrors
+# general-mna's own `python` feature for its (unrelated) optional PyO3 bindings module.
+python = ["dep:pyblock-ffi"]
+
 [dependencies]
-lcp-solver = { path = "../lcp-solver" }
-pwl-devices = { path = "../pwl-devices" }
-continuous-blocks = { path = "../continuous-blocks" }
-cscript-ffi = { path = "../cscript-ffi" }
-pyblock-ffi = { path = "../pyblock-ffi" }
-general-spice-core = { path = "../../../spice-lsp/servers/core" }
-general-mna = { path = "../../../general-mna" }
+lcp-solver = { path = "../lcp-solver", version = "0.1.0" }
+pwl-devices = { path = "../pwl-devices", version = "0.1.0" }
+continuous-blocks = { path = "../continuous-blocks", version = "0.1.0" }
+cscript-ffi = { path = "../cscript-ffi", version = "0.1.0" }
+pyblock-ffi = { path = "../pyblock-ffi", version = "0.1.0", optional = true }
+# Cross-repo: general-spice-core lives in the separate spice-lsp repo, general-mna in its own.
+# `path` keeps local builds working against the sibling checkouts already required today;
+# `version` is what actually resolves once these are published, and is required for a `cargo
+# publish` of dae-runtime itself to succeed at all (crates.io ignores `path`, needs `version`).
+general-spice-core = { path = "../../../spice-lsp/servers/core", version = "0.1.0" }
+general-mna = { path = "../../../general-mna", version = "0.1.0" }
+
+[[test]]
+name = "pyblock"
+path = "tests/pyblock.rs"
+required-features = ["python"]
+
+[[test]]
+name = "pyfunc"
+path = "tests/pyfunc.rs"
+required-features = ["python"]

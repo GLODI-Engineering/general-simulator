@@ -126,6 +126,7 @@ pub enum DaeError {
     },
     /// The `PyBlock` counterpart to [`Self::CScriptRequiresNextSampleHitForVariableSampleTime`]
     /// — a `.py` file declared `ts=variable` but doesn't define `next_sample_hit`.
+    #[cfg(feature = "python")]
     PyBlockRequiresNextSampleHitForVariableSampleTime {
         block_name: String,
     },
@@ -135,7 +136,17 @@ pub enum DaeError {
     /// uses Python's own generic `copy.deepcopy`, which needs no author opt-in, so a `PyBlock`
     /// is always eligible — a genuine failure to deep-copy its own state instead surfaces here,
     /// as an ordinary [`pyblock_ffi::PyBlockError::Exception`].
+    #[cfg(feature = "python")]
     PyBlock(pyblock_ffi::PyBlockError),
+    /// A netlist declares a [`block_graph::BlockKind::PyBlock`]/[`block_graph::BlockKind::
+    /// PyFunction`] block, but this build of `dae-runtime` was compiled without the optional
+    /// `python` feature (which pulls in `pyblock-ffi`, and through it a build-time dependency
+    /// on a discoverable Python/libpython) — unconditional, unlike the two variants above,
+    /// specifically so a build without that feature can still report a clear, actionable error
+    /// instead of failing to compile at all or panicking.
+    PythonSupportNotCompiledIn {
+        block_name: String,
+    },
     /// A [`block_graph::GateBinding`] names a block that exists but isn't a
     /// [`block_graph::BlockKind::Sig2Voltage`] — the enforced physical/signal-domain boundary:
     /// a MOSFET's gate is itself a voltage, so any signal driving it must first pass through

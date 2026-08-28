@@ -270,7 +270,9 @@ enum BlockState {
     /// [`pyblock_ffi::PyBlockInstance`] instead of a C one. Cloning this variant uses Python's
     /// own generic `copy.deepcopy` (see `pyblock_ffi`'s own module doc comment) — unlike
     /// `CScript`, there is no "doesn't support clone" panic path, since `deepcopy` needs no
-    /// author opt-in.
+    /// author opt-in. Only exists when the optional `python` feature is enabled — see
+    /// `dae-runtime`'s own `Cargo.toml`.
+    #[cfg(feature = "python")]
     PyBlock {
         instance: pyblock_ffi::PyBlockInstance,
         time_since_sample: f64,
@@ -284,7 +286,8 @@ enum BlockState {
     /// [`pyblock_ffi::PyFunctionInstance`] has no `xc` and cloning it is always trivially cheap
     /// (`clone_ref`, never `copy.deepcopy`, never fallible) — see that type's own doc comment.
     /// Still needs the same zero-order-hold `sample_time` bookkeeping every other zero-order-
-    /// hold block has.
+    /// hold block has. Only exists when the optional `python` feature is enabled.
+    #[cfg(feature = "python")]
     PyFunction {
         instance: pyblock_ffi::PyFunctionInstance,
         time_since_sample: f64,
@@ -1079,6 +1082,7 @@ fn evaluate_blocks(
                 }
                 SignalValue::Scalar(last_output.first().copied().unwrap_or(0.0))
             }
+            #[cfg(feature = "python")]
             (
                 BlockKind::PyBlock {
                     output_names,
@@ -1167,6 +1171,7 @@ fn evaluate_blocks(
                 }
                 SignalValue::Scalar(last_output.first().copied().unwrap_or(0.0))
             }
+            #[cfg(feature = "python")]
             (
                 BlockKind::PyFunction {
                     output_names,
@@ -1354,7 +1359,9 @@ pub fn simulate_transient_with_blocks(
     let mut x_prev_prev: Option<Vec<f64>> = None;
 
     let mut cscript_registry = CScriptRegistry::new();
+    #[cfg(feature = "python")]
     let mut pyblock_registry = pyblock_ffi::PyBlockRegistry::new();
+    #[cfg(feature = "python")]
     let mut pyfunction_registry = pyblock_ffi::PyFunctionRegistry::new();
     let mut block_states: Vec<BlockState> = Vec::with_capacity(blocks.len());
     for b in blocks {
@@ -1500,6 +1507,7 @@ pub fn simulate_transient_with_blocks(
                     xc: vec![0.0; *xc_count],
                 }
             }
+            #[cfg(feature = "python")]
             BlockKind::PyBlock {
                 path,
                 output_names,
@@ -1536,6 +1544,15 @@ pub fn simulate_transient_with_blocks(
                     xc: vec![0.0; *xc_count],
                 }
             }
+            // A netlist declaring kind=pyblock against a build with the `python` feature off --
+            // see DaeError::PythonSupportNotCompiledIn's own doc comment.
+            #[cfg(not(feature = "python"))]
+            BlockKind::PyBlock { .. } => {
+                return Err(DaeError::PythonSupportNotCompiledIn {
+                    block_name: b.name.clone(),
+                });
+            }
+            #[cfg(feature = "python")]
             BlockKind::PyFunction {
                 path,
                 function,
@@ -1559,6 +1576,12 @@ pub fn simulate_transient_with_blocks(
                     },
                     last_output: vec![0.0; output_names.len()],
                 }
+            }
+            #[cfg(not(feature = "python"))]
+            BlockKind::PyFunction { .. } => {
+                return Err(DaeError::PythonSupportNotCompiledIn {
+                    block_name: b.name.clone(),
+                });
             }
             _ => BlockState::Stateless,
         };

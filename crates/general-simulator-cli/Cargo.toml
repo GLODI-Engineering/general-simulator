@@ -15,9 +15,26 @@ categories = ["science", "simulation", "command-line-utilities"]
 name = "general-simulator"
 path = "src/main.rs"
 
+[features]
+default = []
+# Propagates dae-runtime's own optional pyo3-embedding feature -- kind=pyblock/kind=pyfunc
+# netlist support needs a discoverable Python/libpython at build/link time; off by default so
+# the plain `general-simulator` binary needs nothing beyond a Rust toolchain to build.
+python = ["dae-runtime/python"]
+
 [dependencies]
-continuous-blocks = { path = "../continuous-blocks" }
-dae-runtime = { path = "../dae-runtime" }
-pwl-devices = { path = "../pwl-devices" }
-general-spice-core = { path = "../../../spice-lsp/servers/core" }
-general-mna = { path = "../../../general-mna" }
+continuous-blocks = { path = "../continuous-blocks", version = "0.1.0" }
+dae-runtime = { path = "../dae-runtime", version = "0.1.0" }
+pwl-devices = { path = "../pwl-devices", version = "0.1.0" }
+general-spice-core = { path = "../../../spice-lsp/servers/core", version = "0.1.0" }
+general-mna = { path = "../../../general-mna", version = "0.1.0" }
+
+[[test]]
+name = "pyblock_cli"
+path = "tests/pyblock_cli.rs"
+required-features = ["python"]
+
+[[test]]
+name = "pyfunc_cli"
+path = "tests/pyfunc_cli.rs"
+required-features = ["python"]

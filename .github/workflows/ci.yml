@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, test -- default features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy (default features -- no Python build dependency)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test (default features)
+        run: cargo test --workspace --release -- --test-threads=1
+
+      # Not -D warnings: several crates have pre-existing broken rustdoc intra-doc links (doc
+      # comments cross-referencing symbols in a sibling crate, or private items) -- a real
+      # cleanup, but out of scope for wiring up CI itself; docs.yml's own existing `cargo doc`
+      # step (which actually publishes the docs site) already tolerates these the same way.
+      # cargo doc still fails this step outright on a genuine doc-build error, just not warnings.
+      - name: cargo doc
+        run: cargo doc --workspace --no-deps
+
+  rust-python:
+    name: Rust (clippy, test -- python feature, kind=pyblock/kind=pyfunc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: cargo clippy (python feature)
+        run: cargo clippy --workspace --all-targets --features general-simulator-cli/python -- -D warnings
+
+      - name: cargo test (python feature)
+        run: cargo test --workspace --release --features general-simulator-cli/python -- --test-threads=1

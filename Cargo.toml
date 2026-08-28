@@ -13,6 +13,6 @@ members = [
 [workspace.package]
 edition = "2021"
 license = "AGPL-3.0-or-later"
-publish = false
+publish = true
 repository = "https://github.com/Elvis-codeur/general-simulator"
 homepage = "https://github.com/Elvis-codeur/general-simulator"

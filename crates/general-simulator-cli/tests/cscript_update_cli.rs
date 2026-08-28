@@ -14,6 +14,7 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
+#[cfg(feature = "python")]
 fn copy_to_space_free_dir(name: &str) -> PathBuf {
     let source = fixture(name);
     let out_dir = std::env::temp_dir().join("general-simulator-cli-test-fixtures");
@@ -95,6 +96,7 @@ fn cscript_update_advances_the_accumulator_ahead_of_a_read_only_output() {
 }
 
 #[test]
+#[cfg(feature = "python")]
 fn pyblock_update_advances_the_accumulator_ahead_of_a_read_only_output() {
     let py_path = copy_to_space_free_dir("update_counter.py");
     let netlist = write_devices_file("V1 a 0 5\nR1 a 0 1000\n");
