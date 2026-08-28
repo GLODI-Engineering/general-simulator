@@ -1,0 +1,11 @@
+* Gain component reference -- the "## Example" netlist verbatim.
+* No title line -- see doc-verify/const/example.cir's own comment for why.
+*
+* G is the scalar form: k=3 scales its single input, G = 3 * 2 = 6.
+* M is the matrix form: k=[[1,0,0],[0,1,0]] (2x3, row-major) times the length-3 vector
+* V = [1,2,3] is the matrix-vector product [1,2] -- M[0] = 1*1+0*2+0*3 = 1,
+* M[1] = 0*1+1*2+0*3 = 2 (see test_gain.py::test_example_scalar_and_matrix_gain).
+IN kind=const value=2
+G kind=gain in=IN k=3
+V kind=const value=[1,2,3]
+M kind=gain in=V k=[[1,0,0],[0,1,0]]

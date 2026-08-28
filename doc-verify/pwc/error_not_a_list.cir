@@ -1,0 +1,4 @@
+* Pwc "## Errors" claim: points= must be a Python-style list literal -- a bare non-list value is
+* rejected at parse time with "field 'points' must be a Python-style list, e.g. '[1,2,3]' or
+* '[[1,2],[3,4]]' (got 'abc')" (see test_pwc.py::test_non_list_points_rejected).
+A kind=pwc points=abc

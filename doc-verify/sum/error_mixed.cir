@@ -1,0 +1,7 @@
+* Sum "## Errors" claim: mixed Scalar and Vector inputs are rejected at evaluation time (an
+* N-input reduction has no unambiguous placement for a lone scalar once a vector is present)
+* with "VectorSignalNotSupported { block: ... }" (see
+* test_sum.py::test_mixed_scalar_vector_inputs_rejected).
+SC kind=const value=1
+VEC kind=const value=[1,2]
+BAD kind=sum inputs=SC,VEC signs=1,1

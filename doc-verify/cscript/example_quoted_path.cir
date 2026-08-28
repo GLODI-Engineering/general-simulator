@@ -1,0 +1,7 @@
+* Proves a lib= path through a directory whose name contains a space must be double-quoted
+* (general-spice-core's block-instance tokenizer splits on whitespace outside quotes, same as
+* every other field) -- "a lib dir" is committed on purpose so this test is portable across
+* clones, not dependent on the checkout's own path happening to contain a space.
+* test_cscript.py compiles gain.c into "a lib dir/gain.so" before running this.
+SRC kind=const value=3
+G1 kind=cscript lib="doc-verify/cscript/a lib dir/gain.so" in=SRC

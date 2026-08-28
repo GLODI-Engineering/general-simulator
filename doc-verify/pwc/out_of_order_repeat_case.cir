@@ -1,0 +1,7 @@
+* Pwc "## Parameters" claim: points= is sorted ascending by x at parse time, so declaration
+* order does not matter -- this list is given newest-point-first and must behave exactly like
+* example.cir's STEP (holds 0 until t = 0.001, then 1). Also proves repeat= is matched exactly:
+* "True" (Python-style capitalization) is NOT the string "true", so no wrapping happens and the
+* value holds flat past the last point (see
+* test_pwc.py::test_points_sorted_at_parse_and_repeat_is_exact_true).
+A kind=pwc points=[[0.001,1],[0,0]] repeat=True

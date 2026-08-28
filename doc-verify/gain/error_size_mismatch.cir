@@ -1,0 +1,6 @@
+* Gain "## Errors" claim: a 2-column matrix k= fed by a length-3 Vector is rejected at
+* evaluation time (the input length must equal the matrix's column count N) with
+* "VectorSignalSizeMismatch { block: ..., expected: 2, got: 3 }" (see
+* test_gain.py::test_matrix_gain_with_wrong_length_vector_rejected).
+A kind=gain in=B k=[[1,0],[0,1]]
+B kind=const value=[1,2,3]

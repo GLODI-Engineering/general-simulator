@@ -1,0 +1,13 @@
+* Sum component reference -- the "## Example" netlist verbatim.
+* No title line -- see doc-verify/const/example.cir's own comment for why.
+*
+* ERR is the classic error junction: signs=1,-1 makes it A - B = 3 - 1 = 2.
+* VSUM shows the vector rule: all-vector inputs of one common length (here 2) reduce
+* elementwise, so VSUM = OA + OB = [1+10, 2+20] = [11, 22] (see
+* test_sum.py::test_example_scalar_error_junction_and_vector_sum).
+A kind=const value=3
+B kind=const value=1
+ERR kind=sum inputs=A,B signs=1,-1
+OA kind=const value=[1,2]
+OB kind=const value=[10,20]
+VSUM kind=sum inputs=OA,OB signs=1,1

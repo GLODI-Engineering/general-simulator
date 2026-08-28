@@ -1,0 +1,4 @@
+* Waveform "## Errors" claim: a required field missing entirely (sinwave's va here) is the
+* generic missing-field error, "missing field 'va'" (see
+* test_waveform.py::test_missing_required_field_rejected).
+A kind=sinwave freq=1000

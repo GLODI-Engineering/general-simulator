@@ -1,0 +1,5 @@
+* Waveform "## Errors" claim: an *optional* field present but non-numeric (sinwave's td here)
+* does NOT error at all -- it silently falls back to that field's default, so this netlist must
+* run successfully and produce exactly what td=0 (the default) would: SINREF = 10 at t = 0.25ms
+* (see test_waveform.py::test_malformed_optional_field_silently_defaults).
+A kind=sinwave va=10 freq=1000 td=abc

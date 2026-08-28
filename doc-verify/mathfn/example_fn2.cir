@@ -1,0 +1,10 @@
+* MathFn2 component reference -- the "## Example" netlist verbatim.
+* No title line -- see doc-verify/const/example.cir's own comment for why.
+*
+* H is the textbook 3-4-5 triangle (hypot(3,4) = 5). AW shows anglewrap: the atan2-style angle
+* of the same pair, wrapped into [0, 2*pi) instead of (-pi, pi] -- atan2(4,3) = 0.9273... rad.
+* See test_mathfn.py::test_example_fn2_hypot_and_anglewrap.
+X kind=const value=3
+Y kind=const value=4
+H kind=hypot in1=X in2=Y
+AW kind=anglewrap in1=X in2=Y

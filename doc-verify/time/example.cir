@@ -1,0 +1,10 @@
+* Time component reference -- the "## Example" netlist verbatim.
+* No title line -- see doc-verify/const/example.cir's own comment for why.
+*
+* T is the simulated time itself; G scales it by k = 2*pi*1000 (k = 6283.185307179586); S takes
+* the sine of that -- the standard recipe for a real sin(2*pi*f*t) signal out of ordinary
+* blocks. Expect S = sin(2*pi*1000*t): S = 1 at t = 0.25ms (sin(pi/2)), ~0 at t = 0.5ms
+* (sin(pi)), -1 at t = 0.75ms (sin(3*pi/2)) -- see test_time.py::test_example_sine_of_time.
+T kind=time
+G kind=gain in=T k=6283.185307179586
+S kind=sin in=G

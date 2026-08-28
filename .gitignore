@@ -1,6 +1,15 @@
 /target
 *.csv
 
+# doc-verify/ *source* (READMEs, .cir, .c, .py) is committed -- see the write-component-doc
+# skill: it's mandatory, reviewable, reproducible proof each doc entry's Example/Errors were
+# actually run, not scratch. Only build artifacts compiled *from* that source are ignored.
+doc-verify/**/*.so
+doc-verify/**/*.dylib
+doc-verify/**/*.dll
+doc-verify/**/__pycache__/
+doc-verify/**/*.pyc
+
 # mdBook build output (regenerate with `mdbook build` in each book/*/ directory)
 /book/*/book/
 # Generated PDFs (regenerate with book/build-pdf.sh)

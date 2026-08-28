@@ -1,0 +1,9 @@
+* Product component reference -- the "## Example" netlist verbatim.
+* No title line -- see doc-verify/const/example.cir's own comment for why.
+*
+* P multiplies all three inputs: P = 2 * 3 * 4 = 24, every step (see
+* test_product.py::test_example_product_of_three_inputs).
+A kind=const value=2
+B kind=const value=3
+C kind=const value=4
+P kind=product inputs=A,B,C

@@ -1,0 +1,4 @@
+* Pwc "## Errors" claim: a points= row that is not a 2-element [x,y] list is rejected at parse
+* time with "field 'points': each entry must be a 2-element '[x,y]' list (got '[1.0]')" (see
+* test_pwc.py::test_non_pair_row_rejected).
+A kind=pwc points=[[0,0],[1]]

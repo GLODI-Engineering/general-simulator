@@ -1,0 +1,9 @@
+* Table component reference -- the "## Example" netlist verbatim.
+* No title line -- see doc-verify/const/example.cir's own comment for why.
+*
+* T is linear interpolation through the (x,y) points [[0,0],[1,10],[2,10],[3,0]] applied to the
+* time ramp X: T = 5 at x = 0.5 (mid-ramp), 10 across the flat [1,2] segment, 5 at x = 2.5
+* (mid-fall), and held at the nearest endpoint's value (0) past the last point, at x = 3.5
+* (see test_table.py::test_example_interpolates_and_holds_ends).
+X kind=time
+T kind=table in=X points=[[0,0],[1,10],[2,10],[3,0]]

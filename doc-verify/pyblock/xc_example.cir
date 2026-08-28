@@ -1,0 +1,5 @@
+* Exercises kind=pyblock's xc_count>0 continuous-state contract (derivative/output_xc instead
+* of output). G1's analytic solution is xc(t) = 1 - exp(-t); in= is required by the netlist
+* grammar even though derivative()/output_xc() never read it.
+SRC kind=const value=0
+G1 kind=pyblock path=doc-verify/pyblock/xc_decay.py in=SRC xc_count=1

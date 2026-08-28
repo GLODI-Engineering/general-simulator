@@ -1,0 +1,4 @@
+* Const "## Errors" claim: a vector value= entry that is not a number is rejected at parse time
+* with "field 'value' entry 'x' is not a number" (see
+* test_const.py::test_vector_entry_not_a_number).
+A kind=const value=[1,x,3]

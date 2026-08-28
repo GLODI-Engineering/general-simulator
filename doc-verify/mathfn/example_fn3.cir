@@ -1,0 +1,14 @@
+* MathFn3 component reference -- the "## Example" netlist verbatim.
+* No title line -- see doc-verify/const/example.cir's own comment for why.
+*
+* SEL is if: in1 = 1 > 0.5 selects the "then" branch, so SEL = THEN = 10. L is limit: it
+* clamps in1 = 5 to the span of in2/in3 = [0, 2], so L = 2. See
+* test_mathfn.py::test_example_fn3_if_select_and_limit_clamp.
+CND kind=const value=1
+THEN kind=const value=10
+ELSE kind=const value=20
+SEL kind=if in1=CND in2=THEN in3=ELSE
+V kind=const value=5
+LO kind=const value=0
+HI kind=const value=2
+L kind=limit in1=V in2=LO in3=HI

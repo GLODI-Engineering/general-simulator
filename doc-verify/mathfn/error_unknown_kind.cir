@@ -1,0 +1,5 @@
+* MathFn* "## Errors" claim: a kind= token that matches no block kind and no waveform-
+* arithmetic function name is rejected at parse time with "unknown device kind 'cosx'" (see
+* test_mathfn.py::test_unknown_kind_rejected).
+A kind=cosx in=B
+B kind=const value=1

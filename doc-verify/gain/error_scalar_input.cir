@@ -1,0 +1,5 @@
+* Gain "## Errors" claim: a matrix k= fed by a Scalar input is rejected at evaluation time (a
+* matrix gain needs a Vector to multiply) with "VectorSignalNotSupported { block: ... }" (see
+* test_gain.py::test_matrix_gain_with_scalar_input_rejected).
+A kind=gain in=B k=[[1,0]]
+B kind=const value=5

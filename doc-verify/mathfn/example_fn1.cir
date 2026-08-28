@@ -1,0 +1,14 @@
+* MathFn1 component reference -- the "## Example" netlist verbatim.
+* No title line -- see doc-verify/const/example.cir's own comment for why.
+*
+* T -> G (gain k = 2*pi*1000) -> S builds sin(2*pi*1000*t) out of ordinary blocks; C and E show
+* two more MathFn1 functions applied to the same sources. SQ shows the Vector rule: a Vector
+* input is mapped elementwise (sqrt of [1,4,9] is [1,2,3]). See
+* test_mathfn.py::test_example_fn1_scalar_functions_and_elementwise_vector.
+T kind=time
+G kind=gain in=T k=6283.185307179586
+S kind=sin in=G
+C kind=cos in=G
+E kind=exp in=T
+SV kind=const value=[1,4,9]
+SQ kind=sqrt in=SV

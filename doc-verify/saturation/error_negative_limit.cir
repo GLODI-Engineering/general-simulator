@@ -1,0 +1,5 @@
+* Saturation "## Errors" claim: limit= is NOT validated at parse time -- a negative limit
+* reaches the evaluation code's own assert and panics the whole process with
+* "limit must be nonnegative" (see test_saturation.py::test_negative_limit_panics).
+A kind=saturation in=B limit=-1
+B kind=const value=1

@@ -1,0 +1,5 @@
+* Const "## Errors" claim: NaN/inf vector entries are rejected at parse time (a NaN would
+* otherwise silently reach downstream sorts/comparisons and panic the process) with
+* "field 'value' entry 'nan' must be a finite number (got NaN)" (see
+* test_const.py::test_nonfinite_vector_entry_rejected).
+A kind=const value=[1,nan,3]

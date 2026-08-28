@@ -1,0 +1,6 @@
+* Product "## Errors" claim: mixed Scalar and Vector inputs are rejected at evaluation time
+* with "VectorSignalNotSupported { block: ... }" -- the same all-or-nothing input-shape rule
+* Sum uses (see test_product.py::test_mixed_scalar_vector_inputs_rejected).
+SC kind=const value=2
+VEC kind=const value=[3,4]
+BAD kind=product inputs=SC,VEC

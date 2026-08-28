@@ -1,0 +1,4 @@
+* MathFn1 "## Errors" claim: a one-argument function needs its single in= -- missing here, the
+* generic missing-field error, "missing field 'in'" (see
+* test_mathfn.py::test_fn1_missing_in_rejected).
+A kind=cos

@@ -1,0 +1,17 @@
+* Waveform component reference -- the "## Example" netlist verbatim.
+* No title line -- see doc-verify/const/example.cir's own comment for why.
+*
+* The electrical domain's four non-PWL time-varying source forms, reused as zero-input signal
+* sources with the same field names/order/defaults as SPICE's SIN()/PULSE()/EXP()/SFFM():
+*   SINREF  sinwave va=10 freq=1000            -> 10*sin(2*pi*1000*t): 10 at 0.25ms, -10 at 0.75ms
+*   PULSEREF pulsewave v1=0 v2=10 td=0.001 tr=0.0001 tf=0.0001 pw=0.0002 per=0.001
+*                                              -> 0 before td=1ms, then 10 (after the 0.1ms rise)
+*   EXPREF  expwave v1=0 v2=1 td1=0 tau1=0.0001 td2=0.001 tau2=0.0001
+*                                              -> rises toward 1 (1-e^(-t/0.0001)) until td2=1ms,
+*                                                 then decays back toward 0
+*   FMREF   sffmwave v0=0 va=1 fc=1000 mdi=0 fs=100 -> sin(2*pi*1000*t) (mdi=0: unmodulated)
+* See test_waveform.py's per-form functions for the exact expected values.
+SINREF kind=sinwave va=10 freq=1000
+PULSEREF kind=pulsewave v1=0 v2=10 td=0.001 tr=0.0001 tf=0.0001 pw=0.0002 per=0.001
+EXPREF kind=expwave v1=0 v2=1 td1=0 tau1=0.0001 td2=0.001 tau2=0.0001
+FMREF kind=sffmwave v0=0 va=1 fc=1000 mdi=0 fs=100

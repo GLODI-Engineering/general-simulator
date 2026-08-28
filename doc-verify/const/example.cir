@@ -1,0 +1,10 @@
+* Const component reference -- the "## Example" netlist verbatim.
+* No title line: general-mna's build_system parses this as a SPICE *fragment*, not a document --
+* the first line is a real element/block, not a skipped title. A leading title line would parse
+* as a bogus device declaration instead.
+*
+* SETPOINT is the scalar form (value=<f64>); OFFSETS the vector form (value=[x,y,z], a Python
+* list literal). Both are time-invariant, so every row must repeat the same values:
+* SETPOINT = 5, OFFSETS = [1, 2, 3] (see test_const.py::test_example_scalar_and_vector_constants).
+SETPOINT kind=const value=5
+OFFSETS kind=const value=[1,2,3]

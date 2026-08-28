@@ -1,0 +1,4 @@
+* Waveform "## Errors" claim: a required field present but not a number is rejected at parse
+* time with "field 'va' is not a number" (see
+* test_waveform.py::test_non_numeric_required_field_rejected).
+A kind=sinwave va=abc freq=1000

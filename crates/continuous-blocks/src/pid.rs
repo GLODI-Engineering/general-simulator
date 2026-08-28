@@ -1,21 +1,29 @@
 use crate::state_space::StateSpace;
 use crate::transfer_function::TransferFunction;
 
+/// <!-- doc-ref: pid -->
 /// Parallel PID with a filtered derivative term, using the standard `P, I, D, N` (filter
 /// coefficient) parameterization common to block-diagram continuous-time controller blocks:
 ///
-/// ```text
-/// C(s) = Kp + Ki/s + Kd*N*s/(s+N)
-/// ```
+/// $$C(s) = K_p + \frac{K_i}{s} + \frac{K_d N s}{s + N}$$
 ///
 /// The pure-derivative term `Kd*s` alone is not realizable as a proper (causal) transfer
 /// function, hence the filter pole at `-N` — a standard, universally-used approximation (a
 /// larger `N` tracks the ideal derivative more closely but stiffens the resulting ODE).
+///
+/// This struct is the compiled gain set only — see `general_mna::block_graph::BlockKind::Pid`
+/// for the netlist-facing component reference (parameters, errors, netlist form, example) and
+/// the anti-windup behavior, which lives at the block-graph evaluation layer, not here.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pid {
+    /// Proportional gain.
     pub kp: f64,
+    /// Integral gain.
     pub ki: f64,
+    /// Derivative gain.
     pub kd: f64,
+    /// Derivative filter coefficient; the filter pole sits at `-n`. Must be `> 0` — see
+    /// [`Pid::new`].
     pub n: f64,
 }
 

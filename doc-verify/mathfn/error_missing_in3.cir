@@ -1,0 +1,6 @@
+* MathFn3 "## Errors" claim: a three-argument function needs in1=, in2= and in3= -- in3=
+* missing here, the generic missing-field error, "missing field 'in3'" (see
+* test_mathfn.py::test_fn3_missing_in3_rejected).
+A kind=limit in1=B in2=C
+B kind=const value=5
+C kind=const value=0

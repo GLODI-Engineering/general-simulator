@@ -1,0 +1,6 @@
+* Gain "## Errors" claim: a flat list is not a valid Gain shape (unlike Const, Gain's value is
+* never itself a vector) -- rejected at parse time with "field 'k' must be a scalar (e.g. '2.0')
+* or a matrix (e.g. '[[1,0],[0,1]]') -- got a flat list '[1,2,3]', which is not a valid Gain
+* shape" (see test_gain.py::test_flat_list_k_rejected).
+A kind=gain in=B k=[1,2,3]
+B kind=const value=1

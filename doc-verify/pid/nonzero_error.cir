@@ -1,0 +1,6 @@
+* Proves kp is genuinely multiplied into PID1's output, not silently ignored or clamped away --
+* ERR=0.5, kp=0.3 (well inside the [-1, 1] clamp so the clamp never engages) should give
+* PID1 = kp * ERR = 0.15 every step (see
+* test_pid.py::test_proportional_gain_is_applied_correctly).
+ERR kind=const value=0.5
+PID1 kind=pid in=ERR kp=0.3 ki=0 kd=0 n=1 clamp_lo=-1 clamp_hi=1

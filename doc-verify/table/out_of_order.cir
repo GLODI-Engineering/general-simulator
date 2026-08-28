@@ -1,0 +1,6 @@
+* Table "## Parameters" claim: points= is sorted ascending by x at parse time, so declaration
+* order does not matter -- this table is given newest-point-first and must interpolate exactly
+* like example.cir's T: A = 5 at x = 0.5 (see
+* test_table.py::test_points_sorted_ascending_at_parse_time).
+X kind=time
+A kind=table in=X points=[[3,0],[1,10],[0,0],[2,10]]

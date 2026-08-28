@@ -1,0 +1,4 @@
+* Proves path= must be double-quoted when it contains whitespace, same tokenizer rule as
+* CScript's lib= -- "a lib dir" is committed on purpose so this test is portable.
+SRC kind=const value=3
+G1 kind=pyblock path="doc-verify/pyblock/a lib dir/gain.py" in=SRC

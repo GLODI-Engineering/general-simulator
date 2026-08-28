@@ -1,0 +1,3 @@
+* Const "## Errors" claim: a scalar value= that is not a number is rejected at parse time with
+* "field 'value' is not a number" (see test_const.py::test_scalar_value_not_a_number).
+A kind=const value=abc

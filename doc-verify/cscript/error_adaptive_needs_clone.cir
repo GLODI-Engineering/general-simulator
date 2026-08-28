@@ -1,0 +1,4 @@
+* gain.c exports no cscript_clone -- proves adaptive stepping (no --dt given) rejects it with
+* CScriptRequiresCloneForAdaptiveStep rather than silently running or crashing.
+SRC kind=const value=3
+G1 kind=cscript lib=doc-verify/cscript/gain.so in=SRC

@@ -1,0 +1,12 @@
+* Pwc component reference -- the "## Example" netlist verbatim.
+* No title line -- see doc-verify/const/example.cir's own comment for why.
+*
+* Piecewise-*constant* interpolation: the value is the last breakpoint's value at or before t.
+* STEP holds 0 until its second point (t = 0.001), then 1 forever -- a two-point step test.
+* SQUARE is the same idea made periodic with repeat=true: points [[0,0],[0.0005,1],[0.001,0]]
+* wrap t into [0, 0.001), so it reads 1 on [0.0005, 0.001) and 0 on [0.001, 0.0015) of every
+* cycle. (A repeat=true list needs a third point back at the low value -- with only two points
+* the wrap would land in [first, last) and never reach the last point's own value, so the
+* "high" segment would have zero width.) See test_pwc.py::test_example_step_and_repeating_square.
+STEP kind=pwc points=[[0,0],[0.001,1]]
+SQUARE kind=pwc points=[[0,0],[0.0005,1],[0.001,0]] repeat=true

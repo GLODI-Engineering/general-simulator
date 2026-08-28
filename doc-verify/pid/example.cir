@@ -1,0 +1,12 @@
+* PID component reference -- the "## Example" netlist verbatim.
+* No title line: general-mna's build_system parses this as a SPICE *fragment*, not a document --
+* the first line is a real element/block, not a skipped title (see parse_and_flatten's own doc
+* comment in general-mna/src/system_builder.rs). A leading title line here would parse as a
+* bogus device declaration instead.
+V1 in 0 1
+R1 in out 1k
+C1 out 0 1u
+* ERR is a fixed zero error signal -- with kp=1 ki=0 kd=0, PID1's output should stay exactly 0
+* every step (see test_pid.py::test_fixed_clamp_example_output_stays_zero_for_zero_error).
+ERR kind=const value=0
+PID1 kind=pid in=ERR kp=1 ki=0 kd=0 n=1 clamp_lo=-1 clamp_hi=1

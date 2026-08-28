@@ -1,0 +1,6 @@
+* Product "## Errors" claim: Vector inputs of different lengths are rejected at evaluation
+* time with "VectorSignalSizeMismatch { block: ..., expected: 2, got: 3 }" (see
+* test_product.py::test_vector_length_mismatch_rejected).
+VA kind=const value=[1,2]
+VB kind=const value=[1,2,3]
+BAD kind=product inputs=VA,VB

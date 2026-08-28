@@ -9,7 +9,7 @@ Complementarity Problem (LCP). See [`README.md`](README.md) and
 ## Authority order
 
 1. Mechanical gates: formatters, Clippy, tests.
-2. Skills in `.claude/skills/<name>/SKILL.md` for recurring workflows (not yet populated).
+2. Skills in `.claude/skills/<name>/SKILL.md` for recurring workflows.
 3. This file.
 4. `docs/architecture.md` and other documents under `docs/`.
 
@@ -60,6 +60,16 @@ self-consistency. Compare end-to-end transient results against the existing, pre
 validated Xyce runs already captured in the `internal-archive` sibling repo's
 `experiments/converters-benchmark-*` and `experiments/dab-*` folders wherever a matching
 topology exists — those are real baselines, not something to re-invent.
+
+## Documentation
+
+Every netlist `kind=` component gets a reference entry generated from source doc comments —
+see `.claude/skills/write-component-doc/SKILL.md` before writing or editing one. **Testing
+every documented Example and Errors claim against a real run of the CLI, before writing the
+doc comment, is mandatory practice, not optional polish** — the skill's own "Testing Examples
+and Errors against a real run" section covers exactly how (`doc-verify/<kind>/test_<kind>.py`,
+committed alongside the code it verifies, not scratch). A doc comment whose claims were never
+run is not a finished entry.
 
 ## Journal and gotchas
 

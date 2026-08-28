@@ -18,6 +18,7 @@
 # The continuous-block library
 
 - [Block library overview](block-library.md)
+- [Component Reference](component-reference.md)
 - [Sources and math operations](sources-and-math.md)
 - [Dynamic blocks (PID, state-space, transfer function)](dynamic-blocks.md)
 - [Coordinate transforms (Clarke/Park) and PLL](coordinate-transforms.md)

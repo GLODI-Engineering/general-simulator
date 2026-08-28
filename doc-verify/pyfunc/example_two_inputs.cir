@@ -1,0 +1,5 @@
+* Proves inputs= (plural) passes each signal as its own positional argument: subtract(A, B),
+* not subtract([A, B]). A=10, B=3 -> G1 = 7.
+A kind=const value=10
+B kind=const value=3
+G1 kind=pyfunc path=doc-verify/pyfunc/subtract.py function=subtract inputs=A,B

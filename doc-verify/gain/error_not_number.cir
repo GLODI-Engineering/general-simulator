@@ -1,0 +1,4 @@
+* Gain "## Errors" claim: a scalar k= that is not a number is rejected at parse time with
+* "field 'k' is not a number" (see test_gain.py::test_non_numeric_k_rejected).
+A kind=gain in=B k=abc
+B kind=const value=1

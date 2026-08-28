@@ -58,6 +58,7 @@ pub fn complementary_pwm_with_deadtime(
     (main, complement)
 }
 
+/// <!-- doc-ref: saturation -->
 /// Clamps `u` to `[-limit, limit]`. Piecewise, like a PWL device, but evaluated directly here
 /// rather than through the LCP machinery: a saturation block's active segment depends only on
 /// its own input, never on other unknowns it doesn't already know, so there is no

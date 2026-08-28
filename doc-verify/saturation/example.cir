@@ -1,0 +1,8 @@
+* Saturation component reference -- the "## Example" netlist verbatim.
+* No title line -- see doc-verify/const/example.cir's own comment for why.
+*
+* X is the simulated time itself (a ramp through 0..2 over the run); LIM clamps it to
+* [-limit, limit] = [-1, 1]: LIM = X while X <= 1, then holds exactly 1 once X passes it
+* (see test_saturation.py::test_example_clamps_input_to_limit).
+X kind=time
+LIM kind=saturation in=X limit=1

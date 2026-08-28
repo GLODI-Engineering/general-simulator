@@ -1,0 +1,5 @@
+* PyBlock component reference -- the "## Example" netlist verbatim. Needs a --features python
+* build of the CLI (see README.md). No title line -- see doc-verify/pid/example.cir's comment.
+SRC kind=const value=3
+* G1 doubles SRC every step (see gain.py). Expect G1 = 6 for SRC = 3, every row.
+G1 kind=pyblock path=doc-verify/pyblock/gain.py in=SRC

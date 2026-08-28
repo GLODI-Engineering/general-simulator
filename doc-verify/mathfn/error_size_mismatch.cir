@@ -1,0 +1,6 @@
+* MathFn2 "## Errors" claim: two Vector operands must share one length -- [1,2] and [1,2,3]
+* are rejected at evaluation time with "VectorSignalSizeMismatch { block: ..., expected: 2,
+* got: 3 }" (see test_mathfn.py::test_fn2_vector_length_mismatch_rejected).
+A kind=atan2 in1=B in2=C
+B kind=const value=[1,2]
+C kind=const value=[1,2,3]

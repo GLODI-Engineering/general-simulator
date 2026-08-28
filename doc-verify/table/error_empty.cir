@@ -1,0 +1,5 @@
+* Table "## Errors" claim: points=[] (an empty table) is NOT rejected at parse time -- it
+* reaches the evaluation code's own assert and panics the whole process with "table needs at
+* least one point" (see test_table.py::test_empty_table_panics).
+A kind=table in=B points=[]
+B kind=const value=1

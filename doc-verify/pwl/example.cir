@@ -1,0 +1,10 @@
+* Pwl component reference -- the "## Example" netlist verbatim.
+* No title line -- see doc-verify/const/example.cir's own comment for why.
+*
+* Piecewise-*linear* interpolation (real SPICE PWL semantics): RAMP is linear between its two
+* points (0.25 at t = 0.00025, 0.5 at t = 0.0005) and holds the last point's value (1) past
+* the end. TRI is a periodic triangle: points [[0,0],[0.0005,1],[0.001,0]] repeat=true wraps t
+* into [0, 0.001), giving 0.5 at t = 0.00025, 1 at t = 0.0005, 0 at t = 0.001, then the same
+* shape again (0.5 at t = 0.00125) -- see test_pwl.py::test_example_ramp_and_repeating_triangle.
+RAMP kind=pwl points=[[0,0],[0.001,1]]
+TRI kind=pwl points=[[0,0],[0.0005,1],[0.001,0]] repeat=true

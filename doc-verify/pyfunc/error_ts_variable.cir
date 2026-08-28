@@ -1,0 +1,4 @@
+* ts=variable is rejected for kind=pyfunc at parse time (a stateless function call has no
+* instance to remember a requested next-hit time against) -- proves the Errors claim.
+SRC kind=const value=3
+G1 kind=pyfunc path=doc-verify/pyfunc/add.py function=add_one in=SRC ts=variable

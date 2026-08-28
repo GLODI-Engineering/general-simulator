@@ -1,0 +1,7 @@
+* MathFn2 "## Parameters" claim: a lone Scalar operand broadcasts against a Vector operand of
+* length N (elementwise application with the scalar reused) -- hypot(4, [3,4,5]) must give
+* [hypot(4,3), hypot(4,4), hypot(4,5)] = [5, sqrt(32), sqrt(41)] (see
+* test_mathfn.py::test_fn2_scalar_broadcasts_against_vector).
+FOUR kind=const value=4
+VEC kind=const value=[3,4,5]
+HB kind=hypot in1=FOUR in2=VEC

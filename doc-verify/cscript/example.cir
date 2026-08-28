@@ -1,0 +1,6 @@
+* CScript component reference -- the "## Example" netlist verbatim (compile gain.c to gain.so
+* first: `cc -shared -fPIC -O0 -o gain.so gain.c`, run from this directory).
+* No title line -- see doc-verify/pid/example.cir's own comment for why.
+SRC kind=const value=3
+* G1 doubles SRC every step (out = in * 2). Expect G1 = 6 for SRC = 3, every row.
+G1 kind=cscript lib=doc-verify/cscript/gain.so in=SRC

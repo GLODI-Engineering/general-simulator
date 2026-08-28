@@ -1,0 +1,2 @@
+ERR kind=const value=0.5
+PID1 kind=pid in=ERR kp=0.3 ki=0 kd=0 n=0 clamp_lo=-1 clamp_hi=1

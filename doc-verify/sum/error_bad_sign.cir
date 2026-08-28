@@ -1,0 +1,6 @@
+* Sum "## Errors" claim: a signs= entry that is not a number is rejected at parse time with
+* "field 'signs' entry 'x' is not a number" (see
+* test_sum.py::test_non_numeric_sign_rejected).
+A kind=const value=1
+B kind=const value=2
+ERR kind=sum inputs=A,B signs=1,x

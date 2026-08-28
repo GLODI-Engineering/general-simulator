@@ -1,0 +1,5 @@
+* MathFn2 "## Errors" claim: a two-argument function needs both in1= and in2= -- in2= missing
+* here, the generic missing-field error, "missing field 'in2'" (see
+* test_mathfn.py::test_fn2_missing_in2_rejected).
+A kind=hypot in1=B
+B kind=const value=3

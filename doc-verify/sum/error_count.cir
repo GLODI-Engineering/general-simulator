@@ -1,0 +1,6 @@
+* Sum "## Errors" claim: inputs= and signs= must have one entry each -- 2 inputs but 1 sign is
+* rejected at parse time with "'inputs' has 2 entries but 'signs' has 1 (need one sign per
+* input)" (see test_sum.py::test_input_sign_count_mismatch_rejected).
+A kind=const value=1
+B kind=const value=2
+ERR kind=sum inputs=A,B signs=1
