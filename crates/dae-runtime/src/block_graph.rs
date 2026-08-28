@@ -37,7 +37,7 @@
 use std::collections::BTreeMap;
 
 use continuous_blocks::logic::{as_bool, from_bool, rising_edge, srlatch_next};
-use continuous_blocks::{math_ops, Hysteresis, Pmsm, StateSpace, Vco};
+use continuous_blocks::{math_ops, DiscretePidState, Hysteresis, Pmsm, StateSpace, Vco};
 use cscript_ffi::CScriptRegistry;
 use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
@@ -174,6 +174,30 @@ enum BlockState {
     Dynamic {
         state_space: continuous_blocks::StateSpace,
         x: Vec<f64>,
+    },
+    /// Shared by [`BlockKind::DiscreteStateSpace`] and [`BlockKind::DiscreteTransferFunction`] —
+    /// the discrete-domain counterpart to [`Self::Dynamic`] above: `x` advances via
+    /// [`continuous_blocks::StateSpace::discrete_step`] instead of `rk4_step`, only on steps this
+    /// block's own mandatory `sample_time` says it's due (see [`BlockKind::CScript`]'s own
+    /// zero-order-hold gating in `evaluate_blocks`, reused unchanged here). `last_output` is what
+    /// gets returned on every step this block *isn't* due — a genuinely discrete system's own
+    /// output is only defined at its own sample instants, not recomputable from a held `x` and a
+    /// fresher `u` in between, unlike the continuous case.
+    DiscreteDynamic {
+        state_space: continuous_blocks::StateSpace,
+        x: Vec<f64>,
+        time_since_sample: f64,
+        last_output: Vec<f64>,
+    },
+    /// [`BlockKind::DiscretePid`]'s own state — [`continuous_blocks::DiscretePidState`] plus the
+    /// same zero-order-hold `time_since_sample`/`last_output` bookkeeping as
+    /// [`Self::DiscreteDynamic`] above (this block's mandatory `sample_time` is where
+    /// [`continuous_blocks::DiscretePid::period`] itself came from at construction — see
+    /// `general-mna`'s own `system_builder.rs`).
+    DiscretePid {
+        state: continuous_blocks::DiscretePidState,
+        time_since_sample: f64,
+        last_output: f64,
     },
     Vco {
         vco: Vco,
@@ -742,6 +766,120 @@ fn evaluate_blocks(
                     SignalValue::Vector(y)
                 }
             }
+            (
+                BlockKind::DiscreteStateSpace { sample_time, .. },
+                BlockState::DiscreteDynamic {
+                    state_space,
+                    x,
+                    time_since_sample,
+                    last_output,
+                },
+            ) => {
+                // Genuinely MIMO, same flattening rule as BlockKind::StateSpace's own continuous
+                // arm above -- but a discrete system's own output is only defined at its own
+                // sample instants (see BlockKind::CScript's zero-order-hold gating, reused
+                // unchanged here): `last_output` is held on every step this block isn't due.
+                let period = match sample_time {
+                    SampleTimeSpec::Periodic { period, .. } => *period,
+                    SampleTimeSpec::Variable => unreachable!(
+                        "general-mna's parse_required_periodic_sample_time already rejected \
+                         ts=variable for kind=discretestatespace"
+                    ),
+                };
+                *time_since_sample += dt;
+                if *time_since_sample + 1e-15 >= period {
+                    *time_since_sample = 0.0;
+                    let u = flatten(&input_vals);
+                    let expected = state_space.inputs();
+                    if u.len() != expected {
+                        return Err(DaeError::VectorSignalSizeMismatch {
+                            block: block.name.clone(),
+                            expected,
+                            got: u.len(),
+                        });
+                    }
+                    *x = state_space.discrete_step(x, &u);
+                    *last_output = state_space.output(x, &u);
+                }
+                if last_output.len() == 1 {
+                    SignalValue::Scalar(last_output[0])
+                } else {
+                    SignalValue::Vector(last_output.clone())
+                }
+            }
+            (
+                BlockKind::DiscreteTransferFunction { sample_time, .. },
+                BlockState::DiscreteDynamic {
+                    state_space,
+                    x,
+                    time_since_sample,
+                    last_output,
+                },
+            ) => {
+                // Genuinely SISO, same rejection of a Vector input as the continuous
+                // BlockKind::TransferFunction arm above.
+                let period = match sample_time {
+                    SampleTimeSpec::Periodic { period, .. } => *period,
+                    SampleTimeSpec::Variable => unreachable!(
+                        "general-mna's parse_required_periodic_sample_time already rejected \
+                         ts=variable for kind=discretetf"
+                    ),
+                };
+                *time_since_sample += dt;
+                if *time_since_sample + 1e-15 >= period {
+                    *time_since_sample = 0.0;
+                    let u = require_all_scalar(&block.name, &input_vals)?;
+                    *x = state_space.discrete_step(x, &u);
+                    *last_output = state_space.output(x, &u);
+                }
+                SignalValue::Scalar(last_output.first().copied().unwrap_or(0.0))
+            }
+            (
+                BlockKind::DiscretePid {
+                    pid,
+                    clamp,
+                    sample_time,
+                },
+                BlockState::DiscretePid {
+                    state,
+                    time_since_sample,
+                    last_output,
+                },
+            ) => {
+                let period = match sample_time {
+                    SampleTimeSpec::Periodic { period, .. } => *period,
+                    SampleTimeSpec::Variable => unreachable!(
+                        "general-mna's parse_required_periodic_sample_time already rejected \
+                         ts=variable for kind=discretepid"
+                    ),
+                };
+                let scalars = require_all_scalar(&block.name, &input_vals)?;
+                let (lo, hi) = match clamp {
+                    PidClamp::Fixed(lo, hi) => (*lo, *hi),
+                    PidClamp::Dynamic => (scalars[1], scalars[2]),
+                };
+                let error = scalars[0];
+                *time_since_sample += dt;
+                if *time_since_sample + 1e-15 >= period {
+                    *time_since_sample = 0.0;
+                    // Same tentative-step/reject anti-windup as BlockKind::Pid's own continuous
+                    // arm above, adapted to a discrete recursion: step a *copy* of the state,
+                    // and only commit it if doing so wouldn't push the output further past
+                    // whichever bound it's already saturating against -- the discrete
+                    // counterpart to "don't integrate the error further while already clamped."
+                    let mut tentative_state = *state;
+                    let tentative_output = pid.step(&mut tentative_state, error);
+                    let saturating_further = (tentative_output >= hi && error > 0.0)
+                        || (tentative_output <= lo && error < 0.0);
+                    *last_output = if saturating_further {
+                        tentative_output.clamp(lo, hi)
+                    } else {
+                        *state = tentative_state;
+                        tentative_output
+                    };
+                }
+                SignalValue::Scalar(*last_output)
+            }
             (BlockKind::Vco(_), BlockState::Vco { vco, phase }) => {
                 let u = require_all_scalar(&block.name, &input_vals)?;
                 *phase = vco.step(*phase, u[0], dt);
@@ -1228,6 +1366,53 @@ pub fn simulate_transient_with_blocks(
             BlockKind::Pid { pid, .. } => dynamic(pid.to_state_space()),
             BlockKind::StateSpace(ss) => dynamic(ss.clone()),
             BlockKind::TransferFunction(tf) => dynamic(tf.to_state_space()),
+            BlockKind::DiscreteStateSpace { ss, sample_time } => {
+                let (period, offset) = match sample_time {
+                    SampleTimeSpec::Periodic { period, offset } => (*period, *offset),
+                    SampleTimeSpec::Variable => unreachable!(
+                        "general-mna's parse_required_periodic_sample_time already rejected \
+                         ts=variable for kind=discretestatespace"
+                    ),
+                };
+                BlockState::DiscreteDynamic {
+                    x: vec![0.0; ss.states()],
+                    last_output: vec![0.0; ss.outputs()],
+                    // Same `period - offset` convention as BlockKind::CScript's own init below
+                    // -- guarantees the first evaluate_blocks call is due at t=offset.
+                    time_since_sample: period - offset,
+                    state_space: ss.clone(),
+                }
+            }
+            BlockKind::DiscreteTransferFunction { tf, sample_time } => {
+                let (period, offset) = match sample_time {
+                    SampleTimeSpec::Periodic { period, offset } => (*period, *offset),
+                    SampleTimeSpec::Variable => unreachable!(
+                        "general-mna's parse_required_periodic_sample_time already rejected \
+                         ts=variable for kind=discretetf"
+                    ),
+                };
+                let state_space = tf.to_state_space();
+                BlockState::DiscreteDynamic {
+                    x: vec![0.0; state_space.states()],
+                    last_output: vec![0.0],
+                    time_since_sample: period - offset,
+                    state_space,
+                }
+            }
+            BlockKind::DiscretePid { sample_time, .. } => {
+                let (period, offset) = match sample_time {
+                    SampleTimeSpec::Periodic { period, offset } => (*period, *offset),
+                    SampleTimeSpec::Variable => unreachable!(
+                        "general-mna's parse_required_periodic_sample_time already rejected \
+                         ts=variable for kind=discretepid"
+                    ),
+                };
+                BlockState::DiscretePid {
+                    state: DiscretePidState::default(),
+                    time_since_sample: period - offset,
+                    last_output: 0.0,
+                }
+            }
             BlockKind::Vco(vco) => BlockState::Vco {
                 vco: *vco,
                 phase: 0.0,

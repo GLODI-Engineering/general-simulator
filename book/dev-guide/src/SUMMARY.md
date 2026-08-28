@@ -46,3 +46,4 @@
 - [Open extension points](open-questions.md)
 - [Vector signals: per-block survey](vector-signals.md)
 - [Logic signals: gates, latches, flip-flops, counters](logic-signals.md)
+- [Discrete-time blocks: state-space, transfer function, PID](discrete-time-blocks.md)

@@ -24,6 +24,7 @@
 //! assembly, is a later milestone.
 
 pub mod coordinate_transforms;
+mod discrete_pid;
 mod hysteresis;
 pub mod logic;
 pub mod math_ops;
@@ -35,6 +36,7 @@ mod vco;
 pub mod waveform_arithmetic;
 
 pub use coordinate_transforms::CoordinateTransform;
+pub use discrete_pid::{DiscreteIntegrationMethod, DiscretePid, DiscretePidState};
 pub use hysteresis::{Hysteresis, HysteresisError};
 pub use logic::{FlipFlopKind, LatchPriority, LogicOp};
 pub use pid::{Pid, PidError};

@@ -122,6 +122,29 @@ impl StateSpace {
             .map(|i| x[i] + (dt / 6.0) * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]))
             .collect()
     }
+
+    /// One step of a genuinely **discrete-time** system: `x[i+1] = A*x[i] + B*u[i]`, plain
+    /// linear recursion, no RK4, no `dt`, no numerical integration at all — the discrete-domain
+    /// counterpart to [`Self::rk4_step`]. `A`/`B` here are already discrete-domain matrices,
+    /// given directly by the caller (this method does no continuous-to-discrete conversion of
+    /// its own) — see `book/dev-guide/src/discrete-time-blocks.md`. `dae-runtime` calls this
+    /// once per declared sample period instead of once per circuit step, the same zero-order-
+    /// hold accumulator `cscript`/`pyblock` already use. Ignores `self.e` entirely — a
+    /// descriptor matrix has no meaning for a plain discrete recursion (there is no `dx/dt` to
+    /// solve `E` against here).
+    pub fn discrete_step(&self, x: &[f64], u: &[f64]) -> Vec<f64> {
+        (0..self.states())
+            .map(|row| {
+                let ax: f64 = (0..self.states())
+                    .map(|col| self.a[row][col] * x[col])
+                    .sum();
+                let bu: f64 = (0..self.inputs())
+                    .map(|col| self.b[row][col] * u[col])
+                    .sum();
+                ax + bu
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -212,5 +235,26 @@ mod tests {
             e,
         );
         assert!(ss.is_ok());
+    }
+
+    #[test]
+    fn discrete_step_is_a_plain_linear_recursion_no_dt_involved() {
+        // x[i+1] = 0.5*x[i] + 2*u[i] -- a first-order decaying discrete system, hand-computed
+        // for a few steps starting from x=1, u=1 held constant.
+        let ss = StateSpace::new(
+            vec![vec![0.5]],
+            vec![vec![2.0]],
+            vec![vec![1.0]],
+            vec![vec![0.0]],
+            None,
+        )
+        .unwrap();
+        let mut x = vec![1.0];
+        x = ss.discrete_step(&x, &[1.0]);
+        assert_eq!(x, vec![0.5 * 1.0 + 2.0 * 1.0]); // 2.5
+        x = ss.discrete_step(&x, &[1.0]);
+        assert_eq!(x, vec![0.5 * 2.5 + 2.0 * 1.0]); // 3.25
+                                                    // output y = C*x + D*u = x here (C=[1], D=[0]).
+        assert_eq!(ss.output(&x, &[1.0]), vec![3.25]);
     }
 }
