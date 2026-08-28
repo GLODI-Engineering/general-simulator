@@ -36,6 +36,7 @@
 
 use std::collections::BTreeMap;
 
+use continuous_blocks::logic::{as_bool, from_bool, rising_edge, srlatch_next};
 use continuous_blocks::{math_ops, Hysteresis, Pmsm, StateSpace, Vco};
 use cscript_ffi::CScriptRegistry;
 use general_spice_core::Dialect;
@@ -193,6 +194,27 @@ enum BlockState {
     Hysteresis {
         hysteresis: Hysteresis,
         on: bool,
+    },
+    /// [`BlockKind::SrLatch`]'s own state -- a single persisted bit, updated every step
+    /// (level-triggered, no clock/edge detection at all, unlike [`Self::FlipFlop`]/
+    /// [`Self::Counter`] below).
+    SrLatch {
+        q: bool,
+    },
+    /// [`BlockKind::FlipFlop`]'s own state -- `q` is the flip-flop's own output, held unchanged
+    /// except at a detected rising `clk` edge; `prev_clk` is this instance's own memory of the
+    /// previous step's `clk` sample, the only way to detect that edge at all (see
+    /// `logic-signals.md`'s own Category 3 for why this lives in `BlockState` rather than
+    /// requiring a separate `prev:`-wired clock signal).
+    FlipFlop {
+        q: bool,
+        prev_clk: f64,
+    },
+    /// [`BlockKind::Counter`]'s own state -- same rising-edge-detection skeleton as
+    /// [`Self::FlipFlop`], generalized from a single bit to a signed running count.
+    Counter {
+        count: i64,
+        prev_clk: f64,
     },
     /// A live, per-instance [`cscript_ffi::CScriptInstance`], plus the zero-order-hold
     /// bookkeeping [`BlockKind::CScript`]'s `sample_time` needs: `time_since_sample` accumulates
@@ -769,6 +791,73 @@ fn evaluate_blocks(
                 *on = hysteresis.step(*on, u[0]);
                 SignalValue::Scalar(if *on { 1.0 } else { 0.0 })
             }
+            (BlockKind::LogicGate(op), _) => {
+                // Purely combinational -- no BlockState variant at all (matches `_` above,
+                // same as Sum/Gain), recomputed fresh from this step's own inputs every time.
+                let u = require_all_scalar(&block.name, &input_vals)?;
+                let bits: Vec<bool> = u.iter().map(|&x| as_bool(x)).collect();
+                SignalValue::Scalar(from_bool(op.call(&bits)))
+            }
+            (BlockKind::SrLatch { priority }, BlockState::SrLatch { q }) => {
+                let u = require_all_scalar(&block.name, &input_vals)?;
+                let (set, reset) = (as_bool(u[0]), as_bool(u[1]));
+                *q = srlatch_next(*q, set, reset, *priority);
+                SignalValue::Scalar(from_bool(*q))
+            }
+            (BlockKind::FlipFlop { kind, .. }, BlockState::FlipFlop { q, prev_clk }) => {
+                let u = require_all_scalar(&block.name, &input_vals)?;
+                let clk = u[0];
+                // Input order, fixed by system_builder.rs's own parsing: [clk, data_inputs...,
+                // reset?] -- `kind.input_count()` data inputs right after clk, an optional
+                // trailing reset beyond that (present iff `u.len()` has one more entry than
+                // `1 + kind.input_count()` accounts for).
+                let data = &u[1..1 + kind.input_count()];
+                let reset_asserted = u.get(1 + kind.input_count()).is_some_and(|&r| as_bool(r));
+                if rising_edge(clk, *prev_clk) {
+                    let bits: Vec<bool> = data.iter().map(|&x| as_bool(x)).collect();
+                    *q = if reset_asserted {
+                        false
+                    } else {
+                        kind.next_state(*q, &bits)
+                    };
+                }
+                *prev_clk = clk;
+                SignalValue::Scalar(from_bool(*q))
+            }
+            (
+                BlockKind::Counter {
+                    up_down, modulus, ..
+                },
+                BlockState::Counter { count, prev_clk },
+            ) => {
+                let u = require_all_scalar(&block.name, &input_vals)?;
+                let clk = u[0];
+                // Same fixed input order system_builder.rs's own "counter" arm builds:
+                // [clk, up_down?, reset?] -- both optional, in that order when both present.
+                let mut idx = 1;
+                let up_down_asserted = if *up_down {
+                    let v = as_bool(u[idx]);
+                    idx += 1;
+                    v
+                } else {
+                    true // no up_down= wired: always increments
+                };
+                let reset_asserted = u.get(idx).is_some_and(|&r| as_bool(r));
+                if rising_edge(clk, *prev_clk) {
+                    if reset_asserted {
+                        *count = 0;
+                    } else if up_down_asserted {
+                        *count += 1;
+                    } else {
+                        *count -= 1;
+                    }
+                    if let Some(m) = modulus {
+                        *count = count.rem_euclid(*m as i64);
+                    }
+                }
+                *prev_clk = clk;
+                SignalValue::Scalar(*count as f64)
+            }
             (
                 BlockKind::CScript {
                     output_names,
@@ -1154,6 +1243,21 @@ pub fn simulate_transient_with_blocks(
             BlockKind::Hysteresis(hysteresis) => BlockState::Hysteresis {
                 hysteresis: *hysteresis,
                 on: false,
+            },
+            // LogicGate needs no BlockState at all -- purely combinational, falls through to
+            // the `_ => BlockState::Stateless` catch-all below, same as Sum/Gain.
+            BlockKind::SrLatch { .. } => BlockState::SrLatch { q: false },
+            // prev_clk starts at 0.0 (clk below threshold) -- matches every other dynamic
+            // block's own "starts at rest" convention, and means a clk that's already high on
+            // the very first step is correctly treated as a rising edge (0.0 -> high counts),
+            // not silently missed.
+            BlockKind::FlipFlop { .. } => BlockState::FlipFlop {
+                q: false,
+                prev_clk: 0.0,
+            },
+            BlockKind::Counter { .. } => BlockState::Counter {
+                count: 0,
+                prev_clk: 0.0,
             },
             BlockKind::CScript {
                 lib,

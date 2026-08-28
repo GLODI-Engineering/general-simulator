@@ -45,3 +45,4 @@
 - [Design decisions log](design-decisions.md)
 - [Open extension points](open-questions.md)
 - [Vector signals: per-block survey](vector-signals.md)
+- [Logic signals: gates, latches, flip-flops, counters](logic-signals.md)

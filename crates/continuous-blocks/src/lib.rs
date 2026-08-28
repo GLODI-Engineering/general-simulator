@@ -25,6 +25,7 @@
 
 pub mod coordinate_transforms;
 mod hysteresis;
+pub mod logic;
 pub mod math_ops;
 mod pid;
 mod pmsm;
@@ -35,6 +36,7 @@ pub mod waveform_arithmetic;
 
 pub use coordinate_transforms::CoordinateTransform;
 pub use hysteresis::{Hysteresis, HysteresisError};
+pub use logic::{FlipFlopKind, LatchPriority, LogicOp};
 pub use pid::{Pid, PidError};
 pub use pmsm::{Pmsm, PmsmError};
 pub use state_space::{StateSpace, StateSpaceError};
