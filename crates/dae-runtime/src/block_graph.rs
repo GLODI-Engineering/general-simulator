@@ -813,6 +813,12 @@ fn evaluate_blocks(
                     } else {
                         instance.call(&flat, elapsed, output_names.len())
                     };
+                    // Optional, always a no-op if cscript_update wasn't exported -- the
+                    // dedicated place `state`'s own discrete bookkeeping commits forward to the
+                    // next step, called with this same step's already-integrated xc (empty when
+                    // xc_count == 0). See cscript_ffi's own module doc comment, "The optional
+                    // discrete-state update function."
+                    instance.update(&flat, elapsed, xc);
                 }
                 // The primary value (this block's own name) is last_output[0], inserted below
                 // like every other block; any additional declared output_names are inserted
@@ -879,6 +885,18 @@ fn evaluate_blocks(
                             .call(t, elapsed, &py_inputs, output_names.len())
                             .map_err(DaeError::PyBlock)?
                     };
+                    // Optional, always a no-op if update() wasn't defined -- see cscript's own
+                    // arm above and pyblock_ffi's module doc comment, "The optional
+                    // discrete-state update function."
+                    if *xc_count > 0 {
+                        instance
+                            .update_xc(t, elapsed, &py_inputs, xc)
+                            .map_err(DaeError::PyBlock)?;
+                    } else {
+                        instance
+                            .update(t, elapsed, &py_inputs)
+                            .map_err(DaeError::PyBlock)?;
+                    }
                 }
                 for (name, v) in output_names.iter().zip(last_output.iter()).skip(1) {
                     outputs.insert(name.clone(), SignalValue::Scalar(*v));

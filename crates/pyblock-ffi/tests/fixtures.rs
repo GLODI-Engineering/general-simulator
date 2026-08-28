@@ -211,3 +211,41 @@ fn missing_start_function_is_a_clear_error_not_a_panic() {
         "expected MissingFunction(start), got: {err}"
     );
 }
+
+#[test]
+fn output_is_read_only_and_update_is_the_sole_place_state_advances() {
+    let mut registry = PyBlockRegistry::new();
+    let mut instance = registry
+        .instantiate(&fixture("update_counter.py"))
+        .expect("load update_counter fixture");
+
+    // Calling output() any number of times with no update() must never change the result.
+    let out1 = instance.call(0.0, 0.0, &[PyInput::Scalar(5.0)], 1).unwrap();
+    let out2 = instance.call(0.0, 0.0, &[PyInput::Scalar(5.0)], 1).unwrap();
+    assert_eq!(out1, vec![0.0]);
+    assert_eq!(out2, vec![0.0]);
+
+    // update() is the only place the accumulator actually advances.
+    instance.update(0.0, 0.0, &[PyInput::Scalar(5.0)]).unwrap();
+    let out3 = instance.call(0.0, 0.0, &[PyInput::Scalar(5.0)], 1).unwrap();
+    assert_eq!(out3, vec![5.0]);
+
+    instance.update(0.0, 0.0, &[PyInput::Scalar(3.0)]).unwrap();
+    let out4 = instance.call(0.0, 0.0, &[PyInput::Scalar(5.0)], 1).unwrap();
+    assert_eq!(out4, vec![8.0]);
+}
+
+#[test]
+fn update_is_a_silent_no_op_when_the_py_file_does_not_define_it() {
+    // Every existing fixture predates update() -- confirms the new resolution is genuinely
+    // optional and doesn't break a .py file that never heard of it.
+    let mut registry = PyBlockRegistry::new();
+    let mut instance = registry
+        .instantiate(&fixture("accumulator.py"))
+        .expect("load accumulator fixture");
+    instance
+        .update(0.0, 0.0, &[PyInput::Scalar(999.0)])
+        .unwrap(); // must not error
+    let out = instance.call(0.0, 0.0, &[PyInput::Scalar(1.0)], 2).unwrap();
+    assert_eq!(out, vec![1.0, 1.0]); // unaffected by the no-op update() call above
+}

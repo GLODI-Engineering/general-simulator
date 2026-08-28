@@ -43,11 +43,42 @@ def derivative(state, t, inputs, xc):
 
 def output_xc(state, t, dt, inputs, xc):
     ...
+
+# Optional, either contract -- see "The optional discrete-state update function" below:
+def update(state, t, dt, inputs):        # plain contract
+    ...
+def update(state, t, dt, inputs, xc):     # xc contract -- one extra positional argument
+    ...
 ```
 
 Same split as `cscript`, same reasons: `start()` is where import/compile/precompute costs get
 paid exactly once; `output()`/`derivative()`/`output_xc()` run every step and should do as
 little as possible beyond the actual per-step computation.
+
+## The optional discrete-state update function
+
+`output()`/`output_xc()` are allowed to mutate `state` themselves — fine for the common case,
+but it conflates two different things: computing this step's output from the block's current
+state, and committing that state forward to the next step. Some block-diagram tools' own
+code-block feature keeps these deliberately separate (an output function expected to be
+side-effect-free, plus a dedicated update function that's the only place discrete state actually
+advances); `pyblock` now offers the same split as an **entirely optional** function, mirroring
+`cscript`'s own `cscript_update`. If a `.py` file defines `update`, it's called once per resolved
+(or per-sample-period, under `ts=`) step, immediately after `output()`/`output_xc()` for that
+same call. There's no separate `update_xc` name — the same `update` function just receives one
+more positional argument (`xc`, this step's own already-integrated continuous state) under the
+`xc` contract, mirroring `output`/`output_xc`'s own split being about the return value rather
+than the input shape here. If `update` is absent, a block is expected to keep updating `state`
+directly inside `output()`/`output_xc()`, exactly as before this function existed — nothing about
+the existing contract changes if you never add one.
+
+A block that adopts this split gets the same guarantee every other synchronous/Moore-style block
+in this project's own block graph already has: this step's `output()` sees only *last step's*
+committed state, never a value `update()` computed later in the same call — useful when the
+distinction between "what this step reports" and "what state means going forward" actually
+matters (e.g. porting an existing controller that was already written with separate output/update
+functions in some other tool, where collapsing them into one function would be a real behavioral
+change, not just a stylistic one).
 
 **Deliberately scalar-only outputs**, matching `cscript`'s own design decision (per
 `vector-signals.md`): `outputs=NAME1,NAME2,...` declares N separately-named scalar values, not

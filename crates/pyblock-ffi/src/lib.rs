@@ -46,6 +46,37 @@
 //!     ...
 //! ```
 //!
+//! ## The optional discrete-state update function
+//!
+//! `output`/`output_xc` are permitted to mutate `state` themselves (documented above) -- fine
+//! for the common case, but it conflates computing this step's output with committing state
+//! forward to the next step. Some block-diagram tools' own code-block feature keeps these
+//! deliberately separate (an output function expected to be side-effect-free, plus a dedicated
+//! update function that's the only place discrete state actually advances) -- `pyblock` now
+//! offers the same split, as an **entirely optional** function, mirroring `cscript`'s own
+//! `cscript_update`:
+//!
+//! ```python
+//! def update(state, t, dt, inputs):
+//!     # Optional. Called once per resolved (or per-sample-period, under ts=) step, immediately
+//!     # after output(). The dedicated place to commit `state`'s own discrete bookkeeping
+//!     # forward to the next step, instead of doing it inside output() itself. If this function
+//!     # is absent, a pyblock is expected to keep updating `state` directly inside output(),
+//!     # exactly as before this function existed.
+//!     ...
+//!
+//! # For a block declaring xc_count > 0, update() additionally receives this step's own
+//! # already-integrated continuous state, mirroring output_xc's own extra parameter:
+//! def update(state, t, dt, inputs, xc):
+//!     ...
+//! ```
+//!
+//! `update`'s own arity (four or five positional parameters) is inferred from which contract
+//! this instance was created under ([`PyBlockRegistry::instantiate`] vs.
+//! `instantiate_xc`) -- there is no separate `update_xc` name, the same one `update` function
+//! just receives one more argument under the `xc` contract, matching `output`/`output_xc`'s own
+//! naming split being about the *return* value (`y`) rather than the input shape here.
+//!
 //! ## State, cloning, and per-instance isolation
 //!
 //! Each instance gets its own Python namespace (`PyModule::from_code` execs the cached source
@@ -227,6 +258,9 @@ pub struct PyBlockInstance {
     output_fn: Option<Py<PyAny>>,
     derivative_fn: Option<Py<PyAny>>,
     output_xc_fn: Option<Py<PyAny>>,
+    // Always optional regardless of contract (plain or xc) -- see the module doc comment, "The
+    // optional discrete-state update function." Never required by `new`.
+    update_fn: Option<Py<PyAny>>,
 }
 
 impl PyBlockInstance {
@@ -249,6 +283,7 @@ impl PyBlockInstance {
             let output_fn = get("output");
             let derivative_fn = get("derivative");
             let output_xc_fn = get("output_xc");
+            let update_fn = get("update");
 
             if want_xc {
                 if derivative_fn.is_none() {
@@ -292,6 +327,7 @@ impl PyBlockInstance {
                 output_fn,
                 derivative_fn,
                 output_xc_fn,
+                update_fn,
             })
         })
     }
@@ -356,6 +392,53 @@ impl PyBlockInstance {
                 .call1((self.state.bind(py), t, dt, args, xc_arr))
                 .map_err(|e| self.exception(py, "output_xc", e))?;
             extract_outputs(result, out_len).map_err(|e| self.exception(py, "output_xc", e))
+        })
+    }
+
+    /// Calls `update(state, t, dt, inputs)` -- a no-op if this instance's `.py` file didn't
+    /// define `update` (see the module doc comment, "The optional discrete-state update
+    /// function"). Unlike [`Self::call`]/[`Self::call_xc`], genuinely optional for both
+    /// contracts, so there's no panic path: call it every step it's due exactly like output,
+    /// and it simply does nothing if the author never wrote one. For an instance created via
+    /// [`PyBlockRegistry::instantiate_xc`], use [`Self::update_xc`] instead (extra `xc`
+    /// argument, matching `output`/`output_xc`'s own split).
+    pub fn update(&mut self, t: f64, dt: f64, inputs: &[PyInput]) -> Result<(), PyBlockError> {
+        if self.update_fn.is_none() {
+            return Ok(());
+        }
+        Python::attach(|py| {
+            let update_fn = self.update_fn.as_ref().unwrap().clone_ref(py);
+            let args = build_args(py, inputs).map_err(|e| self.exception(py, "update", e))?;
+            update_fn
+                .bind(py)
+                .call1((self.state.bind(py), t, dt, args))
+                .map_err(|e| self.exception(py, "update", e))?;
+            Ok(())
+        })
+    }
+
+    /// The `xc`-aware counterpart to [`Self::update`] -- calls `update(state, t, dt, inputs,
+    /// xc)`, a no-op if `update` wasn't defined. `xc` should be this step's own already-
+    /// integrated continuous state, the same value passed to [`Self::call_xc`].
+    pub fn update_xc(
+        &mut self,
+        t: f64,
+        dt: f64,
+        inputs: &[PyInput],
+        xc: &[f64],
+    ) -> Result<(), PyBlockError> {
+        if self.update_fn.is_none() {
+            return Ok(());
+        }
+        Python::attach(|py| {
+            let update_fn = self.update_fn.as_ref().unwrap().clone_ref(py);
+            let args = build_args(py, inputs).map_err(|e| self.exception(py, "update", e))?;
+            let xc_arr = numpy::PyArray1::from_slice(py, xc);
+            update_fn
+                .bind(py)
+                .call1((self.state.bind(py), t, dt, args, xc_arr))
+                .map_err(|e| self.exception(py, "update", e))?;
+            Ok(())
         })
     }
 
@@ -441,6 +524,7 @@ impl PyBlockInstance {
                 output_fn: get("output"),
                 derivative_fn: get("derivative"),
                 output_xc_fn: get("output_xc"),
+                update_fn: get("update"),
             })
         })
     }

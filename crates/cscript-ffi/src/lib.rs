@@ -88,6 +88,30 @@
 //! convention), and cloning it is a plain `Vec<f64>` clone, needing no C-side involvement at
 //! all.
 //!
+//! ## The optional discrete-state update function
+//!
+//! `cscript_output`/`cscript_output_xc` are permitted to mutate `state` themselves (documented
+//! above) -- fine for the common case, but it conflates two different things: computing this
+//! step's output from the block's current state, and committing that state forward to the next
+//! step. Some block-diagram tools' own code-block feature keeps these deliberately separate (an
+//! output function that's expected to be side-effect-free, plus a dedicated update function
+//! that's the only place discrete state actually advances) -- `cscript` now offers the same
+//! split, as an **entirely optional** third function:
+//!
+//! ```c
+//! // Optional. Called once per resolved (or per-sample-period, under ts=) step, immediately
+//! // after cscript_output/cscript_output_xc for that same call -- the dedicated place to
+//! // commit `state`'s own discrete bookkeeping forward to the next step, instead of doing it
+//! // inside the output function itself. `xc` is this step's own already-integrated continuous
+//! // state (`xc_len == 0` for a block with `xc_count == 0`, exactly like every other xc-aware
+//! // parameter in this contract). If this symbol is absent, a cscript block is expected to
+//! // keep updating `state` directly inside cscript_output/cscript_output_xc, exactly as before
+//! // this function existed -- nothing about the existing contract changes if you never add
+//! // this.
+//! void cscript_update(void *state, const double *in, int in_len, double dt,
+//!                      const double *xc, int xc_len);
+//! ```
+//!
 //! ## Adaptive step-size control and instance cloning
 //!
 //! general-simulator's adaptive step-size control retries a rejected trial step from scratch: every
@@ -161,6 +185,14 @@ type OutputXcFn = unsafe extern "C" fn(
     output: *mut f64,
     out_len: i32,
 );
+type UpdateFn = unsafe extern "C" fn(
+    state: *mut c_void,
+    input: *const f64,
+    in_len: i32,
+    dt: f64,
+    xc: *const f64,
+    xc_len: i32,
+);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CScriptError {
@@ -215,6 +247,10 @@ pub struct CScriptLibrary {
     output: Option<OutputFn>,
     derivative: Option<DerivativeFn>,
     output_xc: Option<OutputXcFn>,
+    // Always optional regardless of contract (plain or xc) -- see the module doc comment,
+    // "The optional discrete-state update function." Never required by either `instantiate*`
+    // method.
+    update: Option<UpdateFn>,
     free: Option<FreeFn>,
     clone_state: Option<CloneFn>,
 }
@@ -222,9 +258,10 @@ pub struct CScriptLibrary {
 impl CScriptLibrary {
     /// Loads `path` and resolves `cscript_start` (always required) plus every optional symbol
     /// this crate knows about (`cscript_output`, `cscript_derivative`, `cscript_output_xc`,
-    /// `cscript_free`, `cscript_clone`) — see the module doc comment for what each one's
-    /// absence means. Which combination is actually *required* for a given instantiation is
-    /// checked separately, by [`CScriptRegistry::instantiate`]/[`CScriptRegistry::instantiate_xc`].
+    /// `cscript_update`, `cscript_free`, `cscript_clone`) — see the module doc comment for what
+    /// each one's absence means. Which combination is actually *required* for a given
+    /// instantiation is checked separately, by
+    /// [`CScriptRegistry::instantiate`]/[`CScriptRegistry::instantiate_xc`].
     pub fn load(path: &Path) -> Result<Self, CScriptError> {
         // SAFETY: dlopen-ing and resolving symbols from a user-specified path is exactly the
         // unsafety this crate exists to contain -- see the module doc comment. The caller
@@ -263,6 +300,12 @@ impl CScriptLibrary {
                 .ok()
                 .map(|symbol: Symbol<OutputXcFn>| *symbol)
         };
+        let update: Option<UpdateFn> = unsafe {
+            library
+                .get(b"cscript_update\0")
+                .ok()
+                .map(|symbol: Symbol<UpdateFn>| *symbol)
+        };
         let free: Option<FreeFn> = unsafe {
             library
                 .get(b"cscript_free\0")
@@ -282,6 +325,7 @@ impl CScriptLibrary {
             output,
             derivative,
             output_xc,
+            update,
             free,
             clone_state,
         })
@@ -382,6 +426,29 @@ impl CScriptInstance {
             );
         }
         output
+    }
+
+    /// Calls `cscript_update` with this instance's own state, `input`/`dt`/`xc` as given -- a
+    /// no-op if this instance's library didn't export it (see the module doc comment, "The
+    /// optional discrete-state update function"). Unlike [`Self::call`]/[`Self::call_xc`], this
+    /// is genuinely optional for *both* contracts, so there's no panic path: call it every
+    /// step it's due exactly like output, and it simply does nothing if the author never wrote
+    /// one.
+    pub fn update(&mut self, input: &[f64], dt: f64, xc: &[f64]) {
+        let Some(update_fn) = self.library.update else {
+            return;
+        };
+        // SAFETY: same reasoning as `call`'s own SAFETY comment, extended to `xc`.
+        unsafe {
+            update_fn(
+                self.state,
+                input.as_ptr(),
+                input.len() as i32,
+                dt,
+                xc.as_ptr(),
+                xc.len() as i32,
+            );
+        }
     }
 
     /// Evaluates `cscript_derivative` once: given this step's already-resolved inputs and a

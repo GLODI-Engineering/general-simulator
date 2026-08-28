@@ -226,3 +226,44 @@ fn missing_required_symbol_is_a_clear_error_not_a_panic() {
         "error should name the missing symbol, got: {message}"
     );
 }
+
+#[test]
+fn output_is_read_only_and_update_is_the_sole_place_state_advances() {
+    let lib_path = compile_fixture("update_counter");
+    let mut registry = CScriptRegistry::new();
+    let mut instance = registry
+        .instantiate(&lib_path)
+        .expect("load update_counter fixture");
+
+    // Calling output() any number of times with no update() must never change the result --
+    // output() itself never mutates state in this fixture.
+    let out1 = instance.call(&[5.0], 0.0, 1);
+    let out2 = instance.call(&[5.0], 0.0, 1);
+    let out3 = instance.call(&[5.0], 0.0, 1);
+    assert_eq!(out1, vec![0.0]);
+    assert_eq!(out2, vec![0.0]);
+    assert_eq!(out3, vec![0.0]);
+
+    // update() is the only place the accumulator actually advances.
+    instance.update(&[5.0], 0.0, &[]);
+    let out4 = instance.call(&[5.0], 0.0, 1);
+    assert_eq!(out4, vec![5.0]);
+
+    instance.update(&[3.0], 0.0, &[]);
+    let out5 = instance.call(&[5.0], 0.0, 1);
+    assert_eq!(out5, vec![8.0]);
+}
+
+#[test]
+fn update_is_a_silent_no_op_when_the_library_does_not_export_it() {
+    // Every existing fixture predates cscript_update -- confirms the new symbol resolution is
+    // genuinely optional and doesn't break a library that never heard of it.
+    let lib_path = compile_fixture("accumulator");
+    let mut registry = CScriptRegistry::new();
+    let mut instance = registry
+        .instantiate(&lib_path)
+        .expect("load accumulator fixture");
+    instance.update(&[999.0], 0.0, &[]); // must not panic
+    let out = instance.call(&[1.0], 0.0, 2);
+    assert_eq!(out, vec![1.0, 1.0]); // unaffected by the no-op update() call above
+}
