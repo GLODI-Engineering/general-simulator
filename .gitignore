@@ -17,3 +17,10 @@ doc-verify/**/*.pyc
 
 # Local-only pre-commit hook script -- not published (kept out of the public repo on purpose).
 /scripts/style-guard.sh
+
+# tests/raw-output-python's own venv and generated artifacts -- requirements.txt/README.md/
+# _lib.py/test_raw_output.py are the committed, reviewable source; the venv it documents how to
+# recreate, and the scratch *.raw files its own tests write to a temp dir, are not.
+tests/raw-output-python/.venv/
+tests/raw-output-python/__pycache__/
+*.raw

@@ -6,7 +6,7 @@
 
 - [Installing and building](getting-started.md)
 - [Your first netlist](first-netlist.md)
-- [Reading the CSV output](reading-output.md)
+- [Reading the output](reading-output.md)
 
 # The netlist and device-file grammar
 

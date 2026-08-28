@@ -282,9 +282,13 @@
 //! and `experiments/elspice-pwl-buck-underdamped-resonance-filter/` for full worked examples
 //! this syntax was built for.
 
+mod raw_format;
+
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
+use std::io::BufWriter;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use dae_runtime::{
@@ -293,6 +297,27 @@ use dae_runtime::{
 };
 use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
+
+/// The waveform this run produced, in a serialization-agnostic shape: `headers[0]` is always the
+/// time/sweep column, `rows[point][column]` mirrors it. Both `print_csv` (the existing, default
+/// output -- unchanged byte-for-byte from before this module existed) and
+/// `raw_format::write_raw` (the new `--format raw` alternative) are built from exactly this, so
+/// "same data, different serialization" (see `book/user-guide/src/reading-output.md`) is
+/// structural rather than something the two writers merely happen to agree on.
+struct Waveform {
+    headers: Vec<String>,
+    rows: Vec<Vec<f64>>,
+}
+
+/// Output format for the resolved waveform. CSV (the original, and still the default, for
+/// backward compatibility with this project's own existing tests and worked examples) prints to
+/// stdout exactly as before; `Raw` writes a SPICE rawfile (see `raw_format`'s own doc comment) to
+/// `--out <path>`, since a binary format has no sensible terminal rendering the way CSV does.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OutputFormat {
+    Csv,
+    Raw,
+}
 
 fn main() -> ExitCode {
     match run() {
@@ -319,6 +344,8 @@ fn run() -> Result<(), String> {
     let mut dt_init: Option<f64> = None;
     let mut reltol: Option<f64> = None;
     let mut abstol: Option<f64> = None;
+    let mut format = "csv".to_string();
+    let mut out_path: Option<String> = None;
 
     let mut i = 2;
     while i < args.len() {
@@ -347,9 +374,43 @@ fn run() -> Result<(), String> {
             "--dt-init" => dt_init = Some(parse_f64("--dt-init", &mut i)?),
             "--reltol" => reltol = Some(parse_f64("--reltol", &mut i)?),
             "--abstol" => abstol = Some(parse_f64("--abstol", &mut i)?),
+            "--format" => {
+                format = args.get(i + 1).ok_or("--format needs a value")?.clone();
+                i += 2;
+            }
+            "--out" => {
+                out_path = Some(args.get(i + 1).ok_or("--out needs a value")?.clone());
+                i += 2;
+            }
             other => return Err(format!("unrecognized argument '{other}'\n{}", usage())),
         }
     }
+
+    let output_format = match format.as_str() {
+        "csv" => OutputFormat::Csv,
+        "raw" => OutputFormat::Raw,
+        other => {
+            return Err(format!(
+                "unknown --format '{other}' (expected 'csv' or 'raw')"
+            ))
+        }
+    };
+    // A binary rawfile can't sensibly print to a terminal the way CSV does, so `--format raw`
+    // always needs a file destination -- either an explicit `--out <path>`, or (the common case,
+    // so a plain `general-simulator some.cir --mode transient --format raw` just works) the
+    // netlist's own filename stem with a `.raw` extension, next to the input file. `--out` given
+    // alongside `--format csv` is accepted too (it just means "write the CSV to a file instead
+    // of stdout" is *not* supported -- CSV always goes to stdout, unchanged from before this
+    // flag existed) and is otherwise ignored, rather than rejected, since silently ignoring an
+    // extra flag that doesn't apply is friendlier than erroring on a harmless combination.
+    let raw_out_path: Option<PathBuf> = if output_format == OutputFormat::Raw {
+        Some(match &out_path {
+            Some(p) => PathBuf::from(p),
+            None => default_raw_path(netlist_path),
+        })
+    } else {
+        None
+    };
 
     if dt.is_some()
         && (dt_max.is_some()
@@ -414,7 +475,7 @@ fn run() -> Result<(), String> {
     } = general_mna::build_system(&devices_source, dialect)
         .map_err(|e| format!("parsing device/block declarations: {e}"))?;
 
-    if mode == "dc" {
+    let (waveform, plot_name) = if mode == "dc" {
         let point = if mosfets.is_empty() {
             solve_dc(&netlist, dialect, &diodes).map_err(|e| format!("{e:?}"))?
         } else {
@@ -427,8 +488,17 @@ fn run() -> Result<(), String> {
                  time-stepped state)"
             ));
         };
-        print_header(&point.unknowns);
-        print_row(0.0, &point);
+        let mut headers = vec!["t".to_string()];
+        headers.extend(point.unknowns.iter().cloned());
+        let mut row = vec![0.0];
+        row.extend(point.x.iter().copied());
+        (
+            Waveform {
+                headers,
+                rows: vec![row],
+            },
+            "DC transfer characteristic",
+        )
     } else if mode == "transient" {
         // Either a MOSFET or a block alone is enough to need the block-graph-aware path below:
         // a block-only netlist (no MOSFET at all, e.g. a pure controller/signal-processing
@@ -438,15 +508,26 @@ fn run() -> Result<(), String> {
         // (see its own doc comment) -- only the truly block-free, MOSFET-free case still uses
         // the plain `simulate_transient` path, since that's the one case with nothing for a
         // block-graph step to resolve at all.
-        if mosfets.is_empty() && blocks.is_empty() {
+        let waveform = if mosfets.is_empty() && blocks.is_empty() {
             let trace = simulate_transient(&netlist, dialect, &diodes, None, t_final, step)
                 .map_err(|e| format!("{e:?}"))?;
-            if let Some((_, first)) = trace.first() {
-                print_header(&first.unknowns);
-            }
-            for (t, point) in &trace {
-                print_row(*t, point);
-            }
+            let headers = match trace.first() {
+                Some((_, first)) => {
+                    let mut headers = vec!["t".to_string()];
+                    headers.extend(first.unknowns.iter().cloned());
+                    headers
+                }
+                None => vec!["t".to_string()],
+            };
+            let rows = trace
+                .iter()
+                .map(|(t, point)| {
+                    let mut row = vec![*t];
+                    row.extend(point.x.iter().copied());
+                    row
+                })
+                .collect();
+            Waveform { headers, rows }
         } else {
             run_transient_with_mosfets(
                 &netlist,
@@ -458,15 +539,51 @@ fn run() -> Result<(), String> {
                 shared_r_on,
                 t_final,
                 step,
-            )?;
-        }
+            )?
+        };
+        (waveform, "Transient Analysis")
     } else {
         return Err(format!(
             "unknown --mode '{mode}' (expected 'dc' or 'transient')"
         ));
+    };
+
+    match output_format {
+        OutputFormat::Csv => print_csv(&waveform),
+        OutputFormat::Raw => {
+            let out_path = raw_out_path.expect("raw_out_path is Some when output_format is Raw");
+            write_raw_file(&out_path, &waveform, plot_name, netlist_path)?;
+        }
     }
 
     Ok(())
+}
+
+/// `<netlist stem>.raw` next to the input file — the default `--out` destination for
+/// `--format raw` when `--out` isn't given, so `general-simulator some.cir --mode transient
+/// --format raw` just works without also requiring `--out some.raw`.
+fn default_raw_path(netlist_path: &str) -> PathBuf {
+    let path = Path::new(netlist_path);
+    path.with_extension("raw")
+}
+
+fn write_raw_file(
+    out_path: &Path,
+    waveform: &Waveform,
+    plot_name: &'static str,
+    netlist_path: &str,
+) -> Result<(), String> {
+    let file = fs::File::create(out_path)
+        .map_err(|e| format!("creating raw output file {}: {e}", out_path.display()))?;
+    let mut writer = BufWriter::new(file);
+    let rendered = raw_format::Waveform {
+        names: &waveform.headers,
+        rows: &waveform.rows,
+        plot_name,
+        title: netlist_path,
+    };
+    raw_format::write_raw(&mut writer, &rendered)
+        .map_err(|e| format!("writing raw output file {}: {e}", out_path.display()))
 }
 
 /// `--mode dc` has no notion of a block's time-stepped state (no transient loop runs at all),
@@ -490,7 +607,7 @@ fn run_transient_with_mosfets(
     shared_r_on: f64,
     t_final: f64,
     step: TimeStep,
-) -> Result<(), String> {
+) -> Result<Waveform, String> {
     let trace = simulate_transient_with_blocks(
         netlist,
         dialect,
@@ -530,51 +647,61 @@ fn run_transient_with_mosfets(
     // deriving each name's own column count from the *first* step's resolved shape is exactly
     // as valid as a separate static analysis would be, and reuses this function's own existing
     // "build the header from trace.first()" convention rather than a new mechanism.
-    if let Some((_, first, first_outputs)) = trace.first() {
-        if block_names.is_empty() {
-            print_header(&first.unknowns);
-        } else {
-            let headers: Vec<String> = block_names
-                .iter()
-                .flat_map(|name| match first_outputs.get(name) {
-                    Some(dae_runtime::SignalValue::Vector(v)) => (0..v.len())
-                        .map(|i| format!("{name}[{i}]"))
-                        .collect::<Vec<_>>(),
-                    _ => vec![name.clone()],
-                })
-                .collect();
-            println!("t,{},{}", first.unknowns.join(","), headers.join(","));
-        }
-    }
-    for (t, point, outputs) in &trace {
-        if block_names.is_empty() {
-            print_row(*t, point);
-        } else {
-            let values: Vec<String> = point.x.iter().map(|v| v.to_string()).collect();
-            let block_values: Vec<String> = block_names
-                .iter()
-                .flat_map(|name| match outputs.get(name) {
-                    Some(dae_runtime::SignalValue::Scalar(x)) => vec![x.to_string()],
-                    Some(dae_runtime::SignalValue::Vector(v)) => {
-                        v.iter().map(|x| x.to_string()).collect()
-                    }
-                    None => vec![f64::NAN.to_string()],
-                })
-                .collect();
-            println!("{t},{},{}", values.join(","), block_values.join(","));
-        }
+    let Some((_, first, first_outputs)) = trace.first() else {
+        return Ok(Waveform {
+            headers: vec!["t".to_string()],
+            rows: Vec::new(),
+        });
+    };
+    let mut headers = vec!["t".to_string()];
+    headers.extend(first.unknowns.iter().cloned());
+    if !block_names.is_empty() {
+        headers.extend(block_names.iter().flat_map(|name| {
+            match first_outputs.get(name) {
+                Some(dae_runtime::SignalValue::Vector(v)) => (0..v.len())
+                    .map(|i| format!("{name}[{i}]"))
+                    .collect::<Vec<_>>(),
+                _ => vec![name.clone()],
+            }
+        }));
     }
 
-    Ok(())
+    let rows = trace
+        .iter()
+        .map(|(t, point, outputs)| {
+            let mut row = vec![*t];
+            row.extend(point.x.iter().copied());
+            if !block_names.is_empty() {
+                row.extend(block_names.iter().flat_map(|name| match outputs.get(name) {
+                    Some(dae_runtime::SignalValue::Scalar(x)) => vec![*x],
+                    Some(dae_runtime::SignalValue::Vector(v)) => v.clone(),
+                    None => vec![f64::NAN],
+                }));
+            }
+            row
+        })
+        .collect();
+
+    Ok(Waveform { headers, rows })
 }
 
-fn print_header(unknowns: &[String]) {
-    println!("t,{}", unknowns.join(","));
-}
-
-fn print_row(t: f64, point: &dae_runtime::OperatingPoint) {
-    let values: Vec<String> = point.x.iter().map(|v| v.to_string()).collect();
-    println!("{t},{}", values.join(","));
+/// Prints `waveform` as CSV to stdout, exactly reproducing this crate's original (pre-`--format`)
+/// output byte-for-byte: `t,V(node1),V(node2),...,<block names>` header, then one comma-joined
+/// row per point, each value rendered with `f64`'s own `Display` (the same as `to_string()`
+/// always used here) rather than a fixed format -- this is the historical, still-default
+/// behavior every existing test and worked example depends on.
+fn print_csv(waveform: &Waveform) {
+    // An empty trace (no resolved points at all) prints nothing, not even the header -- matching
+    // this crate's original behavior of only calling `print_header` once `trace.first()` proved
+    // there was at least one point to describe a header for.
+    if waveform.rows.is_empty() {
+        return;
+    }
+    println!("{}", waveform.headers.join(","));
+    for row in &waveform.rows {
+        let values: Vec<String> = row.iter().map(|v| v.to_string()).collect();
+        println!("{}", values.join(","));
+    }
 }
 
 /// Parses a `<signal>` field value: `prev:<block>` for a named block's own output from the
@@ -590,12 +717,21 @@ fn print_row(t: f64, point: &dae_runtime::OperatingPoint) {
 /// circuit.
 fn usage() -> String {
     "usage: general-simulator <netlist> [--devices <file>] [--mode dc|transient] [--tfinal T] \
-     [--dt DT | --dt-max T --dt-min T --dt-init T --reltol R --abstol A]\n\
+     [--dt DT | --dt-max T --dt-min T --dt-init T --reltol R --abstol A] \
+     [--format csv|raw] [--out <path>]\n\
      \n\
      --dt fixes the step size every step (deterministic, exactly reproducible). Omit it (and \
      optionally tune --dt-max/--dt-min/--dt-init/--reltol/--abstol) for adaptive step-size \
      control instead — small steps where the solution is changing fast, large steps where it's \
      settled, the same local-truncation-error approach every real SPICE-family tool uses by \
-     default. --dt and any --dt-*/--reltol/--abstol flag are mutually exclusive."
+     default. --dt and any --dt-*/--reltol/--abstol flag are mutually exclusive.\n\
+     \n\
+     --format selects the output serialization: 'csv' (the default, unchanged from before this \
+     flag existed) prints t,V(node1),V(node2),...,<block names> to stdout, one row per resolved \
+     point. 'raw' writes the same data as a binary SPICE rawfile instead (the format ngspice and \
+     the wider SPICE-tooling ecosystem, including Python readers such as PySpice, read and \
+     write) -- since a binary format has nowhere sensible to go on a terminal, this always \
+     writes to a file: --out <path> if given, otherwise <netlist stem>.raw next to the input \
+     file."
         .to_string()
 }

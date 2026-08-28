@@ -1,0 +1,8 @@
+# numpy<2 is required here, not just a preference: PySpice 1.5's own rawfile reader
+# (PySpice.Spice.RawFile.RawFileAbc._read_variable_data) calls np.fromstring(..., dtype='f8')
+# in *binary* mode, which numpy removed outright in 2.0 ("The binary mode of fromstring is
+# removed, use frombuffer instead") -- discovered while validating this feature, not a guess.
+# See tests/raw-output-python/README.md.
+numpy<2
+PySpice==1.5
+spicelib==1.6.3
