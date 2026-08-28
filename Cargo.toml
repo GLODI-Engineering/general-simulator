@@ -1,6 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
+    # gs-waveform-measurements was extracted to its own sibling repo
+    # (../gs-waveform-measurements) for an independent release cadence and reuse beyond this
+    # workspace. Not currently a dependency of anything here; when a consumer needs it again,
+    # add it back to that crate's own Cargo.toml as a sibling-path dependency during
+    # development, e.g. `gs-waveform-measurements = { path = "../gs-waveform-measurements" }`
+    # (see general-mna's own README for this same convention).
     "crates/lcp-solver",
     "crates/pwl-devices",
     "crates/dae-runtime",
