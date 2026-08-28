@@ -1,0 +1,2 @@
+T kind=time
+HYST1 kind=hysteresis high=-1 low=1 in=T

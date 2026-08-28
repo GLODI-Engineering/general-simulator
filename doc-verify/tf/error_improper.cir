@@ -1,0 +1,2 @@
+SRC kind=const value=1
+TF1 kind=tf num=[1,1,1] den=[1,1] in=SRC

@@ -1,0 +1,2 @@
+CLK kind=pwc points=[[0,0],[1e-3,1],[2e-3,0]] repeat=true
+CNT1 kind=counter clk=CLK modulus=abc

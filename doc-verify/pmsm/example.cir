@@ -1,0 +1,5 @@
+VD kind=const value=0
+VQ kind=const value=0
+TLOAD kind=const value=0
+M1 kind=pmsm r_s=0.5 l_d=1e-3 l_q=1e-3 lambda_pm=0.05 pole_pairs=4 inertia=1e-5 \
+     friction=1e-6 inputs=VD,VQ,TLOAD

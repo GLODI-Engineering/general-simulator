@@ -1,0 +1,2 @@
+ERR kind=const value=0.5
+DPID1 kind=discretepid in=ERR kp=1 ki=0.5 kd=0 n=1 ts=0.1 clamp_lo=-1 clamp_hi=1

@@ -1,0 +1,3 @@
+FAULT kind=pwc points=[[0,1],[0.1,0]]
+CLEAR kind=const value=0
+LATCH1 kind=srlatch set=FAULT reset=CLEAR

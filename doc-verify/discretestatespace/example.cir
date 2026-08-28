@@ -1,0 +1,2 @@
+SRC kind=const value=1
+DS1 kind=discretestatespace a=[[1]] b=[0.1] c=[1] ts=0.1 in=SRC

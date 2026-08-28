@@ -1,0 +1,4 @@
+CMD kind=const value=0.1
+IDRV kind=sig2current in=CMD
+I1 a 0 IDRV
+R1 a 0 1k

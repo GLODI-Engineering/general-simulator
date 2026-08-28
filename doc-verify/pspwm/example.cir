@@ -1,0 +1,4 @@
+FREQ kind=const value=10000
+PHASE kind=const value=0
+DUTY kind=const value=0.4
+PSPWM1 kind=pspwm f_min=1000 f_max=50000 inputs=FREQ,PHASE,DUTY

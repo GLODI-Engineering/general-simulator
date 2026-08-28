@@ -1,0 +1,3 @@
+CLK kind=pwc points=[[0,0],[5e-3,1]]
+D kind=const value=1
+Q1 kind=dff clk=CLK d=D

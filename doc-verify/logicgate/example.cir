@@ -1,0 +1,3 @@
+A kind=const value=1
+B kind=const value=0
+G1 kind=and inputs=A,B

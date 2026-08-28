@@ -1,0 +1,4 @@
+A kind=const value=1
+B kind=const value=-0.5
+C kind=const value=-0.5
+CT1 kind=clarke inputs=A,B,C

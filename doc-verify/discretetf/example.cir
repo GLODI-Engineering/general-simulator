@@ -1,0 +1,2 @@
+SRC kind=const value=1
+DTF1 kind=discretetf num=[0.1] den=[1,-1] ts=0.1 in=SRC

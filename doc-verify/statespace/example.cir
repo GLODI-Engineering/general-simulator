@@ -1,0 +1,2 @@
+SRC kind=const value=1
+SS1 kind=statespace a=[[-1]] b=[1] c=[1] in=SRC

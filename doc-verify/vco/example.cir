@@ -1,0 +1,2 @@
+FREQ kind=const value=10
+VCO1 kind=vco f_min=1 f_max=1000 in=FREQ

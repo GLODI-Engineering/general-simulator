@@ -1,0 +1,2 @@
+DUTY kind=const value=0.3
+PWM1 kind=pwm freq=10000 in=DUTY outputs=A,B,C
