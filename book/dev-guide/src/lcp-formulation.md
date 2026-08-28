@@ -6,7 +6,7 @@
 - The canonical diode decomposition: fixed reference conductance `g_off` (so the linear system
   $A_0$ is genuinely fixed, independent of segment) plus a per-instance current source term
   `Ioff`, carrying all the nonlinearity.
-- Full derivation, with real $\LaTeX$:
+- Full derivation, with real math notation:
   $$x(z) = x_0 + \sum_j w_j \cdot \mathrm{raw\_Ioff}_j, \qquad V_k(z) = v_{0,k} + \sum_j \gamma_{kj}\cdot \mathrm{raw\_Ioff}_j$$
   where $x_0 = A_0^{-1} u_0$ and $w_j = A_0^{-1} B_{:,j}$ — walk through why this makes every
   diode's terminal voltage an *affine* function of every diode's own complementarity variables.
