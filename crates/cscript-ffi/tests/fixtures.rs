@@ -267,3 +267,37 @@ fn update_is_a_silent_no_op_when_the_library_does_not_export_it() {
     let out = instance.call(&[1.0], 0.0, 2);
     assert_eq!(out, vec![1.0, 1.0]); // unaffected by the no-op update() call above
 }
+
+#[test]
+fn next_sample_hit_reports_the_library_own_requested_interval() {
+    let lib_path = compile_fixture("variable_sample_time");
+    let mut registry = CScriptRegistry::new();
+    let instance = registry
+        .instantiate(&lib_path)
+        .expect("load variable_sample_time fixture");
+
+    // Doubles every call: 1, 2, 4, 8 -- exactly what the fixture's own state machine defines,
+    // confirming cscript-ffi passes the return value through unmodified.
+    assert_eq!(instance.next_sample_hit(&[], &[]), 1.0);
+    assert_eq!(instance.next_sample_hit(&[], &[]), 2.0);
+    assert_eq!(instance.next_sample_hit(&[], &[]), 4.0);
+    assert_eq!(instance.next_sample_hit(&[], &[]), 8.0);
+}
+
+#[test]
+fn supports_next_sample_hit_is_false_for_every_pre_existing_fixture() {
+    // Every fixture predating this feature must correctly report "no" -- confirms the new
+    // symbol resolution doesn't accidentally match on something else.
+    let lib_path = compile_fixture("accumulator");
+    let mut registry = CScriptRegistry::new();
+    let instance = registry.instantiate(&lib_path).expect("load fixture");
+    assert!(!instance.supports_next_sample_hit());
+}
+
+#[test]
+fn supports_next_sample_hit_is_true_for_the_variable_sample_time_fixture() {
+    let lib_path = compile_fixture("variable_sample_time");
+    let mut registry = CScriptRegistry::new();
+    let instance = registry.instantiate(&lib_path).expect("load fixture");
+    assert!(instance.supports_next_sample_hit());
+}

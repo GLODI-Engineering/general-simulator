@@ -72,6 +72,29 @@ than the input shape here. If `update` is absent, a block is expected to keep up
 directly inside `output()`/`output_xc()`, exactly as before this function existed — nothing about
 the existing contract changes if you never add one.
 
+## Sample time: fixed period, phase offset, or block-controlled
+
+`ts=`/`freq=` fix a sample period at netlist-parse time (`sample_time=None`, the default, runs
+every resolved circuit step instead). Two refinements: `to=X` delays the *first* hit to `t=X`
+instead of the period's own implicit anchor (`0 <= X < period`; omitted, the default, preserves
+the pre-existing behavior — the first hit lands on the very first resolved step regardless of
+`period`'s own value, not one full period in). `ts=variable` hands scheduling to the block
+itself — for a next-event time known only at runtime, not at parse time — and requires the `.py`
+file to define one more function:
+
+```python
+def next_sample_hit(state, t, dt, inputs):        # plain contract
+    """Required when this block declares ts=variable (never called otherwise). Called
+    immediately after output(). Returns the number of seconds -- a duration, relative to this
+    call, not an absolute time stamp -- until this block should next be executed. Must be > 0."""
+    ...
+def next_sample_hit(state, t, dt, inputs, xc):    # xc contract -- one extra argument
+    ...
+```
+
+A missing `next_sample_hit` when `ts=variable` is declared is a load-time error, not a silent
+fallback — there would otherwise be no way to know when to run the block at all.
+
 A block that adopts this split gets the same guarantee every other synchronous/Moore-style block
 in this project's own block graph already has: this step's `output()` sees only *last step's*
 committed state, never a value `update()` computed later in the same call — useful when the

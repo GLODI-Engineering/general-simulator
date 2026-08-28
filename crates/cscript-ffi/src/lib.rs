@@ -112,6 +112,33 @@
 //!                      const double *xc, int xc_len);
 //! ```
 //!
+//! ## The optional block-controlled sample time
+//!
+//! A `cscript` block's own `ts=`/`freq=` fixes a period at netlist-parse time — the right
+//! choice for a controller running at a genuinely fixed rate. Some blocks instead know their
+//! own *next* execution time only at runtime (a modulator whose next switching instant depends
+//! on a live computation, an event-driven controller that only needs to re-run when something
+//! crosses a threshold). `ts=variable` in the netlist selects this mode, and **requires** the
+//! library to export one more function (checked once, up front, the same "checked once, up
+//! front" discipline `cscript_clone`'s own adaptive-stepping requirement already uses):
+//!
+//! ```c
+//! // Required when this block declares ts=variable (never called otherwise). Called
+//! // immediately after cscript_output/cscript_output_xc on every step this block actually
+//! // ran. Returns the number of seconds, *relative to this call*, until this block should
+//! // next be executed -- not an absolute time, consistent with every other cscript function
+//! // never seeing absolute time either. Must return a value > 0; dae-runtime holds this
+//! // block's last output constant (zero-order hold) for that many seconds, then calls
+//! // cscript_output/cscript_output_xc again and asks for the next interval once more.
+//! double cscript_next_sample_hit(void *state, const double *in, int in_len,
+//!                                 const double *xc, int xc_len);
+//! ```
+//!
+//! Unlike the discrete-state update function above, this one is genuinely required once opted
+//! into via `ts=variable` — a missing symbol is a load-time error
+//! (`CScriptError::MissingSymbol`), not a silent no-op, since there would otherwise be no way
+//! to ever know when to run the block at all.
+//!
 //! ## Adaptive step-size control and instance cloning
 //!
 //! general-simulator's adaptive step-size control retries a rejected trial step from scratch: every
@@ -193,6 +220,13 @@ type UpdateFn = unsafe extern "C" fn(
     xc: *const f64,
     xc_len: i32,
 );
+type NextSampleHitFn = unsafe extern "C" fn(
+    state: *mut c_void,
+    input: *const f64,
+    in_len: i32,
+    xc: *const f64,
+    xc_len: i32,
+) -> f64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CScriptError {
@@ -251,6 +285,11 @@ pub struct CScriptLibrary {
     // "The optional discrete-state update function." Never required by either `instantiate*`
     // method.
     update: Option<UpdateFn>,
+    // Always optional, but *required* when this block's netlist line declares `ts=variable` --
+    // that requirement is checked by `dae-runtime`, not this crate (which has no notion of the
+    // netlist at all), by calling `CScriptInstance::supports_next_sample_hit` once at
+    // construction. See the module doc comment, "The optional block-controlled sample time."
+    next_sample_hit: Option<NextSampleHitFn>,
     free: Option<FreeFn>,
     clone_state: Option<CloneFn>,
 }
@@ -306,6 +345,12 @@ impl CScriptLibrary {
                 .ok()
                 .map(|symbol: Symbol<UpdateFn>| *symbol)
         };
+        let next_sample_hit: Option<NextSampleHitFn> = unsafe {
+            library
+                .get(b"cscript_next_sample_hit\0")
+                .ok()
+                .map(|symbol: Symbol<NextSampleHitFn>| *symbol)
+        };
         let free: Option<FreeFn> = unsafe {
             library
                 .get(b"cscript_free\0")
@@ -326,6 +371,7 @@ impl CScriptLibrary {
             derivative,
             output_xc,
             update,
+            next_sample_hit,
             free,
             clone_state,
         })
@@ -448,6 +494,41 @@ impl CScriptInstance {
                 xc.as_ptr(),
                 xc.len() as i32,
             );
+        }
+    }
+
+    /// Whether this instance's library exported `cscript_next_sample_hit` — check this once, up
+    /// front, when this block's netlist line declares `ts=variable` (see the module doc
+    /// comment, "The optional block-controlled sample time") and reject the netlist with a
+    /// clear error if not, before ever calling [`Self::next_sample_hit`].
+    pub fn supports_next_sample_hit(&self) -> bool {
+        self.library.next_sample_hit.is_some()
+    }
+
+    /// Calls `cscript_next_sample_hit`, returning the number of seconds (relative to this call)
+    /// until this block should next be executed.
+    ///
+    /// # Panics
+    /// If this instance's library doesn't export `cscript_next_sample_hit` — unreachable in
+    /// practice, since a caller is expected to check [`Self::supports_next_sample_hit`] once,
+    /// up front, before ever using `ts=variable` for this block at all.
+    pub fn next_sample_hit(&self, input: &[f64], xc: &[f64]) -> f64 {
+        let next_sample_hit_fn = self.library.next_sample_hit.unwrap_or_else(|| {
+            panic!(
+                "next_sample_hit requires a library that exports cscript_next_sample_hit \
+                 (required for ts=variable — this should be unreachable, since that's checked \
+                 up front)"
+            )
+        });
+        // SAFETY: same reasoning as `call`'s own SAFETY comment, extended to `xc`.
+        unsafe {
+            next_sample_hit_fn(
+                self.state,
+                input.as_ptr(),
+                input.len() as i32,
+                xc.as_ptr(),
+                xc.len() as i32,
+            )
         }
     }
 

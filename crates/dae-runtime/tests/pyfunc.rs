@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use dae_runtime::{
-    simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, Signal, SignalValue,
-    TimeStep,
+    simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, SampleTimeSpec, Signal,
+    SignalValue, TimeStep,
 };
 use general_spice_core::Dialect;
 use pwl_devices::{Diode, Mosfet};
@@ -92,7 +92,10 @@ fn pyfunc_respects_sample_time_zero_order_hold() {
                 path: fixture("gate_pattern.py"),
                 function: "compute_action_qualifier_180_degree".to_string(),
                 output_names: vec!["AQCTLA".to_string(), "AQCTLB".to_string()],
-                sample_time: Some(5e-4),
+                sample_time: Some(SampleTimeSpec::Periodic {
+                    period: 5e-4,
+                    offset: 0.0,
+                }),
             },
             inputs: vec![Signal::Block("PHASE".to_string())],
         },

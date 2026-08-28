@@ -48,8 +48,8 @@ use crate::{
 
 use general_mna::block_graph::block_kind_name;
 pub use general_mna::block_graph::{
-    BlockInstance, BlockKind, ConstValue, GainValue, GateBinding, PidClamp, ProbeTarget, Signal,
-    SignalValue,
+    BlockInstance, BlockKind, ConstValue, GainValue, GateBinding, PidClamp, ProbeTarget,
+    SampleTimeSpec, Signal, SignalValue,
 };
 
 /// Every input must be `Scalar` — the default rule for a `BlockKind` that has no elementwise/
@@ -210,6 +210,12 @@ enum BlockState {
     CScript {
         instance: cscript_ffi::CScriptInstance,
         time_since_sample: f64,
+        // Only meaningful for `SampleTimeSpec::Variable` -- the interval (seconds, relative)
+        // `cscript_next_sample_hit` returned after this block's last due call, compared against
+        // `time_since_sample` the same way `SampleTimeSpec::Periodic`'s own fixed `period` is.
+        // Starts at `0.0` so a Variable block is unconditionally due on its first call, same
+        // convention every other zero-order-hold block's own first call already has.
+        next_hit_dt: f64,
         last_output: Vec<f64>,
         xc: Vec<f64>,
     },
@@ -222,6 +228,8 @@ enum BlockState {
     PyBlock {
         instance: pyblock_ffi::PyBlockInstance,
         time_since_sample: f64,
+        // Same role as `CScript`'s own `next_hit_dt` above.
+        next_hit_dt: f64,
         last_output: Vec<f64>,
         xc: Vec<f64>,
     },
@@ -771,25 +779,34 @@ fn evaluate_blocks(
                 BlockState::CScript {
                     instance,
                     time_since_sample,
+                    next_hit_dt,
                     last_output,
                     xc,
                 },
             ) => {
                 // sample_time = None: run every step, exactly like every other dynamic block.
-                // sample_time = Some(ts): accumulate circuit dt until ts is reached, then run
-                // once with the *accumulated* elapsed time as this call's dt (not the much
-                // finer circuit dt), and hold the result (zero-order hold) on every step in
-                // between -- see BlockKind::CScript's own doc comment for why. This same "due"
-                // gating governs xc's own RK4 step too: a block that wants xc to integrate
-                // continuously every circuit step should simply leave sample_time unset, the
-                // same way any other continuously-evaluated block already works here -- xc
-                // never advances on a step this block isn't "due" on, exactly like last_output
-                // is held rather than recomputed on those steps.
-                let (due, elapsed) = match sample_time {
+                // sample_time = Some(Periodic{period,offset}): accumulate circuit dt until the
+                // current threshold is reached, then run once with the *accumulated* elapsed
+                // time as this call's dt (not the much finer circuit dt), and hold the result
+                // (zero-order hold) on every step in between -- see BlockKind::CScript's own
+                // doc comment for why. sample_time = Some(Variable): identical accumulator
+                // mechanics, but the threshold itself (`next_hit_dt`) is whatever the block's
+                // own cscript_next_sample_hit last returned, instead of a fixed `period`. This
+                // same "due" gating governs xc's own RK4 step too: a block that wants xc to
+                // integrate continuously every circuit step should simply leave sample_time
+                // unset, the same way any other continuously-evaluated block already works here
+                // -- xc never advances on a step this block isn't "due" on, exactly like
+                // last_output is held rather than recomputed on those steps.
+                let threshold = match sample_time {
+                    None => None,
+                    Some(SampleTimeSpec::Periodic { period, .. }) => Some(*period),
+                    Some(SampleTimeSpec::Variable) => Some(*next_hit_dt),
+                };
+                let (due, elapsed) = match threshold {
                     None => (true, dt),
-                    Some(ts) => {
+                    Some(threshold) => {
                         *time_since_sample += dt;
-                        if *time_since_sample + 1e-15 >= *ts {
+                        if *time_since_sample + 1e-15 >= threshold {
                             let elapsed = *time_since_sample;
                             *time_since_sample = 0.0;
                             (true, elapsed)
@@ -819,6 +836,9 @@ fn evaluate_blocks(
                     // xc_count == 0). See cscript_ffi's own module doc comment, "The optional
                     // discrete-state update function."
                     instance.update(&flat, elapsed, xc);
+                    if matches!(sample_time, Some(SampleTimeSpec::Variable)) {
+                        *next_hit_dt = instance.next_sample_hit(&flat, xc);
+                    }
                 }
                 // The primary value (this block's own name) is last_output[0], inserted below
                 // like every other block; any additional declared output_names are inserted
@@ -842,17 +862,23 @@ fn evaluate_blocks(
                 BlockState::PyBlock {
                     instance,
                     time_since_sample,
+                    next_hit_dt,
                     last_output,
                     xc,
                 },
             ) => {
                 // Identical sample_time/xc gating to BlockKind::CScript's own arm above -- see
                 // its own comment for the full rationale, unchanged here.
-                let (due, elapsed) = match sample_time {
+                let threshold = match sample_time {
+                    None => None,
+                    Some(SampleTimeSpec::Periodic { period, .. }) => Some(*period),
+                    Some(SampleTimeSpec::Variable) => Some(*next_hit_dt),
+                };
+                let (due, elapsed) = match threshold {
                     None => (true, dt),
-                    Some(ts) => {
+                    Some(threshold) => {
                         *time_since_sample += dt;
-                        if *time_since_sample + 1e-15 >= *ts {
+                        if *time_since_sample + 1e-15 >= threshold {
                             let elapsed = *time_since_sample;
                             *time_since_sample = 0.0;
                             (true, elapsed)
@@ -897,6 +923,17 @@ fn evaluate_blocks(
                             .update(t, elapsed, &py_inputs)
                             .map_err(DaeError::PyBlock)?;
                     }
+                    if matches!(sample_time, Some(SampleTimeSpec::Variable)) {
+                        *next_hit_dt = if *xc_count > 0 {
+                            instance
+                                .next_sample_hit_xc(t, elapsed, &py_inputs, xc)
+                                .map_err(DaeError::PyBlock)?
+                        } else {
+                            instance
+                                .next_sample_hit(t, elapsed, &py_inputs)
+                                .map_err(DaeError::PyBlock)?
+                        };
+                    }
                 }
                 for (name, v) in output_names.iter().zip(last_output.iter()).skip(1) {
                     outputs.insert(name.clone(), SignalValue::Scalar(*v));
@@ -921,9 +958,11 @@ fn evaluate_blocks(
                 // function has no notion of elapsed time to hand it), so only `due` matters here.
                 let due = match sample_time {
                     None => true,
-                    Some(ts) => {
+                    // Variable is unreachable here -- rejected at parse time for PyFunction.
+                    Some(SampleTimeSpec::Variable) => true,
+                    Some(SampleTimeSpec::Periodic { period, .. }) => {
                         *time_since_sample += dt;
-                        if *time_since_sample + 1e-15 >= *ts {
+                        if *time_since_sample + 1e-15 >= *period {
                             *time_since_sample = 0.0;
                             true
                         } else {
@@ -1138,16 +1177,33 @@ pub fn simulate_transient_with_blocks(
                         block_name: b.name.clone(),
                     });
                 }
+                if matches!(sample_time, Some(SampleTimeSpec::Variable))
+                    && !instance.supports_next_sample_hit()
+                {
+                    return Err(
+                        DaeError::CScriptRequiresNextSampleHitForVariableSampleTime {
+                            block_name: b.name.clone(),
+                        },
+                    );
+                }
                 BlockState::CScript {
                     instance,
-                    // Initialized to `sample_time` itself (not 0.0, and deliberately not an
-                    // infinite sentinel -- that would poison the first call's `elapsed` value
-                    // into +inf once `dt` is added to it below): this guarantees the first
-                    // evaluate_blocks call is always "due" (time_since_sample + dt >= ts
-                    // trivially), while keeping `elapsed` a small, finite, sane first-call
-                    // value (one sample period, plus that first step's own dt) instead of
-                    // corrupting the block's own state with an infinite integration step.
-                    time_since_sample: sample_time.unwrap_or(0.0),
+                    // Periodic{period, offset}: initialized to `period - offset` (not 0.0, and
+                    // deliberately not an infinite sentinel -- that would poison the first
+                    // call's `elapsed` value into +inf once `dt` is added to it below) --
+                    // `offset == 0.0` (the default when `to=` is omitted) makes this `period`
+                    // itself, guaranteeing the first evaluate_blocks call is always "due"
+                    // (time_since_sample + dt >= period trivially) exactly like every
+                    // `ts=`/`freq=`-using netlist already behaved before `to=` could exist at
+                    // all; a nonzero `offset` delays that first hit to `t=offset` instead.
+                    // Variable/None: `0.0` -- Variable's own threshold is `next_hit_dt` (itself
+                    // seeded to `0.0` below), so this is unconditionally due on the first call
+                    // too, the same convention.
+                    time_since_sample: match sample_time {
+                        Some(SampleTimeSpec::Periodic { period, offset }) => period - offset,
+                        Some(SampleTimeSpec::Variable) | None => 0.0,
+                    },
+                    next_hit_dt: 0.0,
                     last_output: vec![0.0; output_names.len()],
                     // Starts at rest, matching every other dynamic block's own convention
                     // (Pid/StateSpace/TransferFunction/Pmsm/Vco all start their own state at
@@ -1170,9 +1226,23 @@ pub fn simulate_transient_with_blocks(
                     pyblock_registry.instantiate(path)
                 }
                 .map_err(DaeError::PyBlock)?;
+                if matches!(sample_time, Some(SampleTimeSpec::Variable))
+                    && !instance.supports_next_sample_hit()
+                {
+                    return Err(
+                        DaeError::PyBlockRequiresNextSampleHitForVariableSampleTime {
+                            block_name: b.name.clone(),
+                        },
+                    );
+                }
                 BlockState::PyBlock {
                     instance,
-                    time_since_sample: sample_time.unwrap_or(0.0),
+                    // Same rationale as CScript's own construction arm above.
+                    time_since_sample: match sample_time {
+                        Some(SampleTimeSpec::Periodic { period, offset }) => period - offset,
+                        Some(SampleTimeSpec::Variable) | None => 0.0,
+                    },
+                    next_hit_dt: 0.0,
                     last_output: vec![0.0; output_names.len()],
                     xc: vec![0.0; *xc_count],
                 }
@@ -1191,7 +1261,13 @@ pub fn simulate_transient_with_blocks(
                     .map_err(DaeError::PyBlock)?;
                 BlockState::PyFunction {
                     instance,
-                    time_since_sample: sample_time.unwrap_or(0.0),
+                    // Variable is unreachable here -- rejected at parse time for PyFunction
+                    // (see BlockKind::PyFunction's own doc comment) -- so only Periodic/None
+                    // ever appear; same rationale as CScript's own construction arm above.
+                    time_since_sample: match sample_time {
+                        Some(SampleTimeSpec::Periodic { period, offset }) => period - offset,
+                        Some(SampleTimeSpec::Variable) | None => 0.0,
+                    },
                     last_output: vec![0.0; output_names.len()],
                 }
             }

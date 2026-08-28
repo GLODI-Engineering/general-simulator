@@ -249,3 +249,34 @@ fn update_is_a_silent_no_op_when_the_py_file_does_not_define_it() {
     let out = instance.call(0.0, 0.0, &[PyInput::Scalar(1.0)], 2).unwrap();
     assert_eq!(out, vec![1.0, 1.0]); // unaffected by the no-op update() call above
 }
+
+#[test]
+fn next_sample_hit_reports_the_py_file_own_requested_interval() {
+    let mut registry = PyBlockRegistry::new();
+    let instance = registry
+        .instantiate(&fixture("variable_sample_time.py"))
+        .expect("load variable_sample_time fixture");
+
+    assert_eq!(instance.next_sample_hit(0.0, 0.0, &[]).unwrap(), 1.0);
+    assert_eq!(instance.next_sample_hit(0.0, 0.0, &[]).unwrap(), 2.0);
+    assert_eq!(instance.next_sample_hit(0.0, 0.0, &[]).unwrap(), 4.0);
+    assert_eq!(instance.next_sample_hit(0.0, 0.0, &[]).unwrap(), 8.0);
+}
+
+#[test]
+fn supports_next_sample_hit_is_false_for_every_pre_existing_fixture() {
+    let mut registry = PyBlockRegistry::new();
+    let instance = registry
+        .instantiate(&fixture("accumulator.py"))
+        .expect("load fixture");
+    assert!(!instance.supports_next_sample_hit());
+}
+
+#[test]
+fn supports_next_sample_hit_is_true_for_the_variable_sample_time_fixture() {
+    let mut registry = PyBlockRegistry::new();
+    let instance = registry
+        .instantiate(&fixture("variable_sample_time.py"))
+        .expect("load fixture");
+    assert!(instance.supports_next_sample_hit());
+}

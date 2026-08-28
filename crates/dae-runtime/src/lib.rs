@@ -32,7 +32,7 @@ mod topology;
 
 pub use block_graph::{
     simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, GainValue, GateBinding,
-    PidClamp, ProbeTarget, Signal, SignalValue, TransientWithBlocksStep,
+    PidClamp, ProbeTarget, SampleTimeSpec, Signal, SignalValue, TransientWithBlocksStep,
 };
 pub use closed_loop::{sawtooth_carrier, simulate_closed_loop};
 pub use step_control::{AdaptiveConfig, TimeStep};
@@ -113,6 +113,20 @@ pub enum DaeError {
     /// module doc comment, "Adaptive step-size control and instance cloning." Pass a fixed
     /// `TimeStep::Fixed` instead, or add `cscript_clone` to the library.
     CScriptRequiresCloneForAdaptiveStep {
+        block_name: String,
+    },
+    /// A netlist declares a [`block_graph::BlockKind::CScript`] block with `ts=variable`
+    /// (`block_graph::SampleTimeSpec::Variable`), but its library doesn't export
+    /// `cscript_next_sample_hit` — the required function for a block that computes its own
+    /// schedule; see `cscript_ffi`'s own module doc comment, "The optional block-controlled
+    /// sample time." Checked once, up front, the same "checked once, up front" discipline
+    /// `CScriptRequiresCloneForAdaptiveStep` already uses.
+    CScriptRequiresNextSampleHitForVariableSampleTime {
+        block_name: String,
+    },
+    /// The `PyBlock` counterpart to [`Self::CScriptRequiresNextSampleHitForVariableSampleTime`]
+    /// — a `.py` file declared `ts=variable` but doesn't define `next_sample_hit`.
+    PyBlockRequiresNextSampleHitForVariableSampleTime {
         block_name: String,
     },
     /// Loading, calling into, or cloning a [`block_graph::BlockKind::PyBlock`]'s own `.py` file

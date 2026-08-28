@@ -77,6 +77,27 @@
 //! just receives one more argument under the `xc` contract, matching `output`/`output_xc`'s own
 //! naming split being about the *return* value (`y`) rather than the input shape here.
 //!
+//! ## The optional block-controlled sample time
+//!
+//! A block's own `ts=`/`freq=` fixes a period at netlist-parse time. Some blocks instead know
+//! their own *next* execution time only at runtime — `ts=variable` in the netlist selects this
+//! mode, mirroring `cscript`'s own `cscript_next_sample_hit`, and **requires** the `.py` file to
+//! define one more function (checked once, up front, by whichever caller resolves the netlist's
+//! own `ts=variable` request — this crate itself never enforces it, the same way it never
+//! enforces which of `output`/`output_xc` a plain vs. `xc`-contract instance needs):
+//!
+//! ```python
+//! def next_sample_hit(state, t, dt, inputs):        # plain contract
+//!     # Required when this block declares ts=variable (never called otherwise). Called
+//!     # immediately after output(). Returns the number of seconds, relative to this call
+//!     # (a duration, not an absolute time stamp — even though `t` itself is absolute, matching
+//!     # output's own signature, what this function *returns* is deliberately not), until this
+//!     # block should next be executed. Must return a value > 0.
+//!     ...
+//! def next_sample_hit(state, t, dt, inputs, xc):    # xc contract -- one extra argument
+//!     ...
+//! ```
+//!
 //! ## State, cloning, and per-instance isolation
 //!
 //! Each instance gets its own Python namespace (`PyModule::from_code` execs the cached source
@@ -261,6 +282,10 @@ pub struct PyBlockInstance {
     // Always optional regardless of contract (plain or xc) -- see the module doc comment, "The
     // optional discrete-state update function." Never required by `new`.
     update_fn: Option<Py<PyAny>>,
+    // Optional here too, but *required* when this block's netlist line declares `ts=variable`
+    // -- that requirement is checked by `dae-runtime`, not this crate. See the module doc
+    // comment, "The optional block-controlled sample time."
+    next_sample_hit_fn: Option<Py<PyAny>>,
 }
 
 impl PyBlockInstance {
@@ -284,6 +309,7 @@ impl PyBlockInstance {
             let derivative_fn = get("derivative");
             let output_xc_fn = get("output_xc");
             let update_fn = get("update");
+            let next_sample_hit_fn = get("next_sample_hit");
 
             if want_xc {
                 if derivative_fn.is_none() {
@@ -328,6 +354,7 @@ impl PyBlockInstance {
                 derivative_fn,
                 output_xc_fn,
                 update_fn,
+                next_sample_hit_fn,
             })
         })
     }
@@ -442,6 +469,80 @@ impl PyBlockInstance {
         })
     }
 
+    /// Whether this instance's `.py` file defined `next_sample_hit` — check this once, up
+    /// front, when this block's netlist line declares `ts=variable` (see the module doc
+    /// comment, "The optional block-controlled sample time") and reject the netlist with a
+    /// clear error if not, before ever calling [`Self::next_sample_hit`]/[`Self::next_sample_hit_xc`].
+    pub fn supports_next_sample_hit(&self) -> bool {
+        self.next_sample_hit_fn.is_some()
+    }
+
+    /// Calls `next_sample_hit(state, t, dt, inputs)`, returning the number of seconds
+    /// (relative to this call) until this block should next be executed.
+    ///
+    /// # Panics
+    /// If this instance's `.py` file doesn't define `next_sample_hit` — unreachable in
+    /// practice, since a caller is expected to check [`Self::supports_next_sample_hit`] once,
+    /// up front, before ever using `ts=variable` for this block at all.
+    pub fn next_sample_hit(
+        &self,
+        t: f64,
+        dt: f64,
+        inputs: &[PyInput],
+    ) -> Result<f64, PyBlockError> {
+        if self.next_sample_hit_fn.is_none() {
+            panic!(
+                "next_sample_hit requires a .py file defining next_sample_hit (required for \
+                 ts=variable — this should be unreachable, since that's checked up front)"
+            );
+        }
+        Python::attach(|py| {
+            let f = self.next_sample_hit_fn.as_ref().unwrap().clone_ref(py);
+            let args =
+                build_args(py, inputs).map_err(|e| self.exception(py, "next_sample_hit", e))?;
+            let result = f
+                .bind(py)
+                .call1((self.state.bind(py), t, dt, args))
+                .map_err(|e| self.exception(py, "next_sample_hit", e))?;
+            result
+                .extract::<f64>()
+                .map_err(|e| self.exception(py, "next_sample_hit", e))
+        })
+    }
+
+    /// The `xc`-aware counterpart to [`Self::next_sample_hit`] -- calls `next_sample_hit(state,
+    /// t, dt, inputs, xc)`.
+    ///
+    /// # Panics
+    /// Same as [`Self::next_sample_hit`].
+    pub fn next_sample_hit_xc(
+        &self,
+        t: f64,
+        dt: f64,
+        inputs: &[PyInput],
+        xc: &[f64],
+    ) -> Result<f64, PyBlockError> {
+        if self.next_sample_hit_fn.is_none() {
+            panic!(
+                "next_sample_hit_xc requires a .py file defining next_sample_hit (required for \
+                 ts=variable — this should be unreachable, since that's checked up front)"
+            );
+        }
+        Python::attach(|py| {
+            let f = self.next_sample_hit_fn.as_ref().unwrap().clone_ref(py);
+            let args =
+                build_args(py, inputs).map_err(|e| self.exception(py, "next_sample_hit", e))?;
+            let xc_arr = numpy::PyArray1::from_slice(py, xc);
+            let result = f
+                .bind(py)
+                .call1((self.state.bind(py), t, dt, args, xc_arr))
+                .map_err(|e| self.exception(py, "next_sample_hit", e))?;
+            result
+                .extract::<f64>()
+                .map_err(|e| self.exception(py, "next_sample_hit", e))
+        })
+    }
+
     /// Evaluates `derivative(state, t, inputs, xc)` once: given the current continuous-state
     /// vector `xc` and this step's already-resolved inputs, returns `dxc/dt`. Must not mutate
     /// `state` (documented, not enforced, same as `cscript`'s equivalent contract).
@@ -525,6 +626,7 @@ impl PyBlockInstance {
                 derivative_fn: get("derivative"),
                 output_xc_fn: get("output_xc"),
                 update_fn: get("update"),
+                next_sample_hit_fn: get("next_sample_hit"),
             })
         })
     }
