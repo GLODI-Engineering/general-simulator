@@ -1,6 +1,6 @@
 ONVAL kind=const value=1
 ONGATE kind=sig2voltage in=ONVAL
 V1 in 0 5
-D1 in out mosfetmodel
-D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=block ctrl=ONGATE
+D1 in out idealswitchmodel
+D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=block ctrl=ONGATE
 R1 out 0 1k

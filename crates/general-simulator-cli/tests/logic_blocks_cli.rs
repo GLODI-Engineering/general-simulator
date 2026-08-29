@@ -38,7 +38,7 @@ fn an_or_aggregated_fault_latch_stays_tripped_and_blocks_the_ideal_switch_even_a
          LATCH kind=srlatch set=TRIP reset=RESETCMD\n\
          ENABLE kind=not in=LATCH\n\
          GATE_V kind=sig2voltage in=ENABLE\n\
-         D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 \
+         D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 \
          gate=block ctrl=GATE_V\n",
     );
 

@@ -37,7 +37,7 @@ fn probe_reads_a_node_voltage_through_the_real_parser() {
     let devices = write_devices_file(
         "OFFVAL kind=const value=0\n\
          OFFGATE kind=sig2voltage in=OFFVAL\n\
-         D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 gate=block ctrl=OFFGATE\n\
+         D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 gate=block ctrl=OFFGATE\n\
          VMEAS kind=probe node=b\n",
     );
 
@@ -84,7 +84,7 @@ fn a_gate_naming_a_raw_block_instead_of_sig2voltage_is_rejected_with_a_clear_err
     let netlist = fixture("cscript_gain.cir");
     let devices = write_devices_file(
         "DUTY kind=const value=0.3\n\
-         D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 \
+         D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 \
          gate=block ctrl=DUTY\n",
     );
 
@@ -113,7 +113,7 @@ fn sig2voltage_wrapper_makes_gate_block_work() {
     let devices = write_devices_file(
         "DUTY kind=const value=0.3\n\
          DUTY_GATE kind=sig2voltage in=DUTY\n\
-         D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 \
+         D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 \
          gate=block ctrl=DUTY_GATE\n",
     );
 
@@ -143,7 +143,7 @@ fn sig2voltage_drives_a_voltage_source_via_its_own_literal_value_field() {
     let devices = write_devices_file(
         "OFFVAL kind=const value=0\n\
          OFFGATE kind=sig2voltage in=OFFVAL\n\
-         D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 gate=block ctrl=OFFGATE\n\
+         D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 gate=block ctrl=OFFGATE\n\
          CMD kind=const value=7\n\
          CMD_V kind=sig2voltage in=CMD\n",
     );

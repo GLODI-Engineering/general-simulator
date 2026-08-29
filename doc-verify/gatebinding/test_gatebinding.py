@@ -12,7 +12,7 @@ import _lib  # noqa: E402
 
 
 def test_example_ideal_switch_held_on_matches_the_hand_derived_divider():
-    """## Example: a permanently-on 0.1 ohm ideal switch (`kind=mosfet`) in series with a 1k
+    """## Example: a permanently-on 0.1 ohm ideal switch (`kind=ideal_switch`) in series with a 1k
     load -> V(out) == 5 * 1000 / 1000.1."""
     _, stdout, _ = _lib.run_transient(HERE / "example.cir", tfinal=1e-3, dt=1e-4)
     rows = _lib.parse_csv(stdout)

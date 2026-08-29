@@ -3,10 +3,10 @@
 *(Skeleton — outline below; not yet written.)*
 
 ## What goes here
-- `kind=diode` field reference (`g_breakdown`, `v_breakdown`, `g_off`, `v_th`, `g_on`) with a
+- `kind=ideal_diode` field reference (`g_breakdown`, `v_breakdown`, `g_off`, `v_th`, `g_on`) with a
   small labeled sketch of the 3-segment I-V curve (breakdown / leakage / forward) and which
   field controls which piece.
-- `kind=mosfet` field reference (the netlist keyword itself is unchanged; the underlying model
+- `kind=ideal_switch` field reference (the netlist keyword itself is unchanged; the underlying model
   is `IdealSwitch`, an ideal switch — not a real MOSFET, which is a separate, not-yet-implemented
   future model): same diode fields for the body diode, plus `r_on`, plus every `gate=` variant
   (link to `gate-bindings.md` for the full detail rather than repeating).

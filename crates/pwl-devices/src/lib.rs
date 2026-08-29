@@ -18,13 +18,3 @@ mod ideal_switch;
 
 pub use ideal_diode::{IdealDiode, IdealDiodeCanonical};
 pub use ideal_switch::IdealSwitch;
-
-/// Compatibility aliases for the sibling `general-mna` repo (a read-only path dependency of
-/// this workspace — see this repo's `AGENTS.md` "Project boundaries") which still refers to
-/// these types by their pre-rename names (`use pwl_devices::{Diode, Mosfet}`, a `mosfet: Mosfet`
-/// field, etc.). Renaming `general-mna`'s own references was out of scope for the rename that
-/// introduced `IdealDiode`/`IdealSwitch` (see `docs/journal/` for that entry) — these aliases
-/// let it keep compiling unchanged. New code in this workspace should use `IdealDiode` /
-/// `IdealSwitch` directly, not these aliases.
-pub type Diode = IdealDiode;
-pub type Mosfet = IdealSwitch;

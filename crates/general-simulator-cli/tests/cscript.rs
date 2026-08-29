@@ -56,7 +56,7 @@ fn cscript_gain_reproduces_a_hand_known_result_every_step() {
     let devices = write_devices_file(&format!(
         "OFFVAL kind=const value=0\n\
          OFFGATE kind=sig2voltage in=OFFVAL\n\
-         D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
+         D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
          SRC kind=const value=5\n\
          CG kind=cscript lib={} in=SRC\n",
         lib.display()
@@ -94,7 +94,7 @@ fn cscript_sample_time_holds_between_samples_zero_order() {
     let devices = write_devices_file(&format!(
         "OFFVAL kind=const value=0\n\
          OFFGATE kind=sig2voltage in=OFFVAL\n\
-         D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
+         D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
          SRC kind=const value=0\n\
          CNT kind=cscript lib={} in=SRC ts=0.0005\n",
         lib.display()
@@ -174,7 +174,7 @@ fn cscript_xc_matches_the_closed_form_step_response() {
     let devices = write_devices_file(&format!(
         "OFFVAL kind=const value=0\n\
          OFFGATE kind=sig2voltage in=OFFVAL\n\
-         D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
+         D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
          SRC kind=const value=10\n\
          CG kind=cscript lib={} in=SRC xc_count=1\n",
         lib.display()
@@ -222,7 +222,7 @@ fn cscript_without_clone_is_rejected_under_adaptive_step_not_silently_wrong() {
     let devices = write_devices_file(&format!(
         "OFFVAL kind=const value=0\n\
          OFFGATE kind=sig2voltage in=OFFVAL\n\
-         D1 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
+         D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
          SRC kind=const value=5\n\
          CG kind=cscript lib={} in=SRC\n",
         lib.display()

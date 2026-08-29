@@ -6,11 +6,10 @@ editing that doc comment.
 
 ## Files
 
-- `example.cir` — the doc comment's own `## Example` (`general-mna`'s `GateBinding::Block`,
-  which still says "MOSFET" in its own prose -- `general-mna` is a read-only sibling repo, out
-  of scope for `general-simulator`'s ideal-switch rename): a `kind=mosfet` ideal switch held
-  permanently on via `gate=block ctrl=<sig2voltage>`. Checked that `V(out)` settles to
-  `5 * 1000 / (1000 + 0.1)` (a fully-on 0.1 Ω ideal switch in series with a 1 kΩ load).
+- `example.cir` — the doc comment's own `## Example` (`general-mna`'s `GateBinding::Block`): a
+  `kind=ideal_switch` ideal switch held permanently on via `gate=block ctrl=<sig2voltage>`.
+  Checked that `V(out)` settles to `5 * 1000 / (1000 + 0.1)` (a fully-on 0.1 Ω ideal switch in
+  series with a 1 kΩ load).
 
 ## Running
 

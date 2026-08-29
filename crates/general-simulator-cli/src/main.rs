@@ -10,18 +10,18 @@
 //! live directly inside it, the same way a real SPICE deck is self-contained, not split across
 //! files by convention. **This binary no longer parses any of that itself** — `general-mna`'s
 //! `build_system` does, via `general-spice-core`'s real grammar (see its own
-//! `docs/GRAMMAR.md` §12), which now has a genuine first-class syntax for a `kind=mosfet
+//! `docs/GRAMMAR.md` §12), which now has a genuine first-class syntax for a `kind=ideal_switch
 //! r_on=...`/block-graph line, no `*`-comment disguise needed:
 //!
 //! ```text
-//! D1 kind=diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1
+//! D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1
 //! ONVAL kind=const value=1
 //! ONGATE kind=sig2voltage in=ONVAL
-//! D2 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=block ctrl=ONGATE
+//! D2 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=block ctrl=ONGATE
 //! DUTY kind=const value=0.6
 //! PWM1 kind=pwm freq=10000 in=DUTY outputs=PWM1_ON,PWM1_OFF
 //! PWM1G kind=sig2voltage in=PWM1_ON
-//! D3 kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=block ctrl=PWM1G
+//! D3 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=block ctrl=PWM1G
 //! ```
 //!
 //! The older convention — the same lines, each prefixed with `*` so a real SPICE tool (or an
@@ -254,8 +254,8 @@
 //!
 //! ```text
 //! V1 vin 0 400
-//! * D1 kind=mosfet r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=block ctrl=LEG_MAIN_G
-//! * D2 kind=mosfet r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=block ctrl=LEG_COMP_G
+//! * D1 kind=ideal_switch r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=block ctrl=LEG_MAIN_G
+//! * D2 kind=ideal_switch r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=block ctrl=LEG_COMP_G
 //! ... (Lr, Cr, transformer, rectifier, Cout, Rout -- ordinary SPICE elements)
 //! * VOUT_PROBE kind=probe node=vout
 //! * REF     kind=pwc points=[[0,20],[0.014,17]]
@@ -475,13 +475,9 @@ fn run() -> Result<(), String> {
     // complete, see below.
     let (devices_for_build, measurements) = measure::extract(&devices_source, dialect)
         .map_err(|e| format!("parsing kind=measure declarations: {e}"))?;
-    // `general_mna::System`'s field is still literally named `mosfets` -- `general-mna` is a
-    // read-only sibling repo (see this repo's `AGENTS.md`) that was out of scope for the rename
-    // that introduced `ideal_switches`/`IdealSwitch` in this crate; rebind it to the new name
-    // here at the boundary instead.
     let general_mna::System {
-        diodes,
-        mosfets: ideal_switches,
+        ideal_diodes: diodes,
+        ideal_switches,
         gates,
         blocks,
         shared_r_on,
