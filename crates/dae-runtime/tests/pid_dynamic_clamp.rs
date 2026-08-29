@@ -18,22 +18,22 @@ use dae_runtime::{
     simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, PidClamp, TimeStep,
 };
 use general_spice_core::Dialect;
-use pwl_devices::{Diode, Mosfet};
+use pwl_devices::{IdealDiode, IdealSwitch};
 
-const NETLIST: &str = "V1 a 0 5\nD1 a b mosfetmodel\nR1 b 0 1000";
+const NETLIST: &str = "V1 a 0 5\nD1 a b idealswitchmodel\nR1 b 0 1000";
 
-fn dummy_mosfets() -> BTreeMap<String, Mosfet> {
+fn dummy_ideal_switches() -> BTreeMap<String, IdealSwitch> {
     let mut m = BTreeMap::new();
     m.insert(
         "D1".to_string(),
-        Mosfet::new(0.1, Diode::new(0.0, -100.0, 0.0, 1e6, 0.0)),
+        IdealSwitch::new(0.1, IdealDiode::new(0.0, -100.0, 0.0, 1e6, 0.0)),
     );
     m
 }
 
 #[test]
 fn dynamic_clamp_matches_fixed_clamp_at_the_same_constant_bound() {
-    let mosfets = dummy_mosfets();
+    let ideal_switches = dummy_ideal_switches();
     let diodes = BTreeMap::new();
     let gates = BTreeMap::new();
 
@@ -72,7 +72,7 @@ fn dynamic_clamp_matches_fixed_clamp_at_the_same_constant_bound() {
             NETLIST,
             Dialect::Ngspice,
             &diodes,
-            &mosfets,
+            &ideal_switches,
             blocks,
             &gates,
             0.1,
@@ -113,7 +113,7 @@ fn dynamic_clamp_matches_fixed_clamp_at_the_same_constant_bound() {
 
 #[test]
 fn dynamic_clamp_respects_a_bound_that_shrinks_mid_run() {
-    let mosfets = dummy_mosfets();
+    let ideal_switches = dummy_ideal_switches();
     let diodes = BTreeMap::new();
     let gates = BTreeMap::new();
 
@@ -157,7 +157,7 @@ fn dynamic_clamp_respects_a_bound_that_shrinks_mid_run() {
         NETLIST,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         &blocks,
         &gates,
         0.1,

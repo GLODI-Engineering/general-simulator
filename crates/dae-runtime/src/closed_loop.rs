@@ -1,5 +1,5 @@
 //! Wires a `continuous_blocks::StateSpace` controller (typically a compiled [`Pid`
-//! ](continuous_blocks::Pid)) into a closed loop around a circuit's MOSFET(s), replacing
+//! ](continuous_blocks::Pid)) into a closed loop around a circuit's ideal switch(s), replacing
 //! Xyce/SPICE's `tanh`-smoothed comparator workaround
 //! (`internal-archive`'s `gotchas/xyce-pid-timestep-collapse-needs-smooth-comparator.md`)
 //! with an ordinary PWM comparator — no smoothing hack needed, since gate switching is just
@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 
 use continuous_blocks::StateSpace;
 use general_spice_core::Dialect;
-use pwl_devices::{Diode, Mosfet};
+use pwl_devices::{IdealDiode, IdealSwitch};
 
 use crate::{
     classify_segments, step_with_fallback, DaeError, GateState, OperatingPoint, Segment,
@@ -38,9 +38,9 @@ pub fn sawtooth_carrier(t: f64, freq_hz: f64) -> f64 {
 /// Runs a closed-loop transient: at each timestep, `measure` reads a scalar from the
 /// *previous* step's [`OperatingPoint`] (e.g. an output node voltage), `controller` (its own
 /// state carried forward internally) is stepped with `reference(t) - measured` as its input
-/// via RK4, and `pwm(controller_output, t)` decides every MOSFET's gate state for this step
+/// via RK4, and `pwm(controller_output, t)` decides every ideal switch's gate state for this step
 /// from that controller output. Everything else matches
-/// [`crate::simulate_transient_with_mosfets`] (system rebuilt per step, trapezoidal with
+/// [`crate::simulate_transient_with_ideal_switches`] (system rebuilt per step, trapezoidal with
 /// backward-Euler fallback on any diode-segment or gate-state change).
 ///
 /// `reference` is a function of time rather than a fixed value so a reference-step robustness
@@ -69,8 +69,8 @@ pub fn sawtooth_carrier(t: f64, freq_hz: f64) -> f64 {
 pub fn simulate_closed_loop(
     source: &str,
     dialect: Dialect,
-    diodes: &BTreeMap<String, Diode>,
-    mosfets: &BTreeMap<String, Mosfet>,
+    diodes: &BTreeMap<String, IdealDiode>,
+    ideal_switches: &BTreeMap<String, IdealSwitch>,
     controller: &StateSpace,
     reference: impl Fn(f64) -> f64,
     measure: impl Fn(&OperatingPoint) -> f64,
@@ -85,12 +85,17 @@ pub fn simulate_closed_loop(
 
     // A zero initial gate assignment (no measurement exists yet) just to learn `order` for the
     // default x_initial and to get a first OperatingPoint to seed `measure`/the loop with.
-    let initial_states: BTreeMap<String, (Mosfet, GateState)> = mosfets
+    let initial_states: BTreeMap<String, (IdealSwitch, GateState)> = ideal_switches
         .iter()
         .map(|(name, m)| (name.clone(), (*m, GateState::Off)))
         .collect();
-    let (system0, all_diodes0) =
-        crate::build_with_mosfets(&statements, dialect, diodes, &initial_states, shared_r_on)?;
+    let (system0, all_diodes0) = crate::build_with_ideal_switches(
+        &statements,
+        dialect,
+        diodes,
+        &initial_states,
+        shared_r_on,
+    )?;
     let mut x_prev = match x_initial {
         Some(x) => x.to_vec(),
         None => vec![0.0; system0.order()],
@@ -143,7 +148,7 @@ pub fn simulate_closed_loop(
         };
 
         let gate_states = pwm(controller_output, t);
-        let states: BTreeMap<String, (Mosfet, GateState)> = mosfets
+        let states: BTreeMap<String, (IdealSwitch, GateState)> = ideal_switches
             .iter()
             .map(|(name, m)| {
                 (
@@ -156,7 +161,7 @@ pub fn simulate_closed_loop(
         let forced = step_index == 0 || gate_changed || ringing_cooldown > 0;
 
         let (system, all_diodes) =
-            crate::build_with_mosfets(&statements, dialect, diodes, &states, shared_r_on)?;
+            crate::build_with_ideal_switches(&statements, dialect, diodes, &states, shared_r_on)?;
         let (point, used_backward_euler) = step_with_fallback(
             &system,
             &statements,

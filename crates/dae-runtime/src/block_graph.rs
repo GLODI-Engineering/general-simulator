@@ -2,7 +2,7 @@
 //! `GateBinding` — `Const`, `Time`, `Pwc`, `Pwl`, `Sin`, `Pulse`, `Exp`, `Sffm`, `Sum`, `Gain`,
 //! `Pid`, `StateSpace`, `TransferFunction`, `Vco`, `Pwm`, `PhaseShiftPwm`, `Product`,
 //! `Saturation`, `Table`, `MathFn1`/`2`/`3`, `Hysteresis`, `CoordinateTransform`, `Pmsm`,
-//! `CScript`, `Probe`, `Sig2Voltage`, `Sig2Current`), resolving every MOSFET's gate
+//! `CScript`, `Probe`, `Sig2Voltage`, `Sig2Current`), resolving every ideal switch's gate
 //! state each transient step. `general-mna` owns *what these types are* and *parsing them out
 //! of source text* (`general_mna::build_system`); this module owns *evaluating* the graph over
 //! time (`BlockState`, `evaluate_blocks`, `topological_order`,
@@ -32,7 +32,7 @@
 //! fixed `Sum`-then-`Pid`-then-duty-
 //! comparator topology, named for the one case it was first built for) remains as a lighter
 //! Rust-level convenience for simple direct callers; this module is the general one, used by
-//! `general-simulator-cli` unconditionally for every MOSFET-containing transient run.
+//! `general-simulator-cli` unconditionally for every ideal switch-containing transient run.
 
 use std::collections::BTreeMap;
 
@@ -40,7 +40,7 @@ use continuous_blocks::logic::{as_bool, from_bool, rising_edge, srlatch_next};
 use continuous_blocks::{math_ops, DiscretePidState, Hysteresis, Pmsm, StateSpace, Vco};
 use cscript_ffi::CScriptRegistry;
 use general_spice_core::Dialect;
-use pwl_devices::{Diode, Mosfet};
+use pwl_devices::{IdealDiode, IdealSwitch};
 
 use crate::{
     classify_segments, sawtooth_carrier, step_control, step_with_fallback, DaeError, GateState,
@@ -1232,11 +1232,11 @@ fn resolve_gates(
 ) -> BTreeMap<String, GateState> {
     gates
         .iter()
-        .map(|(mosfet_name, binding)| (mosfet_name.clone(), binding.resolve(outputs)))
+        .map(|(switch_name, binding)| (switch_name.clone(), binding.resolve(outputs)))
         .collect()
 }
 
-/// Runs a transient with every MOSFET's gate resolved from a [`GateBinding`] each step — see
+/// Runs a transient with every ideal switch's gate resolved from a [`GateBinding`] each step — see
 /// this module's doc comment for why there's no separate "closed-loop" entry point: a device
 /// gated by a plain [`BlockKind::Hysteresis`] and one gated by a `Sum`-`Pid`-[`BlockKind::PhaseShiftPwm`]
 /// chain that happens to read a [`BlockKind::Probe`] are resolved by exactly the same loop
@@ -1250,8 +1250,8 @@ fn resolve_gates(
 pub fn simulate_transient_with_blocks(
     source: &str,
     dialect: Dialect,
-    diodes: &BTreeMap<String, Diode>,
-    mosfets: &BTreeMap<String, Mosfet>,
+    diodes: &BTreeMap<String, IdealDiode>,
+    ideal_switches: &BTreeMap<String, IdealSwitch>,
     blocks: &[BlockInstance],
     gates: &BTreeMap<String, GateBinding>,
     shared_r_on: f64,
@@ -1267,13 +1267,13 @@ pub fn simulate_transient_with_blocks(
     // count as "known" here, or a valid netlist referencing one of those extra names gets
     // rejected before it ever runs.
     let block_names = block_index_by_name(blocks)?;
-    for (mosfet_name, binding) in gates {
+    for (switch_name, binding) in gates {
         for needed in binding.source_blocks().into_iter().flatten() {
             let Some(&idx) = block_names.get(needed) else {
                 return Err(DaeError::UnknownBlockInput(needed.to_string()));
             };
             // A GateBinding's target must be an explicit Sig2Voltage converter, never a raw
-            // control block directly -- a MOSFET's gate is itself a voltage, so it shares the
+            // control block directly -- an ideal switch's gate is itself a voltage, so it shares the
             // same Signal-to-PS boundary a V-source's own magnitude uses (see
             // BlockKind::Sig2Voltage's own doc comment); no separate gate-only converter type
             // exists. This also correctly rejects naming a CScript/CoordinateTransform/Pmsm
@@ -1282,7 +1282,7 @@ pub fn simulate_transient_with_blocks(
             // case.
             if !matches!(blocks[idx].kind, BlockKind::Sig2Voltage) {
                 return Err(DaeError::GateTargetNotSig2Voltage {
-                    gate: mosfet_name.clone(),
+                    gate: switch_name.clone(),
                     block: needed.to_string(),
                     found_kind: block_kind_name(&blocks[idx].kind),
                 });
@@ -1299,15 +1299,20 @@ pub fn simulate_transient_with_blocks(
     // Only used to learn the system's `unknowns` ordering/count for the pre-first-step
     // `point_prev` below and the default `x_initial` — no step is solved with it. Solving one
     // would perturb `x_prev` away from `x_initial` before the real first step even runs, a
-    // real behavioral difference from `simulate_transient_with_mosfets` for the plain
+    // real behavioral difference from `simulate_transient_with_ideal_switches` for the plain
     // fixed/PWM case (caught by exactly that mismatch: this function must reduce to identical
     // numbers as that one whenever no block reads a `BlockKind::Probe`).
-    let initial_states: BTreeMap<String, (Mosfet, GateState)> = mosfets
+    let initial_states: BTreeMap<String, (IdealSwitch, GateState)> = ideal_switches
         .iter()
         .map(|(name, m)| (name.clone(), (*m, GateState::Off)))
         .collect();
-    let (system0, _) =
-        crate::build_with_mosfets(&statements, dialect, diodes, &initial_states, shared_r_on)?;
+    let (system0, _) = crate::build_with_ideal_switches(
+        &statements,
+        dialect,
+        diodes,
+        &initial_states,
+        shared_r_on,
+    )?;
 
     // Signal-to-PS enforcement for a `V`/`I` source's own literal value: `general-mna` already
     // accepts a bare symbol there (`Expression::Symbol`), stamped verbatim into that source's
@@ -1617,7 +1622,7 @@ pub fn simulate_transient_with_blocks(
                     dt,
                 )?;
                 let gate_states = resolve_gates(gates, &outputs);
-                let states: BTreeMap<String, (Mosfet, GateState)> = mosfets
+                let states: BTreeMap<String, (IdealSwitch, GateState)> = ideal_switches
                     .iter()
                     .map(|(name, m)| {
                         (
@@ -1629,8 +1634,13 @@ pub fn simulate_transient_with_blocks(
                 let gate_changed = prev_gate_states.as_ref() != Some(&gate_states);
                 let forced = step_index == 0 || gate_changed || ringing_cooldown > 0;
 
-                let (system, all_diodes) =
-                    crate::build_with_mosfets(&statements, dialect, diodes, &states, shared_r_on)?;
+                let (system, all_diodes) = crate::build_with_ideal_switches(
+                    &statements,
+                    dialect,
+                    diodes,
+                    &states,
+                    shared_r_on,
+                )?;
                 let (point, used_backward_euler) = step_with_fallback(
                     &system,
                     &statements,
@@ -1683,7 +1693,7 @@ pub fn simulate_transient_with_blocks(
                         dt,
                     )?;
                     let gate_states = resolve_gates(gates, &outputs);
-                    let states: BTreeMap<String, (Mosfet, GateState)> = mosfets
+                    let states: BTreeMap<String, (IdealSwitch, GateState)> = ideal_switches
                         .iter()
                         .map(|(name, m)| {
                             (
@@ -1695,7 +1705,7 @@ pub fn simulate_transient_with_blocks(
                     let gate_changed = prev_gate_states.as_ref() != Some(&gate_states);
                     let forced = step_index == 0 || gate_changed || ringing_cooldown > 0;
 
-                    let (system, all_diodes) = crate::build_with_mosfets(
+                    let (system, all_diodes) = crate::build_with_ideal_switches(
                         &statements,
                         dialect,
                         diodes,

@@ -1,7 +1,7 @@
 //! `BlockKind::Pwm` (PWM Modulator 1) — fixed-frequency, duty-driven, active-high complementary
 //! PWM (fused from the old `GateBinding::Pwm`/`PwmComplement` pair into one component with two
 //! outputs). Checks
-//! two independent MOSFETs, one gated off the `main` output and one off `complement`, both
+//! two independent ideal switches, one gated off the `main` output and one off `complement`, both
 //! wired through their own `sig2voltage` converter: with zero dead time, at every sampled instant
 //! exactly one of the two must be conducting (no shoot-through gap, no overlap); with nonzero
 //! dead time, both must be off during each dead-time gap, verified against hand-computed
@@ -14,21 +14,21 @@ use dae_runtime::{
     TimeStep,
 };
 use general_spice_core::Dialect;
-use pwl_devices::{Diode, Mosfet};
+use pwl_devices::{IdealDiode, IdealSwitch};
 
 fn setup() -> (
     &'static str,
-    BTreeMap<String, Mosfet>,
-    BTreeMap<String, Diode>,
+    BTreeMap<String, IdealSwitch>,
+    BTreeMap<String, IdealDiode>,
 ) {
     let netlist =
-        "V1 a 0 5\nD1 a b mosfetmodel\nR1 b 0 1000\nV2 c 0 5\nD2 c d mosfetmodel\nR2 d 0 1000";
-    let mosfet_top = Mosfet::new(0.1, Diode::new(0.0, -1e6, 1e-6, 1e6, 0.0));
-    let mosfet_bot = Mosfet::new(0.1, Diode::new(0.0, -1e6, 1e-6, 1e6, 0.0));
-    let mut mosfets = BTreeMap::new();
-    mosfets.insert("D1".to_string(), mosfet_top);
-    mosfets.insert("D2".to_string(), mosfet_bot);
-    (netlist, mosfets, BTreeMap::new())
+        "V1 a 0 5\nD1 a b idealswitchmodel\nR1 b 0 1000\nV2 c 0 5\nD2 c d idealswitchmodel\nR2 d 0 1000";
+    let switch_top = IdealSwitch::new(0.1, IdealDiode::new(0.0, -1e6, 1e-6, 1e6, 0.0));
+    let switch_bot = IdealSwitch::new(0.1, IdealDiode::new(0.0, -1e6, 1e-6, 1e6, 0.0));
+    let mut ideal_switches = BTreeMap::new();
+    ideal_switches.insert("D1".to_string(), switch_top);
+    ideal_switches.insert("D2".to_string(), switch_bot);
+    (netlist, ideal_switches, BTreeMap::new())
 }
 
 fn pwm_blocks(freq_hz: f64, red: f64, fed: f64) -> Vec<BlockInstance> {
@@ -65,7 +65,7 @@ fn pwm_blocks(freq_hz: f64, red: f64, fed: f64) -> Vec<BlockInstance> {
 
 #[test]
 fn pwm_complement_is_mutually_exclusive_with_pwm_at_zero_deadtime() {
-    let (netlist, mosfets, diodes) = setup();
+    let (netlist, ideal_switches, diodes) = setup();
     let blocks = pwm_blocks(100_000.0, 0.0, 0.0);
 
     let mut gates = BTreeMap::new();
@@ -82,7 +82,7 @@ fn pwm_complement_is_mutually_exclusive_with_pwm_at_zero_deadtime() {
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         &blocks,
         &gates,
         0.1,
@@ -131,7 +131,7 @@ fn nonzero_deadtime_leaves_both_switches_off_during_each_gap() {
     // freq=100kHz (period=10us), duty=0.3 (main on for the first 3us), red=200ns, fed=300ns:
     // main on [0.2us, 3us), complement on [3.3us, 10us) -- two dead gaps per period,
     // [0,0.2us) and [3us,3.3us), where both must be off.
-    let (netlist, mosfets, diodes) = setup();
+    let (netlist, ideal_switches, diodes) = setup();
     let blocks = pwm_blocks(100_000.0, 200e-9, 300e-9);
 
     let mut gates = BTreeMap::new();
@@ -148,7 +148,7 @@ fn nonzero_deadtime_leaves_both_switches_off_during_each_gap() {
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         &blocks,
         &gates,
         0.1,

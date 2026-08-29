@@ -13,7 +13,7 @@ use dae_runtime::{
     TimeStep,
 };
 use general_spice_core::Dialect;
-use pwl_devices::{Diode, Mosfet};
+use pwl_devices::{IdealDiode, IdealSwitch};
 
 fn run(
     blocks: &[BlockInstance],
@@ -21,14 +21,14 @@ fn run(
     dt: f64,
 ) -> Vec<(f64, BTreeMap<String, SignalValue>)> {
     let netlist = "V1 a 0 5\nR1 a 0 1k";
-    let mosfets: BTreeMap<String, Mosfet> = BTreeMap::new();
-    let diodes: BTreeMap<String, Diode> = BTreeMap::new();
+    let ideal_switches: BTreeMap<String, IdealSwitch> = BTreeMap::new();
+    let diodes: BTreeMap<String, IdealDiode> = BTreeMap::new();
     let gates = BTreeMap::new();
     simulate_transient_with_blocks(
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         blocks,
         &gates,
         0.1,

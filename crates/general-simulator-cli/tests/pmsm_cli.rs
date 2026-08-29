@@ -3,7 +3,7 @@
 //! `dae-runtime`'s block graph, not just the `BlockKind` construction tested directly in
 //! `dae-runtime`'s own `pmsm_block.rs`. Reuses the same decoupled-R-L-circuit hand derivation
 //! (`vq=0`, `iq(0)=0` keeps `iq`/`omega_m` at zero, leaving `id(t) = (vd/R)*(1 -
-//! exp(-t*R/Ld))`). Uses a dummy always-off MOSFET purely so `simulate_transient_with_blocks`'s
+//! exp(-t*R/Ld))`). Uses a dummy always-off ideal switch purely so `simulate_transient_with_blocks`'s
 //! code path is reached at all (same convention as `tests/cscript.rs`).
 
 use std::path::PathBuf;
@@ -43,7 +43,7 @@ fn run(args: &[&str]) -> String {
 
 #[test]
 fn pmsm_block_matches_hand_derived_rl_circuit_when_decoupled() {
-    let netlist = fixture("cscript_gain.cir"); // V1 a 0 5 / D1 a b mosfetmodel / R1 b 0 1000
+    let netlist = fixture("cscript_gain.cir"); // V1 a 0 5 / D1 a b idealswitchmodel / R1 b 0 1000
     let (r, l, vd) = (2.0, 5e-3, 10.0);
     let tau = l / r;
     let dt = tau / 200.0;

@@ -7,7 +7,7 @@
 
 use dae_runtime::{simulate_transient, solve_dc, TimeStep};
 use general_spice_core::Dialect;
-use pwl_devices::Diode;
+use pwl_devices::IdealDiode;
 use std::collections::BTreeMap;
 
 /// A purely algebraic (no `L`/`C`) circuit has no dynamics at all: `K = 0` everywhere, so the
@@ -19,8 +19,14 @@ use std::collections::BTreeMap;
 fn algebraic_circuit_matches_dc_solve_at_every_step() {
     let netlist = "V1 e1 0 5\nD1 e1 e2 dmodel\nD2 e1 e2 dmodel\nR1 e2 0 1";
     let mut diodes = BTreeMap::new();
-    diodes.insert("D1".to_string(), Diode::new(0.0, -100.0, 0.0, 1.0, 1.0));
-    diodes.insert("D2".to_string(), Diode::new(0.0, -100.0, 0.0, 2.0, 1.0));
+    diodes.insert(
+        "D1".to_string(),
+        IdealDiode::new(0.0, -100.0, 0.0, 1.0, 1.0),
+    );
+    diodes.insert(
+        "D2".to_string(),
+        IdealDiode::new(0.0, -100.0, 0.0, 2.0, 1.0),
+    );
 
     let dc = solve_dc(netlist, Dialect::Ngspice, &diodes).unwrap();
     let trace = simulate_transient(
@@ -94,7 +100,10 @@ fn rc_charging_matches_closed_form_exponential() {
 fn rc_charging_through_a_forward_biased_diode_matches_hand_derived_solution() {
     let netlist = "V1 a 0 5\nD1 a b dmodel\nR1 b c 1\nC1 c 0 1";
     let mut diodes = BTreeMap::new();
-    diodes.insert("D1".to_string(), Diode::new(0.0, -100.0, 0.0, 0.7, 1.0));
+    diodes.insert(
+        "D1".to_string(),
+        IdealDiode::new(0.0, -100.0, 0.0, 0.7, 1.0),
+    );
 
     let trace = simulate_transient(
         netlist,

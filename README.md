@@ -15,7 +15,7 @@ partial fix). Full background and the source documents are in the companion
 `internal-archive` repo, `explanations/xyce/`.
 
 This project sidesteps the problem instead of patching it: every active device is modeled as
-piecewise-linear (a diode's three conduction segments, a MOSFET's controlled/natural
+piecewise-linear (a diode's three conduction segments, an ideal switch's controlled/natural
 commutation modes), so within any *fixed* combination of active segments the whole circuit is
 exactly linear. Which segment each device is in, per timestep, is decided by solving a **Linear
 Complementarity Problem (LCP)** via Lemke's algorithm — the same rigorous mode-selection
@@ -48,11 +48,13 @@ results before anything built on top of it (see `docs/journal/` for the full acc
 including bugs caught and fixed along the way):
 
 - `crates/lcp-solver` — Lemke's algorithm, verified against hand-solved textbook LCP fixtures.
-- `crates/pwl-devices` — a 3-segment PWL diode and a MOSFET (gated-on switch / gated-off body
-  diode), verified against hand-derived circuit operating points.
-- `crates/dae-runtime` — folds any netlist's linear part plus PWL diodes/MOSFETs into one LCP,
-  with a full transient timestep loop (trapezoidal, backward Euler on the first step and any
-  LCP-resolved mode change), MOSFET/PWM support, and closed-loop wiring for a
+- `crates/pwl-devices` — a 3-segment PWL ideal diode (`IdealDiode`) and an ideal switch
+  (`IdealSwitch`, gated-on switch / gated-off body diode), verified against hand-derived circuit
+  operating points. Named "ideal switch" rather than "MOSFET" because that name is reserved for
+  a future, not-yet-implemented BSIM-style device model (see `docs/journal/` for the rename).
+- `crates/dae-runtime` — folds any netlist's linear part plus PWL ideal diodes/ideal switches
+  into one LCP, with a full transient timestep loop (trapezoidal, backward Euler on the first
+  step and any LCP-resolved mode change), ideal-switch/PWM support, and closed-loop wiring for a
   `continuous-blocks` controller (e.g. a PID) driving a switching gate.
 - `crates/continuous-blocks` — transfer function / state-space / PID / integrator / math-op
   compilation into the same descriptor-DAE shape circuits use, standalone and verified.
@@ -60,7 +62,7 @@ including bugs caught and fixed along the way):
 
 Open: validation against the Xyce/ngspice baselines already captured in the sibling
 `internal-archive` repo's `experiments/` folder, full converter benchmarks, and the
-smaller scope notes recorded in each milestone's own journal entry (per-instance MOSFET `Ron`,
+smaller scope notes recorded in each milestone's own journal entry (per-instance ideal-switch `Ron`,
 non-diode-only transient variants, etc.).
 
 ## Development

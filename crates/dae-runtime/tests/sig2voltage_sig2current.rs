@@ -19,15 +19,15 @@ use dae_runtime::{
     TimeStep,
 };
 use general_spice_core::Dialect;
-use pwl_devices::{Diode, Mosfet};
+use pwl_devices::{IdealDiode, IdealSwitch};
 
 #[test]
 fn sig2voltage_drives_a_voltage_source_exactly_through_a_pwl_ramp() {
     // V1's own literal names CMD_V directly -- general-mna already accepts a bare symbol there
     // (Expression::Symbol), confirmed to need no change on that side.
     let netlist = "V1 a 0 CMD_V\nR1 a 0 1000";
-    let mosfets: BTreeMap<String, Mosfet> = BTreeMap::new();
-    let diodes: BTreeMap<String, Diode> = BTreeMap::new();
+    let ideal_switches: BTreeMap<String, IdealSwitch> = BTreeMap::new();
+    let diodes: BTreeMap<String, IdealDiode> = BTreeMap::new();
     let gates = BTreeMap::new();
 
     let blocks = vec![
@@ -51,7 +51,7 @@ fn sig2voltage_drives_a_voltage_source_exactly_through_a_pwl_ramp() {
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         &blocks,
         &gates,
         0.1,
@@ -78,8 +78,8 @@ fn sig2voltage_drives_a_voltage_source_exactly_through_a_pwl_ramp() {
 #[test]
 fn sig2current_drives_a_current_source_matching_ohms_law_exactly() {
     let netlist = "I1 0 a CMD_I\nR1 a 0 1000";
-    let mosfets: BTreeMap<String, Mosfet> = BTreeMap::new();
-    let diodes: BTreeMap<String, Diode> = BTreeMap::new();
+    let ideal_switches: BTreeMap<String, IdealSwitch> = BTreeMap::new();
+    let diodes: BTreeMap<String, IdealDiode> = BTreeMap::new();
     let gates = BTreeMap::new();
 
     let blocks = vec![
@@ -99,7 +99,7 @@ fn sig2current_drives_a_current_source_matching_ohms_law_exactly() {
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         &blocks,
         &gates,
         0.1,
@@ -124,8 +124,8 @@ fn a_voltage_source_naming_a_sig2current_block_is_rejected() {
     // V1's own literal names CMD_I, which is Sig2Current -- V needs Sig2Voltage specifically,
     // so this must be rejected even though CMD_I is a legitimate converter of the *other* kind.
     let netlist = "V1 a 0 CMD_I\nR1 a 0 1000";
-    let mosfets: BTreeMap<String, Mosfet> = BTreeMap::new();
-    let diodes: BTreeMap<String, Diode> = BTreeMap::new();
+    let ideal_switches: BTreeMap<String, IdealSwitch> = BTreeMap::new();
+    let diodes: BTreeMap<String, IdealDiode> = BTreeMap::new();
 
     let blocks = vec![
         BlockInstance {
@@ -144,7 +144,7 @@ fn a_voltage_source_naming_a_sig2current_block_is_rejected() {
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         &blocks,
         &BTreeMap::new(),
         0.1,
@@ -173,8 +173,8 @@ fn a_voltage_source_naming_a_sig2current_block_is_rejected() {
 #[test]
 fn a_voltage_source_naming_a_plain_block_directly_is_rejected() {
     let netlist = "V1 a 0 CMD\nR1 a 0 1000";
-    let mosfets: BTreeMap<String, Mosfet> = BTreeMap::new();
-    let diodes: BTreeMap<String, Diode> = BTreeMap::new();
+    let ideal_switches: BTreeMap<String, IdealSwitch> = BTreeMap::new();
+    let diodes: BTreeMap<String, IdealDiode> = BTreeMap::new();
 
     let blocks = vec![BlockInstance {
         name: "CMD".to_string(),
@@ -186,7 +186,7 @@ fn a_voltage_source_naming_a_plain_block_directly_is_rejected() {
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         &blocks,
         &BTreeMap::new(),
         0.1,
@@ -220,8 +220,8 @@ fn sig2voltage_driven_source_produces_correct_rc_charging_dynamics_under_trapezo
     // genuinely exercised (not degenerated to the Dc case), and the closed-form
     // Vout=Vin*(1-exp(-t/RC)) result is a real check on it, not a trivial identity.
     let netlist = "V1 a 0 CMD_V\nR1 a vout 1000\nC1 vout 0 1e-6";
-    let mosfets: BTreeMap<String, Mosfet> = BTreeMap::new();
-    let diodes: BTreeMap<String, Diode> = BTreeMap::new();
+    let ideal_switches: BTreeMap<String, IdealSwitch> = BTreeMap::new();
+    let diodes: BTreeMap<String, IdealDiode> = BTreeMap::new();
     let gates = BTreeMap::new();
 
     let blocks = vec![
@@ -248,7 +248,7 @@ fn sig2voltage_driven_source_produces_correct_rc_charging_dynamics_under_trapezo
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         &blocks,
         &gates,
         0.1,

@@ -10,15 +10,21 @@ use std::collections::BTreeMap;
 
 use dae_runtime::solve_dc;
 use general_spice_core::Dialect;
-use pwl_devices::Diode;
+use pwl_devices::IdealDiode;
 
 #[test]
 fn generic_fold_reproduces_the_hand_derived_two_diode_operating_point() {
     let netlist = "V1 e1 0 5\nD1 e1 e2 dmodel\nD2 e1 e2 dmodel\nR1 e2 0 1";
 
     let mut diodes = BTreeMap::new();
-    diodes.insert("D1".to_string(), Diode::new(0.0, -100.0, 0.0, 1.0, 1.0));
-    diodes.insert("D2".to_string(), Diode::new(0.0, -100.0, 0.0, 2.0, 1.0));
+    diodes.insert(
+        "D1".to_string(),
+        IdealDiode::new(0.0, -100.0, 0.0, 1.0, 1.0),
+    );
+    diodes.insert(
+        "D2".to_string(),
+        IdealDiode::new(0.0, -100.0, 0.0, 2.0, 1.0),
+    );
 
     let op = solve_dc(netlist, Dialect::Ngspice, &diodes).expect("circuit must solve");
 
@@ -33,8 +39,8 @@ fn generic_fold_reproduces_the_hand_derived_two_diode_operating_point() {
     assert!((e2 - 7.0 / 3.0).abs() < 1e-6, "e2 = {e2}, expected 7/3");
     assert!((v - 8.0 / 3.0).abs() < 1e-6, "V = {v}, expected 8/3");
 
-    let d1 = Diode::new(0.0, -100.0, 0.0, 1.0, 1.0);
-    let d2 = Diode::new(0.0, -100.0, 0.0, 2.0, 1.0);
+    let d1 = IdealDiode::new(0.0, -100.0, 0.0, 1.0, 1.0);
+    let d2 = IdealDiode::new(0.0, -100.0, 0.0, 2.0, 1.0);
     assert!(
         (d1.current(v) - 5.0 / 3.0).abs() < 1e-6,
         "I_D1 expected 5/3"
@@ -61,8 +67,14 @@ fn generic_fold_reproduces_only_first_diode_conducting() {
     let netlist = "V1 e1 0 1.5\nD1 e1 e2 dmodel\nD2 e1 e2 dmodel\nR1 e2 0 1";
 
     let mut diodes = BTreeMap::new();
-    diodes.insert("D1".to_string(), Diode::new(0.0, -100.0, 0.0, 1.0, 1.0));
-    diodes.insert("D2".to_string(), Diode::new(0.0, -100.0, 0.0, 2.0, 1.0));
+    diodes.insert(
+        "D1".to_string(),
+        IdealDiode::new(0.0, -100.0, 0.0, 1.0, 1.0),
+    );
+    diodes.insert(
+        "D2".to_string(),
+        IdealDiode::new(0.0, -100.0, 0.0, 2.0, 1.0),
+    );
 
     let op = solve_dc(netlist, Dialect::Ngspice, &diodes).expect("circuit must solve");
 

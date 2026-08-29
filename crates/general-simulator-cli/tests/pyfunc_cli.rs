@@ -1,6 +1,6 @@
 //! Runs the actual built `general-simulator` binary against a netlist using `kind=pyfunc` --
 //! a genuinely separate contract from `pyblock_cli.rs`'s own `kind=pyblock` test. Same dummy
-//! always-off MOSFET pattern those tests use, for the same reason, and the same "copy fixtures
+//! always-off ideal switch pattern those tests use, for the same reason, and the same "copy fixtures
 //! into a space-free temp dir" workaround `pyblock_cli.rs` needed on this machine.
 
 use std::path::PathBuf;
@@ -46,7 +46,7 @@ fn pyfunc_reproduces_the_truth_table_through_the_real_cli() {
          AQ kind=pyfunc path={} function=compute_action_qualifier_180_degree in=PHASE outputs=AQCTLA,AQCTLB\n",
         py_path.display()
     ));
-    let netlist = write_devices_file("V1 a 0 5\nD1 a b mosfetmodel\nR1 b 0 1000\n");
+    let netlist = write_devices_file("V1 a 0 5\nD1 a b idealswitchmodel\nR1 b 0 1000\n");
 
     let output = run(&[
         netlist.to_str().unwrap(),

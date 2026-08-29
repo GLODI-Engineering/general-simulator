@@ -2,8 +2,8 @@
 //! netlists exercising the new, optional `cscript_update`/Python `update()` function -- an
 //! end-to-end confirmation (real CLI, real netlist, real block graph) that output() staying
 //! read-only and update() being the sole place state advances actually works through the whole
-//! stack, not just `cscript-ffi`'s/`pyblock-ffi`'s own lower-level unit tests. No dummy MOSFET
-//! needed: the block graph runs whenever a block is declared, MOSFET or not.
+//! stack, not just `cscript-ffi`'s/`pyblock-ffi`'s own lower-level unit tests. No dummy ideal switch
+//! needed: the block graph runs whenever a block is declared, ideal switch or not.
 
 use std::path::PathBuf;
 use std::process::Command;

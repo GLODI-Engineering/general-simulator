@@ -5,7 +5,7 @@
 //! job and is meant to be wired to the others by the caller — an error signal is a `Sum`
 //! block's output, not something a controller computes internally, and a frequency-modulated
 //! PWM carrier is `Pid -> Gain -> Vco`, not a single fused "closed loop" function. See
-//! `dae-runtime`'s `closed_loop` module for how a circuit's MOSFET gates get wired to a chain
+//! `dae-runtime`'s `closed_loop` module for how a circuit's ideal-switch gates get wired to a chain
 //! of these blocks.
 //!
 //! Every dynamic block compiles to a [`StateSpace`] — the same descriptor-DAE shape

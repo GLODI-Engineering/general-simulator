@@ -7,7 +7,7 @@
 //!
 //! `general-mna` stamps each diode `k` as a *fixed* conductance `{k}_G` plus a per-instance
 //! current-source symbol `{k}_Ioff`. Fixing `{k}_G` at the diode's canonical reference slope
-//! `g_off` (see `pwl_devices::Diode::canonical`) makes the whole linear system `A0` genuinely
+//! `g_off` (see `pwl_devices::IdealDiode::canonical`) makes the whole linear system `A0` genuinely
 //! fixed — independent of which segment every diode ends up in — with every segment's actual
 //! nonlinearity pushed entirely into the `{k}_Ioff` terms via each diode's canonical
 //! `max(0, ...)` (`z`) decomposition. Since the system is linear in those `Ioff` terms, each
@@ -44,7 +44,7 @@ use general_spice_core::ast::Statement;
 use general_spice_core::Dialect;
 use lcp_solver::LcpError;
 use linsolve::{dense_solve, SingularMatrix};
-use pwl_devices::{Diode, Mosfet};
+use pwl_devices::{IdealDiode, IdealSwitch};
 
 pub use general_mna::SwitchState as GateState;
 pub use general_mna::TransientFunction;
@@ -149,9 +149,9 @@ pub enum DaeError {
     },
     /// A [`block_graph::GateBinding`] names a block that exists but isn't a
     /// [`block_graph::BlockKind::Sig2Voltage`] — the enforced physical/signal-domain boundary:
-    /// a MOSFET's gate is itself a voltage, so any signal driving it must first pass through
+    /// an ideal switch's gate is itself a voltage, so any signal driving it must first pass through
     /// the same `Sig2Voltage` converter a `V`-source's own magnitude uses, never a raw
-    /// `Pid`/`Vco`/`Hysteresis`/etc. block directly. `gate` is the MOSFET this binding belongs
+    /// `Pid`/`Vco`/`Hysteresis`/etc. block directly. `gate` is the ideal switch this binding belongs
     /// to; `block` and `found_kind` name the offending target and (for a human-readable
     /// message) what it actually is.
     GateTargetNotSig2Voltage {
@@ -205,7 +205,7 @@ pub enum DaeError {
 pub fn solve_dc(
     source: &str,
     dialect: Dialect,
-    diodes: &BTreeMap<String, Diode>,
+    diodes: &BTreeMap<String, IdealDiode>,
 ) -> Result<OperatingPoint, DaeError> {
     let statements = general_mna::parse_and_flatten(source, dialect).map_err(DaeError::Parse)?;
     let system = MnaBuilder::new(dialect)
@@ -293,11 +293,11 @@ enum Scheme<'a> {
 /// the previous step's result, rather than trying to foresee this step's mode before solving
 /// it — simpler, and sufficient for the well-behaved circuits this crate targets so far.
 ///
-/// No MOSFET/PWM support yet in the transient loop — see this crate's journal for why.
+/// No ideal switch/PWM support yet in the transient loop — see this crate's journal for why.
 pub fn simulate_transient(
     source: &str,
     dialect: Dialect,
-    diodes: &BTreeMap<String, Diode>,
+    diodes: &BTreeMap<String, IdealDiode>,
     x_initial: Option<&[f64]>,
     t_final: f64,
     step: TimeStep,
@@ -425,7 +425,7 @@ fn classify_segments(point: &OperatingPoint) -> Vec<Segment> {
 
 /// Detects trapezoidal "ringing": trapezoidal integration is A-stable (bounded) but not
 /// L-stable, so a very lightly damped mode (e.g. a switch node left nearly floating during
-/// MOSFET dead time, with only tiny leakage conductance) doesn't decay under it — it
+/// ideal switch dead time, with only tiny leakage conductance) doesn't decay under it — it
 /// oscillates at the Nyquist frequency (sign-flipping every single step) with roughly
 /// constant amplitude instead. Detected as three consecutive values of the same unknown
 /// alternating in sign (`x_prev_prev`, `x_prev`, `trial` share the outer two signs, opposite
@@ -434,7 +434,7 @@ fn classify_segments(point: &OperatingPoint) -> Vec<Segment> {
 /// shrinks, not sustains, in magnitude) or ordinary numerical noise near zero (excluded by
 /// the noise floor). Found and root-caused via `general-simulator`'s LLC validation
 /// (`crates/dae-runtime/examples/llc_validation.rs`): the switching node's voltage oscillated
-/// between roughly +/-3000V for the entire ~200ns MOSFET dead-time window every period, while
+/// between roughly +/-3000V for the entire ~200ns ideal switch dead-time window every period, while
 /// every other tracked quantity (notably the actual circuit output) stayed smooth and
 /// physically reasonable throughout — falling back to backward Euler (which has no such
 /// weakness) the instant this is detected fixes it, consistent with backward Euler already
@@ -465,7 +465,7 @@ fn is_ringing(x_prev_prev: &[f64], x_prev: &[f64], trial: &[f64]) -> bool {
 const RINGING_COOLDOWN_STEPS: u32 = 3;
 
 /// Solves one timestep, choosing between [`Scheme::Trapezoidal`] and [`Scheme::BackwardEuler`]
-/// the same lagging way [`simulate_transient`] and [`simulate_transient_with_mosfets`] both
+/// the same lagging way [`simulate_transient`] and [`simulate_transient_with_ideal_switches`] both
 /// need: `force_backward_euler` covers reasons known *before* solving (the very first step, a
 /// gate state that just changed, or an active [`RINGING_COOLDOWN_STEPS`] cooldown); a diode
 /// segment change and trapezoidal ringing (see [`is_ringing`]) are only detectable *after*
@@ -481,7 +481,7 @@ const RINGING_COOLDOWN_STEPS: u32 = 3;
 fn step_with_fallback(
     system: &MnaSystem,
     statements: &[Statement],
-    diodes: &BTreeMap<String, Diode>,
+    diodes: &BTreeMap<String, IdealDiode>,
     x_prev_prev: Option<&[f64]>,
     x_prev: &[f64],
     dt: f64,
@@ -537,30 +537,30 @@ fn step_with_fallback(
 }
 
 /// Solves the DC operating point of a netlist containing linear devices, ordinary `D` diodes
-/// (`diodes`), and any number of `Mosfet` instances (`mosfets`), each with its own known gate
+/// (`diodes`), and any number of `IdealSwitch` instances (`ideal_switches`), each with its own known gate
 /// state (see [`GateState`], a re-export of `general_mna::SwitchState` — the same concept: an
 /// exogenous, externally-decided mode, not something the LCP resolves).
 ///
-/// A gated-on MOSFET is stamped as a plain `r_on` switch (reusing `general-mna`'s existing
-/// switch mechanism — every gated-on MOSFET in one call shares `shared_r_on`, matching that
+/// A gated-on ideal switch is stamped as a plain `r_on` switch (reusing `general-mna`'s existing
+/// switch mechanism — every gated-on ideal switch in one call shares `shared_r_on`, matching that
 /// mechanism's own single-shared-resistance design; per-instance `Ron` is a possible future
-/// extension, not needed yet). A gated-off MOSFET is folded into the LCP exactly like an
-/// ordinary diode, using [`Mosfet::body_diode_for_drain_source_stamping`] (not `body_diode`
-/// directly) — see that method's own doc comment for why: the netlist declares a MOSFET's two
+/// extension, not needed yet). A gated-off ideal switch is folded into the LCP exactly like an
+/// ordinary diode, using [`IdealSwitch::body_diode_for_drain_source_stamping`] (not `body_diode`
+/// directly) — see that method's own doc comment for why: the netlist declares an ideal switch's two
 /// terminals in plain SPICE-conventional `(drain, source)` order, and the mirrored curve is
 /// what makes evaluating it against those nodes as-declared give the physically correct
-/// result. Each MOSFET element must still use device letter `'D'` in the netlist text (not
+/// result. Each ideal switch element must still use device letter `'D'` in the netlist text (not
 /// `'M'`) — see this crate's `docs`/journal for why.
-pub fn solve_dc_with_mosfets(
+pub fn solve_dc_with_ideal_switches(
     source: &str,
     dialect: Dialect,
-    diodes: &BTreeMap<String, Diode>,
-    mosfets: &BTreeMap<String, (Mosfet, GateState)>,
+    diodes: &BTreeMap<String, IdealDiode>,
+    ideal_switches: &BTreeMap<String, (IdealSwitch, GateState)>,
     shared_r_on: f64,
 ) -> Result<OperatingPoint, DaeError> {
     let statements = general_mna::parse_and_flatten(source, dialect).map_err(DaeError::Parse)?;
     let (system, all_diodes) =
-        build_with_mosfets(&statements, dialect, diodes, mosfets, shared_r_on)?;
+        build_with_ideal_switches(&statements, dialect, diodes, ideal_switches, shared_r_on)?;
     fold_and_solve(
         &system,
         &statements,
@@ -573,9 +573,9 @@ pub fn solve_dc_with_mosfets(
 }
 
 /// Runs a transient simulation of a netlist containing linear devices, ordinary `D` diodes,
-/// and any number of `Mosfet` instances whose gate state can vary over time — a PWM driver,
-/// unlike [`solve_dc_with_mosfets`]'s fixed per-call state. `gate_signal(name, t)` is called
-/// once per MOSFET per timestep to get that instance's [`GateState`] at time `t`; the caller
+/// and any number of `IdealSwitch` instances whose gate state can vary over time — a PWM driver,
+/// unlike [`solve_dc_with_ideal_switches`]'s fixed per-call state. `gate_signal(name, t)` is called
+/// once per ideal switch per timestep to get that instance's [`GateState`] at time `t`; the caller
 /// owns the PWM logic entirely (duty cycle, frequency, phase — this crate has no opinion).
 ///
 /// Because a gate state change means the *symbolic* `general-mna` system itself must be
@@ -586,25 +586,25 @@ pub fn solve_dc_with_mosfets(
 /// this crate's journal for the reasoning and what a future optimization would look like.
 ///
 /// Uses the same trapezoidal-with-backward-Euler-fallback policy as [`simulate_transient`],
-/// extended to also force backward Euler on any step where *any* MOSFET's gate state just
+/// extended to also force backward Euler on any step where *any* ideal switch's gate state just
 /// changed from the previous step — a gate transition is exactly the kind of topology change
 /// the architecture's "backward Euler after a mode change" policy exists for, arguably more so
 /// than a diode's segment change, since it's a real switching event a PWM converter circuit
 /// will trigger constantly.
 #[allow(clippy::too_many_arguments)]
-pub fn simulate_transient_with_mosfets(
+pub fn simulate_transient_with_ideal_switches(
     source: &str,
     dialect: Dialect,
-    diodes: &BTreeMap<String, Diode>,
-    mosfets: &BTreeMap<String, Mosfet>,
+    diodes: &BTreeMap<String, IdealDiode>,
+    ideal_switches: &BTreeMap<String, IdealSwitch>,
     gate_signal: impl Fn(&str, f64) -> GateState,
     shared_r_on: f64,
     x_initial: Option<&[f64]>,
     t_final: f64,
     dt: f64,
 ) -> Result<Vec<(f64, OperatingPoint)>, DaeError> {
-    let states_at = |t: f64| -> BTreeMap<String, (Mosfet, GateState)> {
-        mosfets
+    let states_at = |t: f64| -> BTreeMap<String, (IdealSwitch, GateState)> {
+        ideal_switches
             .iter()
             .map(|(name, m)| (name.clone(), (*m, gate_signal(name, t))))
             .collect()
@@ -612,7 +612,7 @@ pub fn simulate_transient_with_mosfets(
 
     let statements = general_mna::parse_and_flatten(source, dialect).map_err(DaeError::Parse)?;
     let (system0, _) =
-        build_with_mosfets(&statements, dialect, diodes, &states_at(0.0), shared_r_on)?;
+        build_with_ideal_switches(&statements, dialect, diodes, &states_at(0.0), shared_r_on)?;
     let mut x_prev = match x_initial {
         Some(x) => x.to_vec(),
         None => vec![0.0; system0.order()],
@@ -637,7 +637,7 @@ pub fn simulate_transient_with_mosfets(
         let forced = step_index == 0 || gate_changed || ringing_cooldown > 0;
 
         let (system, all_diodes) =
-            build_with_mosfets(&statements, dialect, diodes, &states, shared_r_on)?;
+            build_with_ideal_switches(&statements, dialect, diodes, &states, shared_r_on)?;
         let (point, used_backward_euler) = step_with_fallback(
             &system,
             &statements,
@@ -672,24 +672,24 @@ pub fn simulate_transient_with_mosfets(
     Ok(trace)
 }
 
-fn build_with_mosfets(
+fn build_with_ideal_switches(
     statements: &[Statement],
     dialect: Dialect,
-    diodes: &BTreeMap<String, Diode>,
-    mosfets: &BTreeMap<String, (Mosfet, GateState)>,
+    diodes: &BTreeMap<String, IdealDiode>,
+    ideal_switches: &BTreeMap<String, (IdealSwitch, GateState)>,
     shared_r_on: f64,
-) -> Result<(MnaSystem, BTreeMap<String, Diode>), DaeError> {
+) -> Result<(MnaSystem, BTreeMap<String, IdealDiode>), DaeError> {
     let mut options = BuildOptions {
         on_resistance: Expression::Constant(shared_r_on),
         ..BuildOptions::default()
     };
 
     let mut all_diodes = diodes.clone();
-    for (name, (mosfet, state)) in mosfets {
+    for (name, (switch, state)) in ideal_switches {
         match state {
             GateState::On => options.set_switch(name, GateState::On),
             GateState::Off => {
-                all_diodes.insert(name.clone(), mosfet.body_diode_for_drain_source_stamping());
+                all_diodes.insert(name.clone(), switch.body_diode_for_drain_source_stamping());
             }
         }
     }
@@ -704,7 +704,7 @@ fn build_with_mosfets(
 fn fold_and_solve(
     system: &MnaSystem,
     statements: &[Statement],
-    diodes: &BTreeMap<String, Diode>,
+    diodes: &BTreeMap<String, IdealDiode>,
     scheme: &Scheme,
     t: f64,
     extra_values: &BTreeMap<String, f64>,
@@ -817,7 +817,7 @@ fn fold_and_solve(
 
     struct DiodeInfo {
         name: String,
-        canonical: pwl_devices::DiodeCanonical,
+        canonical: pwl_devices::IdealDiodeCanonical,
         p: Option<usize>,
         n: Option<usize>,
         w: Vec<f64>,

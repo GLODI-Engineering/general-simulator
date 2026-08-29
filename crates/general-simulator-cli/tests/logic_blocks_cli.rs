@@ -1,6 +1,6 @@
 //! Runs the actual built `general-simulator` binary against a netlist demonstrating the real
 //! motivating use case for this whole block family: a sticky fault latch, aggregated from two
-//! independent trip conditions through an `or` gate, gating a real MOSFET through the existing
+//! independent trip conditions through an `or` gate, gating a real ideal switch through the existing
 //! `sig2voltage` Signal-to-PS boundary -- end-to-end confirmation (real CLI, real netlist, real
 //! electrical circuit) that logic blocks compose with the rest of the signal domain, not just
 //! with each other in isolation.
@@ -27,8 +27,9 @@ fn run(args: &[&str]) -> std::process::Output {
 }
 
 #[test]
-fn an_or_aggregated_fault_latch_stays_tripped_and_blocks_the_mosfet_even_after_the_fault_clears() {
-    let netlist = write_devices_file("V1 a 0 5\nD1 a b mosfetmodel\nR1 b 0 1000\n");
+fn an_or_aggregated_fault_latch_stays_tripped_and_blocks_the_ideal_switch_even_after_the_fault_clears(
+) {
+    let netlist = write_devices_file("V1 a 0 5\nD1 a b idealswitchmodel\nR1 b 0 1000\n");
     let devices = write_devices_file(
         "FAULT1 kind=pwc points=[[0,0],[0.001,1],[0.0015,0]]\n\
          FAULT2 kind=const value=0\n\
@@ -74,26 +75,29 @@ fn an_or_aggregated_fault_latch_stays_tripped_and_blocks_the_mosfet_even_after_t
             .unwrap_or_else(|| panic!("no row at t={t_target}"))
     };
 
-    // Before the fault: latch clear, MOSFET conducting (R_on=0.1 vs. R1=1000 -> V(b) close to
+    // Before the fault: latch clear, ideal switch conducting (R_on=0.1 vs. R1=1000 -> V(b) close to
     // 5V, a real voltage divider, not just "some nonzero value").
     let (latch_before, vb_before) = row_at(0.0005);
     assert_eq!(latch_before, 0.0);
     assert!(
         vb_before > 4.0,
-        "expected MOSFET conducting, V(b)={vb_before}"
+        "expected ideal switch conducting, V(b)={vb_before}"
     );
 
-    // During the fault pulse: latch trips, MOSFET blocks (V(b) collapses toward 0).
+    // During the fault pulse: latch trips, ideal switch blocks (V(b) collapses toward 0).
     let (latch_during, vb_during) = row_at(0.0010);
     assert_eq!(latch_during, 1.0);
-    assert!(vb_during < 0.1, "expected MOSFET blocked, V(b)={vb_during}");
+    assert!(
+        vb_during < 0.1,
+        "expected ideal switch blocked, V(b)={vb_during}"
+    );
 
     // After the fault pulse clears (FAULT1 back to 0): latch stays latched -- the whole point
-    // of a *sticky* fault latch -- MOSFET stays blocked, not just momentarily during the pulse.
+    // of a *sticky* fault latch -- ideal switch stays blocked, not just momentarily during the pulse.
     let (latch_after, vb_after) = row_at(0.0025);
     assert_eq!(latch_after, 1.0);
     assert!(
         vb_after < 0.1,
-        "expected MOSFET still blocked, V(b)={vb_after}"
+        "expected ideal switch still blocked, V(b)={vb_after}"
     );
 }

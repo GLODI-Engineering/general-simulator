@@ -17,13 +17,13 @@ use dae_runtime::{
     TimeStep,
 };
 use general_spice_core::Dialect;
-use pwl_devices::{Diode, Mosfet};
+use pwl_devices::{IdealDiode, IdealSwitch};
 
 #[test]
 fn block_prev_self_reference_builds_an_exact_discrete_accumulator() {
     let netlist = "V1 a 0 5\nR1 a 0 1k";
-    let mosfets: BTreeMap<String, Mosfet> = BTreeMap::new();
-    let diodes: BTreeMap<String, Diode> = BTreeMap::new();
+    let ideal_switches: BTreeMap<String, IdealSwitch> = BTreeMap::new();
+    let diodes: BTreeMap<String, IdealDiode> = BTreeMap::new();
     let gates = BTreeMap::new();
 
     let blocks = vec![
@@ -50,7 +50,7 @@ fn block_prev_self_reference_builds_an_exact_discrete_accumulator() {
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         &blocks,
         &gates,
         0.1,
@@ -77,8 +77,8 @@ fn block_prev_of_an_unevaluated_block_is_zero_before_the_first_step() {
     // graph resolves to 0.0 rather than an error -- the documented default, distinct from
     // `Signal::Block`'s behavior (an unknown *same-step* name is a hard error).
     let netlist = "V1 a 0 5\nR1 a 0 1k";
-    let mosfets: BTreeMap<String, Mosfet> = BTreeMap::new();
-    let diodes: BTreeMap<String, Diode> = BTreeMap::new();
+    let ideal_switches: BTreeMap<String, IdealSwitch> = BTreeMap::new();
+    let diodes: BTreeMap<String, IdealDiode> = BTreeMap::new();
     let gates = BTreeMap::new();
 
     let blocks = vec![BlockInstance {
@@ -91,7 +91,7 @@ fn block_prev_of_an_unevaluated_block_is_zero_before_the_first_step() {
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         &blocks,
         &gates,
         0.1,

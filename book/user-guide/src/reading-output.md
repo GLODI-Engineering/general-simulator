@@ -34,7 +34,7 @@ If a block's own output isn't resolved for a given point (a genuinely exceptiona
 normal path resolves every declared block every step), that column reads `NaN` for that row
 rather than the row being dropped or the column omitted. If the block-graph columns are missing
 *entirely* (only `t`/circuit-unknown columns appear), the block graph wasn't evaluated at all for
-this run — that only happens when the netlist declares neither a MOSFET nor a block, so there was
+this run — that only happens when the netlist declares neither an ideal switch nor a block, so there was
 nothing for a block-graph step to resolve (see the module doc comment on
 `crates/general-simulator-cli/src/main.rs`).
 

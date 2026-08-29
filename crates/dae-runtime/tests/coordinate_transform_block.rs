@@ -10,13 +10,13 @@ use std::collections::BTreeMap;
 
 use dae_runtime::{simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, TimeStep};
 use general_spice_core::Dialect;
-use pwl_devices::{Diode, Mosfet};
+use pwl_devices::{IdealDiode, IdealSwitch};
 
 #[test]
 fn coordinate_transform_block_exposes_all_outputs_by_name() {
     let netlist = "V1 a 0 5\nR1 a 0 1k";
-    let mosfets: BTreeMap<String, Mosfet> = BTreeMap::new();
-    let diodes: BTreeMap<String, Diode> = BTreeMap::new();
+    let ideal_switches: BTreeMap<String, IdealSwitch> = BTreeMap::new();
+    let diodes: BTreeMap<String, IdealDiode> = BTreeMap::new();
     let gates = BTreeMap::new();
 
     // Balanced-three-phase-at-theta=0 snapshot: a=1, b=-0.5, c=-0.5, matching
@@ -83,7 +83,7 @@ fn coordinate_transform_block_exposes_all_outputs_by_name() {
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         &blocks,
         &gates,
         0.1,

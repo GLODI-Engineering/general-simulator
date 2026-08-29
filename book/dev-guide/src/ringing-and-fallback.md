@@ -5,7 +5,7 @@
 ## What goes here
 - Why trapezoidal (A-stable, not L-stable) can let a lightly-damped mode ring at the Nyquist
   frequency (sign-flipping every step at roughly constant amplitude) instead of decaying — the
-  concrete case that found this: a MOSFET dead-time window, switch node oscillating ~+/-3000V
+  concrete case that found this: an ideal switch dead-time window, switch node oscillating ~+/-3000V
   while every other tracked quantity stayed smooth.
 - The exact detection heuristic: three consecutive samples of the same unknown alternating in
   sign, magnitude not shrinking, above a noise floor — and why each condition in that

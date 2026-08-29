@@ -4,7 +4,7 @@
 //! (`code/llc/`), used as a cross-simulator validation and timing comparison against ngspice
 //! and Xyce on the hardest topology in that experiment (two switches, a resonant tank near
 //! the switching frequency, and a coupled-inductor transformer via `general-mna`'s `K` stamp
-//! -- not just a single MOSFET and diode like the buck/boost cases). An example, not a `#[test]`
+//! -- not just a single ideal switch and diode like the buck/boost cases). An example, not a `#[test]`
 //! fixture: unlike buck/boost, there is no simple hand-derivable closed-form target for an
 //! LLC resonant converter's steady-state output, so this is exploratory validation against
 //! the other simulators' numbers, not a pass/fail assertion.
@@ -22,7 +22,7 @@
 //! During dead time (both switches gated off simultaneously, twice per switching period),
 //! node `vx` had essentially zero conductance to any reference from the switch stamps
 //! themselves (only the resonant tank's `Cr` coupled to it at all) -- a genuinely
-//! near-floating node. Under [`dae_runtime::simulate_transient_with_mosfets`]'s trapezoidal
+//! near-floating node. Under [`dae_runtime::simulate_transient_with_ideal_switches`]'s trapezoidal
 //! integration, that near-zero damping triggered classic **trapezoidal ringing** (A-stable
 //! but not L-stable: `V(vx)` oscillated between roughly +/-3000V, sign-flipping every single
 //! step, while every other tracked quantity stayed smooth throughout).
@@ -30,7 +30,7 @@
 //! Two things fixed this, one at each level:
 //! 1. **Circuit level (the actual fix)**: added the `Rs1`/`Cs1`, `Rs2`/`Cs2` RC snubbers --
 //!    the *same* ones the reference Xyce/ngspice decks already have and this translation had
-//!    originally dropped. A real MOSFET always has nonzero output capacitance (`Coss`); an
+//!    originally dropped. A real ideal switch always has nonzero output capacitance (`Coss`); an
 //!    RC snubber approximates it, giving the switching node a genuine charge-storage anchor
 //!    during dead time (the capacitor) plus real damping to dissipate the resulting ringing
 //!    (the resistor) -- exactly why real converters use snubbers in hardware, not just in
@@ -49,14 +49,14 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::time::Instant;
 
-use dae_runtime::{simulate_transient_with_mosfets, GateState};
+use dae_runtime::{simulate_transient_with_ideal_switches, GateState};
 use general_spice_core::Dialect;
-use pwl_devices::{Diode, Mosfet};
+use pwl_devices::{IdealDiode, IdealSwitch};
 
 fn main() {
     let netlist = "V1 vin 0 400\n\
-                    D1 vin vx mosfetmodel\n\
-                    D2 vx 0 mosfetmodel\n\
+                    D1 vin vx idealswitchmodel\n\
+                    D2 vx 0 idealswitchmodel\n\
                     Rs1 vin vx 1k\n\
                     Cs1 vin vx 1n\n\
                     Rs2 vx 0 1k\n\
@@ -79,14 +79,20 @@ fn main() {
     // their own in the reference decks): body-diode threshold set unreachably high so
     // gate=off means true full blocking, with a tiny nonzero g_off (see module doc, the
     // dead-time spike finding).
-    let ideal_switch = Mosfet::new(0.01, Diode::new(0.0, -1e6, 1e-6, 1e6, 0.0));
-    let mut mosfets = BTreeMap::new();
-    mosfets.insert("D1".to_string(), ideal_switch);
-    mosfets.insert("D2".to_string(), ideal_switch);
+    let ideal_switch = IdealSwitch::new(0.01, IdealDiode::new(0.0, -1e6, 1e-6, 1e6, 0.0));
+    let mut ideal_switches = BTreeMap::new();
+    ideal_switches.insert("D1".to_string(), ideal_switch);
+    ideal_switches.insert("D2".to_string(), ideal_switch);
     // D3/D4 are the real rectifier diodes (D_IDEAL: IS=1e-14, N=1, RS=10m); g_on=1/RS=100.
     let mut diodes = BTreeMap::new();
-    diodes.insert("D3".to_string(), Diode::new(0.0, -100.0, 0.0, 0.6, 100.0));
-    diodes.insert("D4".to_string(), Diode::new(0.0, -100.0, 0.0, 0.6, 100.0));
+    diodes.insert(
+        "D3".to_string(),
+        IdealDiode::new(0.0, -100.0, 0.0, 0.6, 100.0),
+    );
+    diodes.insert(
+        "D4".to_string(),
+        IdealDiode::new(0.0, -100.0, 0.0, 0.6, 100.0),
+    );
 
     // Matches the Xyce/ngspice decks' PULSE sources: S1 (D1) on for the first 4.8us of each
     // 10us period; S2 (D2) on for the complementary window, phase-shifted by 5us -- ~0.2us
@@ -107,11 +113,11 @@ fn main() {
     let t_final = 1e-3; // 100 switching periods, matches both reference decks
 
     let start = Instant::now();
-    let trace = simulate_transient_with_mosfets(
+    let trace = simulate_transient_with_ideal_switches(
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         gate_signal,
         0.01,
         None,

@@ -2,7 +2,7 @@
 //! end-to-end check that the grammar documented in `main.rs`'s module doc comment actually
 //! parses and reaches `dae-runtime`'s block graph, not just the `BlockKind` construction tested
 //! directly in `dae-runtime`'s own `coordinate_transform_block.rs`. Uses a dummy always-off
-//! MOSFET purely so `simulate_transient_with_blocks`'s code path is reached at all (same
+//! ideal switch purely so `simulate_transient_with_blocks`'s code path is reached at all (same
 //! convention as `tests/cscript.rs`) -- it never affects the observed values.
 
 use std::path::PathBuf;
@@ -42,7 +42,7 @@ fn run(args: &[&str]) -> String {
 
 #[test]
 fn clarke_and_clarkepark_blocks_appear_as_named_csv_columns() {
-    let netlist = fixture("cscript_gain.cir"); // V1 a 0 5 / D1 a b mosfetmodel / R1 b 0 1000
+    let netlist = fixture("cscript_gain.cir"); // V1 a 0 5 / D1 a b idealswitchmodel / R1 b 0 1000
     let devices = write_devices_file(
         "OFFVAL kind=const value=0\n\
          OFFGATE kind=sig2voltage in=OFFVAL\n\

@@ -13,7 +13,7 @@ use dae_runtime::{
     Signal, SignalValue, TimeStep,
 };
 use general_spice_core::Dialect;
-use pwl_devices::{Diode, Mosfet};
+use pwl_devices::{IdealDiode, IdealSwitch};
 
 fn run(
     blocks: &[BlockInstance],
@@ -21,14 +21,14 @@ fn run(
     dt: f64,
 ) -> Vec<(f64, BTreeMap<String, SignalValue>)> {
     let netlist = "V1 a 0 5\nR1 a 0 1k";
-    let mosfets: BTreeMap<String, Mosfet> = BTreeMap::new();
-    let diodes: BTreeMap<String, Diode> = BTreeMap::new();
+    let ideal_switches: BTreeMap<String, IdealSwitch> = BTreeMap::new();
+    let diodes: BTreeMap<String, IdealDiode> = BTreeMap::new();
     let gates = BTreeMap::new();
     simulate_transient_with_blocks(
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         blocks,
         &gates,
         0.1,
@@ -167,14 +167,14 @@ fn statespace_rejects_a_flattened_input_length_that_does_not_match_b() {
         },
     ];
     let netlist = "V1 a 0 5\nR1 a 0 1k";
-    let mosfets: BTreeMap<String, Mosfet> = BTreeMap::new();
-    let diodes: BTreeMap<String, Diode> = BTreeMap::new();
+    let ideal_switches: BTreeMap<String, IdealSwitch> = BTreeMap::new();
+    let diodes: BTreeMap<String, IdealDiode> = BTreeMap::new();
     let gates = BTreeMap::new();
     let err = simulate_transient_with_blocks(
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         &blocks,
         &gates,
         0.1,
@@ -266,14 +266,14 @@ fn matrix_gain_rejects_a_scalar_input() {
         },
     ];
     let netlist = "V1 a 0 5\nR1 a 0 1k";
-    let mosfets: BTreeMap<String, Mosfet> = BTreeMap::new();
-    let diodes: BTreeMap<String, Diode> = BTreeMap::new();
+    let ideal_switches: BTreeMap<String, IdealSwitch> = BTreeMap::new();
+    let diodes: BTreeMap<String, IdealDiode> = BTreeMap::new();
     let gates = BTreeMap::new();
     let err = simulate_transient_with_blocks(
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         &blocks,
         &gates,
         0.1,
@@ -332,14 +332,14 @@ fn sum_accepts_all_vector_or_all_scalar_but_rejects_a_mix() {
         },
     ];
     let netlist = "V1 a 0 5\nR1 a 0 1k";
-    let mosfets: BTreeMap<String, Mosfet> = BTreeMap::new();
-    let diodes: BTreeMap<String, Diode> = BTreeMap::new();
+    let ideal_switches: BTreeMap<String, IdealSwitch> = BTreeMap::new();
+    let diodes: BTreeMap<String, IdealDiode> = BTreeMap::new();
     let gates = BTreeMap::new();
     let err = simulate_transient_with_blocks(
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         &mixed,
         &gates,
         0.1,
@@ -371,14 +371,14 @@ fn pid_rejects_a_vector_error_input() {
         },
     ];
     let netlist = "V1 a 0 5\nR1 a 0 1k";
-    let mosfets: BTreeMap<String, Mosfet> = BTreeMap::new();
-    let diodes: BTreeMap<String, Diode> = BTreeMap::new();
+    let ideal_switches: BTreeMap<String, IdealSwitch> = BTreeMap::new();
+    let diodes: BTreeMap<String, IdealDiode> = BTreeMap::new();
     let gates = BTreeMap::new();
     let err = simulate_transient_with_blocks(
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         &blocks,
         &gates,
         0.1,

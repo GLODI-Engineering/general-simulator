@@ -33,7 +33,7 @@ fn run(args: &[&str]) -> std::process::Output {
 
 #[test]
 fn probe_reads_a_node_voltage_through_the_real_parser() {
-    let netlist = fixture("cscript_gain.cir"); // V1 a 0 5 / D1 a b mosfetmodel / R1 b 0 1000
+    let netlist = fixture("cscript_gain.cir"); // V1 a 0 5 / D1 a b idealswitchmodel / R1 b 0 1000
     let devices = write_devices_file(
         "OFFVAL kind=const value=0\n\
          OFFGATE kind=sig2voltage in=OFFVAL\n\
@@ -137,7 +137,7 @@ fn sig2voltage_wrapper_makes_gate_block_work() {
 
 #[test]
 fn sig2voltage_drives_a_voltage_source_via_its_own_literal_value_field() {
-    // A dummy always-off MOSFET reaches the block-graph code path; the real action is CMD_V
+    // A dummy always-off ideal switch reaches the block-graph code path; the real action is CMD_V
     // driving V1's own magnitude directly, checked against Ohm's law on a pure resistive
     // divider (V(a) must equal CMD's own commanded value exactly).
     let devices = write_devices_file(
@@ -147,7 +147,7 @@ fn sig2voltage_drives_a_voltage_source_via_its_own_literal_value_field() {
          CMD kind=const value=7\n\
          CMD_V kind=sig2voltage in=CMD\n",
     );
-    let netlist_path = write_devices_file("V1 a 0 CMD_V\nD1 a b mosfetmodel\nR1 b 0 1000\n");
+    let netlist_path = write_devices_file("V1 a 0 CMD_V\nD1 a b idealswitchmodel\nR1 b 0 1000\n");
 
     let output = run(&[
         netlist_path.to_str().unwrap(),

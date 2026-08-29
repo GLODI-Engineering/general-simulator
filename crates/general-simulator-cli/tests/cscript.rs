@@ -2,10 +2,10 @@
 //! the `.c` fixtures in `tests/fixtures/` into real shared libraries at test time (via the
 //! system `cc`) -- an end-to-end check through the real CLI parser and `dae-runtime`'s block
 //! graph, not just `cscript-ffi`'s own lower-level unit tests. Both fixture netlists use a
-//! dummy always-off MOSFET (`gate=block` reading a `Const(0)` wrapped in `sig2voltage`) purely so
+//! dummy always-off ideal switch (`gate=block` reading a `Const(0)` wrapped in `sig2voltage`) purely so
 //! `simulate_transient_with_blocks`'s code path
 //! is reached at all -- `general-simulator-cli` only evaluates the block graph when at least one
-//! MOSFET is declared (see `main.rs`'s `run()`); the MOSFET being off never affects R1/the
+//! ideal switch is declared (see `main.rs`'s `run()`); the ideal switch being off never affects R1/the
 //! observed cscript output.
 
 use std::path::PathBuf;

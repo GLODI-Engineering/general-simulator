@@ -27,7 +27,7 @@ fn run(args: &[&str]) -> std::process::Output {
         .expect("failed to run general-simulator binary")
 }
 
-const DUMMY_MOSFET: &str = "DDUMMY dummy_a dummy_b mosfetmodel\n\
+const DUMMY_IDEAL_SWITCH: &str = "DDUMMY dummy_a dummy_b idealswitchmodel\n\
      DOFFVAL kind=const value=0\n\
      DOFFGATE kind=sig2voltage in=DOFFVAL\n\
      DDUMMY kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 gate=block ctrl=DOFFGATE\n\
@@ -51,7 +51,7 @@ fn statespace_a_b_c_parse_as_python_lists_and_match_hand_derived_rc_response() {
     let netlist = write_netlist(
         "statespace",
         &format!(
-            "{DUMMY_MOSFET}V1 a 0 5\nR1 a 0 1000\n\
+            "{DUMMY_IDEAL_SWITCH}V1 a 0 5\nR1 a 0 1000\n\
              U kind=const value=1\n\
              Y kind=statespace a=[[-1000]] b=[1000] c=[1] d=0 in=U\n"
         ),
@@ -103,7 +103,7 @@ fn statespace_mimo_b_c_matrices_parse_and_csv_columns_expand_per_element() {
     let netlist = write_netlist(
         "statespace-mimo",
         &format!(
-            "{DUMMY_MOSFET}V1 a 0 5\nR1 a 0 1000\n\
+            "{DUMMY_IDEAL_SWITCH}V1 a 0 5\nR1 a 0 1000\n\
              U1 kind=const value=2\n\
              U2 kind=const value=-1\n\
              Y kind=statespace a=[[0,0],[0,0]] b=[[1,0],[0,1]] c=[[1,0],[0,1]] \
@@ -162,7 +162,7 @@ fn tf_num_den_parse_as_python_lists_and_match_statespace_on_the_same_pole() {
     let netlist = write_netlist(
         "tf",
         &format!(
-            "{DUMMY_MOSFET}V1 a 0 5\nR1 a 0 1000\n\
+            "{DUMMY_IDEAL_SWITCH}V1 a 0 5\nR1 a 0 1000\n\
              U kind=const value=1\n\
              Y kind=tf num=[1000] den=[1,1000] in=U\n"
         ),
@@ -208,7 +208,7 @@ fn table_points_parse_as_a_python_list_of_xy_pairs_and_interpolate_correctly() {
     let netlist = write_netlist(
         "table",
         &format!(
-            "{DUMMY_MOSFET}V1 a 0 5\nR1 a 0 1000\n\
+            "{DUMMY_IDEAL_SWITCH}V1 a 0 5\nR1 a 0 1000\n\
              X kind=const value=1.5\n\
              Y kind=table points=[[0,0],[1,10],[2,20]] in=X\n"
         ),
@@ -240,7 +240,7 @@ fn old_bare_scalar_matrix_syntax_is_rejected_with_a_clear_error() {
     let netlist = write_netlist(
         "old-matrix",
         &format!(
-            "{DUMMY_MOSFET}V1 a 0 5\nR1 a 0 1000\n\
+            "{DUMMY_IDEAL_SWITCH}V1 a 0 5\nR1 a 0 1000\n\
              U kind=const value=1\n\
              Y kind=statespace a=-1000 b=1000 c=1 d=0 in=U\n"
         ),
@@ -270,7 +270,7 @@ fn old_colon_pair_points_syntax_is_rejected_with_a_clear_error() {
     let netlist = write_netlist(
         "old-points",
         &format!(
-            "{DUMMY_MOSFET}V1 a 0 5\nR1 a 0 1000\n\
+            "{DUMMY_IDEAL_SWITCH}V1 a 0 5\nR1 a 0 1000\n\
              X kind=const value=1.5\n\
              Y kind=table points=0:0,1:10,2:20 in=X\n"
         ),
@@ -304,7 +304,7 @@ fn nan_in_a_list_field_is_a_clean_error_not_a_process_panic() {
     let netlist = write_netlist(
         "nan-points",
         &format!(
-            "{DUMMY_MOSFET}V1 a 0 5\nR1 a 0 1000\n\
+            "{DUMMY_IDEAL_SWITCH}V1 a 0 5\nR1 a 0 1000\n\
              REF kind=pwc points=[[nan,0],[1,2]]\n"
         ),
     );

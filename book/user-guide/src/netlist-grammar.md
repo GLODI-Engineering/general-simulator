@@ -9,7 +9,7 @@
 - `--devices <file>` as the (uncommon) alternative to the single-file convention, and why the
   single-file form is the default recommendation.
 - `#`/`;` as device-file-only comments, distinct from SPICE `*` comments.
-- One shared MOSFET constraint worth calling out up front: every MOSFET in one run must share
+- One shared ideal switch constraint worth calling out up front: every ideal switch in one run must share
   the same `r_on` (a `dae-runtime` limitation, not a netlist typo if two different values seem
   to silently collapse to one).
 - This chapter is the *index* into the detail chapters (`pwl-devices.md`, `gate-bindings.md`,

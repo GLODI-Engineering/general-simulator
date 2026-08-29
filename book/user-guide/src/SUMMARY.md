@@ -11,7 +11,7 @@
 # The netlist and device-file grammar
 
 - [Grammar overview](netlist-grammar.md)
-- [PWL devices: diodes and MOSFETs](pwl-devices.md)
+- [PWL devices: diodes and ideal switches](pwl-devices.md)
 - [Gate bindings (fixed, PWM, block-driven)](gate-bindings.md)
 - [Signals: `meas:`, `prev:`, and same-step references](signals.md)
 

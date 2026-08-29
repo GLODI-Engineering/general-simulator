@@ -16,9 +16,9 @@
   linear network."
 - One fully worked small example (2 diodes) computed by hand, matching an existing test fixture
   — readers should be able to check the book's own arithmetic against
-  `crates/pwl-devices/tests/two_diode_circuit.rs`.
-- Close with: this is why MOSFET *channel* switching can't reuse the same trick (forward-link
-  to `switch-model-mosfets.md` rather than re-arguing it here).
+  `crates/pwl-devices/tests/two_ideal_diode_circuit.rs`.
+- Close with: this is why ideal switch *channel* switching can't reuse the same trick (forward-link
+  to `switch-model-ideal-switch.md` rather than re-arguing it here).
 
 ## Source material to adapt from
 - `crates/dae-runtime/src/lib.rs`'s own module doc comment (lines ~1-25) — this *is* the

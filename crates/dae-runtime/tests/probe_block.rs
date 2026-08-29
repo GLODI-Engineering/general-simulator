@@ -12,17 +12,17 @@ use dae_runtime::{
     simulate_transient_with_blocks, BlockInstance, BlockKind, ProbeTarget, TimeStep,
 };
 use general_spice_core::Dialect;
-use pwl_devices::{Diode, Mosfet};
+use pwl_devices::{IdealDiode, IdealSwitch};
 
 #[test]
 fn probe_voltage_and_current_match_hand_derived_rc_charging_curve() {
-    // R1=1k, C1=1uF -> tau=1ms. No MOSFET needed at all -- calling
+    // R1=1k, C1=1uF -> tau=1ms. No ideal switch needed at all -- calling
     // simulate_transient_with_blocks directly (not through the CLI, which only invokes the
-    // block graph when at least one MOSFET is declared) runs the block graph fine with an
-    // empty mosfets map.
+    // block graph when at least one ideal switch is declared) runs the block graph fine with an
+    // empty ideal_switches map.
     let netlist = "V1 a 0 10\nR1 a vout 1000\nC1 vout 0 1e-6";
-    let mosfets: BTreeMap<String, Mosfet> = BTreeMap::new();
-    let diodes: BTreeMap<String, Diode> = BTreeMap::new();
+    let ideal_switches: BTreeMap<String, IdealSwitch> = BTreeMap::new();
+    let diodes: BTreeMap<String, IdealDiode> = BTreeMap::new();
     let gates = BTreeMap::new();
 
     let blocks = vec![
@@ -49,7 +49,7 @@ fn probe_voltage_and_current_match_hand_derived_rc_charging_curve() {
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         &blocks,
         &gates,
         0.1,

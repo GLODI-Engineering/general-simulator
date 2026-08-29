@@ -7,7 +7,7 @@
   scannable than the journal (which is chronological narrative), organized by topic instead of
   by date. Candidates already well-documented enough to write up directly:
   - PWL segments via LCP vs. Newton + voltage limiting.
-  - MOSFET channel state: exogenous command vs. LCP-resolved (`docs/journal/2026-08.md`,
+  - Ideal-switch channel state: exogenous command vs. LCP-resolved (`docs/journal/2026-08.md`,
     "Robustness Q&A...", Q5).
   - Block-graph execution order: derived topological sort vs. manual declaration order
     (same journal entry, Q1/Q2).
@@ -15,9 +15,9 @@
     special resolution rule (why the one-sample-delay design was preferred).
   - Per-block RK4 vs. one fused ODE across the whole block graph (once that question's answer
     exists — see `block-graph-rk4.md`).
-  - Bench-scale vs. mains-scale for the PFC switching demo, and *not* forcing a "unify MOSFET
-    switching" fix under time pressure — decisions made explicitly, not silently, worth
-    recording as decisions even when the underlying problem stayed open.
+  - Bench-scale vs. mains-scale for the PFC switching demo, and *not* forcing a "unify
+    ideal-switch switching" fix under time pressure — decisions made explicitly, not silently,
+    worth recording as decisions even when the underlying problem stayed open.
   - **Enforced physical/signal-domain converters, implemented 2026-08-21** (`BlockKind::Probe`/
     `Sig2Gate`/`Sig2Voltage`/`Sig2Current`, `docs/journal/2026-08.md` for the full account) —
     no longer an open question, this entry is now `## Physical/signal-domain converters` proper
@@ -26,7 +26,7 @@
     enforced at the netlist/`dae-runtime` level (not just a UI convention) so a violation is a build-time
     error (`DaeError::GateTargetNotSig2Gate`/`SourceNotSig2PhysicalConverter`) regardless of
     which tool produced the netlist. **Revised 2026-08-27**: `Sig2Gate` was removed and merged
-    into `Sig2Voltage` (a MOSFET's gate is itself a voltage, not a distinct discrete-actuation
+    into `Sig2Voltage` (an ideal switch's gate is itself a voltage, not a distinct discrete-actuation
     signal domain — no dedicated gate-only converter needed); `DaeError::GateTargetNotSig2Gate`
     was renamed `GateTargetNotSig2Voltage` to match. Two converters remain (`Sig2Voltage`/
     `Sig2Current`), not three.

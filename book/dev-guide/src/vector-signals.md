@@ -197,7 +197,7 @@ lowest-risk place to add real vector-signal value.
 
 **`Probe`, `Sig2Voltage`, `Sig2Current`** — each is tied to exactly one circuit quantity (one
 node voltage, one branch current, one source's own magnitude — `Sig2Voltage` also covers a
-MOSFET gate's on/off state, no separate gate-only converter exists). There is no vector
+ideal switch gate's on/off state, no separate gate-only converter exists). There is no vector
 generalization that means anything physically here. `Sig2Voltage`/`Sig2Current` **reject a
 `Vector` input** with a clear error; `Probe` has zero inputs and stays scalar-output-only.
 

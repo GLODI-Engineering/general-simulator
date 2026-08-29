@@ -33,16 +33,16 @@
 //! rarer case of sharing one controller/PWL-parameter file across several netlists, but is not
 //! the default or the expected common case.
 //!
-//! Every MOSFET must declare the same `r_on` — `dae-runtime`'s switch mechanism uses one shared
-//! on-resistance per call (see `dae_runtime::solve_dc_with_mosfets`'s doc comment).
+//! Every ideal switch must declare the same `r_on` — `dae-runtime`'s switch mechanism uses one shared
+//! on-resistance per call (see `dae_runtime::solve_dc_with_ideal_switches`'s doc comment).
 //!
 //! ## Wiring a controller into a gate
 //!
 //! **There is no separate "closed-loop mode," and no non-block-driven gate at all.** Every
-//! MOSFET's gate is `gate=block ctrl=<sig2voltage-name>` — always resolved the same way, every
+//! ideal switch's gate is `gate=block ctrl=<sig2voltage-name>` — always resolved the same way, every
 //! step, by reading the named block's current output (`>= 0.5` means on). Even a permanently-on
 //! or permanently-off gate is an ordinary block (`kind=const value=1`, wrapped in a
-//! `kind=sig2voltage` like any other gate target — a MOSFET's gate is itself a voltage, so it
+//! `kind=sig2voltage` like any other gate target — an ideal switch's gate is itself a voltage, so it
 //! shares the same converter a `V`-source's own magnitude uses, not a dedicated gate-only
 //! type), not a special fixed-state escape hatch — see "Physical/signal-domain converters"
 //! below for why every `ctrl=` target must specifically be a `sig2voltage` converter.
@@ -90,7 +90,7 @@
 //! the netlist level (a companion UI is intended to enforce the same rule visually later; this
 //! grammar is the ground truth). There are two converters, one per
 //! crossing direction (read vs. write) — the write direction, `sig2voltage`/`sig2current`,
-//! covers both a gate command and a source's own magnitude, since a MOSFET's gate is itself a
+//! covers both a gate command and a source's own magnitude, since an ideal switch's gate is itself a
 //! voltage rather than a distinct discrete-actuation signal domain:
 //!
 //! - `kind=probe node=<name>` (reads `V(node)`) or `kind=probe branch=<name>` (reads
@@ -99,8 +99,8 @@
 //!   afterward exactly like any other block's, e.g. `ERR kind=sum inputs=REF,VOUT_PROBE
 //!   signs=1,-1` where `VOUT_PROBE kind=probe node=vout` was declared earlier.
 //! - `kind=sig2voltage in=<signal>` / `kind=sig2current in=<signal>` are the **only** legal way a
-//!   signal-domain block drives an independent voltage/current source's own magnitude, *or* a
-//!   MOSFET's gate. For a source: name the converter block directly as that source's own literal
+//!   signal-domain block drives an independent voltage/current source's own magnitude, *or* an
+//!   ideal switch's gate. For a source: name the converter block directly as that source's own literal
 //!   value in the netlist, e.g. `V1 a 0 VDRV` where `VDRV kind=sig2voltage in=CTRL` was declared
 //!   earlier (`general-mna` already accepts a bare symbol there; no change was needed on that
 //!   side). `V` sources need `sig2voltage`, `I` sources need `sig2current` — a mismatch, or
@@ -276,7 +276,7 @@
 //!
 //! `--mode dc` cannot resolve any gate at all now that every gate is block-driven: a DC
 //! operating point has no notion of the time-stepped state a `Pid`/`Vco`/`Pwm`/`PhaseShiftPwm`
-//! block carries, so any netlist with a MOSFET needs `--mode transient`.
+//! block carries, so any netlist with an ideal switch needs `--mode transient`.
 //!
 //! See `internal-archive/experiments/elspice-pwl-llc-closed-loop-vs-xyce-ngspice/`
 //! and `experiments/elspice-pwl-buck-underdamped-resonance-filter/` for full worked examples
@@ -297,7 +297,7 @@ use dae_runtime::{
     BlockKind, GateBinding, TimeStep,
 };
 use general_spice_core::Dialect;
-use pwl_devices::{Diode, Mosfet};
+use pwl_devices::{IdealDiode, IdealSwitch};
 
 /// The waveform this run produced, in a serialization-agnostic shape: `headers[0]` is always the
 /// time/sweep column, `rows[point][column]` mirrors it. Both `print_csv` (the existing, default
@@ -475,9 +475,13 @@ fn run() -> Result<(), String> {
     // complete, see below.
     let (devices_for_build, measurements) = measure::extract(&devices_source, dialect)
         .map_err(|e| format!("parsing kind=measure declarations: {e}"))?;
+    // `general_mna::System`'s field is still literally named `mosfets` -- `general-mna` is a
+    // read-only sibling repo (see this repo's `AGENTS.md`) that was out of scope for the rename
+    // that introduced `ideal_switches`/`IdealSwitch` in this crate; rebind it to the new name
+    // here at the boundary instead.
     let general_mna::System {
         diodes,
-        mosfets,
+        mosfets: ideal_switches,
         gates,
         blocks,
         shared_r_on,
@@ -486,12 +490,15 @@ fn run() -> Result<(), String> {
         .map_err(|e| format!("parsing device/block declarations: {e}"))?;
 
     let (waveform, plot_name) = if mode == "dc" {
-        let point = if mosfets.is_empty() {
+        let point = if ideal_switches.is_empty() {
             solve_dc(&netlist, dialect, &diodes).map_err(|e| format!("{e:?}"))?
         } else {
             // Every gate is block-driven (gate=block) -- a DC operating point has no notion of
-            // a block's time-stepped state, so any MOSFET at all makes --mode dc unsupported.
-            let name = mosfets.keys().next().expect("mosfets is non-empty here");
+            // a block's time-stepped state, so any ideal switch at all makes --mode dc unsupported.
+            let name = ideal_switches
+                .keys()
+                .next()
+                .expect("ideal_switches is non-empty here");
             return Err(format!(
                 "device '{name}': every gate is block-driven (gate=block), which needs \
                  --mode transient, not 'dc' (a DC operating point has no notion of a block's \
@@ -510,15 +517,15 @@ fn run() -> Result<(), String> {
             "DC transfer characteristic",
         )
     } else if mode == "transient" {
-        // Either a MOSFET or a block alone is enough to need the block-graph-aware path below:
-        // a block-only netlist (no MOSFET at all, e.g. a pure controller/signal-processing
-        // study with nothing to gate) must still run its block graph, and a MOSFET-only netlist
-        // (no blocks) already did. `run_transient_with_mosfets`/`simulate_transient_with_blocks`
-        // itself tolerates empty `mosfets`/`gates` maps and an empty `blocks` slice equally well
-        // (see its own doc comment) -- only the truly block-free, MOSFET-free case still uses
+        // Either an ideal switch or a block alone is enough to need the block-graph-aware path below:
+        // a block-only netlist (no ideal switch at all, e.g. a pure controller/signal-processing
+        // study with nothing to gate) must still run its block graph, and an ideal switch-only netlist
+        // (no blocks) already did. `run_transient_with_ideal_switches`/`simulate_transient_with_blocks`
+        // itself tolerates empty `ideal_switches`/`gates` maps and an empty `blocks` slice equally well
+        // (see its own doc comment) -- only the truly block-free, ideal switch-free case still uses
         // the plain `simulate_transient` path, since that's the one case with nothing for a
         // block-graph step to resolve at all.
-        let waveform = if mosfets.is_empty() && blocks.is_empty() {
+        let waveform = if ideal_switches.is_empty() && blocks.is_empty() {
             let trace = simulate_transient(&netlist, dialect, &diodes, None, t_final, step)
                 .map_err(|e| format!("{e:?}"))?;
             let headers = match trace.first() {
@@ -539,11 +546,11 @@ fn run() -> Result<(), String> {
                 .collect();
             Waveform { headers, rows }
         } else {
-            run_transient_with_mosfets(
+            run_transient_with_ideal_switches(
                 &netlist,
                 dialect,
                 &diodes,
-                &mosfets,
+                &ideal_switches,
                 &gates,
                 &blocks,
                 shared_r_on,
@@ -607,20 +614,20 @@ fn write_raw_file(
 
 /// `--mode dc` has no notion of a block's time-stepped state (no transient loop runs at all),
 /// but every gate is now block-driven (`gate=block ctrl=<name>`, enforced by `general_mna::
-/// build_system` itself) — so a `.op`-style DC operating point with any MOSFET present has
+/// build_system` itself) — so a `.op`-style DC operating point with any ideal switch present has
 /// nothing to resolve its gate from and is unconditionally unsupported, not just for the cases
-/// that used to need a block. `--mode transient` with at least one MOSFET *or* at least one
-/// block declared (a MOSFET-free block-graph study is just as legitimate as a block-free
-/// MOSFET circuit — see this file's own `main` for the exact condition): resolves every gate
+/// that used to need a block. `--mode transient` with at least one ideal switch *or* at least one
+/// block declared (an ideal switch-free block-graph study is just as legitimate as a block-free
+/// ideal switch circuit — see this file's own `main` for the exact condition): resolves every gate
 /// (always block-driven) via [`dae_runtime::simulate_transient_with_blocks`], which tolerates
-/// an empty `mosfets`/`gates` map or an empty `blocks` slice equally well — see this file's
+/// an empty `ideal_switches`/`gates` map or an empty `blocks` slice equally well — see this file's
 /// module doc comment for why there's no separate mode for the block-driven case.
 #[allow(clippy::too_many_arguments)]
-fn run_transient_with_mosfets(
+fn run_transient_with_ideal_switches(
     netlist: &str,
     dialect: Dialect,
-    diodes: &BTreeMap<String, Diode>,
-    mosfets: &BTreeMap<String, Mosfet>,
+    diodes: &BTreeMap<String, IdealDiode>,
+    ideal_switches: &BTreeMap<String, IdealSwitch>,
     gates: &BTreeMap<String, GateBinding>,
     blocks: &[BlockInstance],
     shared_r_on: f64,
@@ -631,7 +638,7 @@ fn run_transient_with_mosfets(
         netlist,
         dialect,
         diodes,
-        mosfets,
+        ideal_switches,
         blocks,
         gates,
         shared_r_on,

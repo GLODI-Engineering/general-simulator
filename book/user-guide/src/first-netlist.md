@@ -4,7 +4,7 @@
 
 ## What goes here
 - Walk one tiny, complete example end to end: an RC circuit through a diode, or a single
-  MOSFET half-bridge — something already hand-verified in the test suite, not a fresh example.
+  ideal-switch half-bridge — something already hand-verified in the test suite, not a fresh example.
 - Show the *whole* file, annotated: ordinary SPICE element lines, then the `*`-prefixed
   `kind=...` comment lines, explaining the one-file convention (this file is valid SPICE to
   any other tool; `general-simulator-cli` additionally reads the `kind=` comments).

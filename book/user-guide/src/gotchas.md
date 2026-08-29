@@ -5,8 +5,8 @@
 ## What goes here
 - One entry per real, reproducible trap — same discipline as `docs/gotchas/`: symptom, cause,
   fix. Candidates already known:
-  - MOSFET node order is `(drain, source)`, not `(source, drain)`.
-  - Every MOSFET in one run must share `r_on`.
+  - Ideal-switch node order is `(drain, source)`, not `(source, drain)`.
+  - Every ideal switch in one run must share `r_on`.
   - `--mode dc` rejects block-driven gates.
   - Adaptive stepping needs `cscript_clone` on every `CScript` block.
   - A fixed PID anti-windup clamp sized for a final steady-state value can silently fail to

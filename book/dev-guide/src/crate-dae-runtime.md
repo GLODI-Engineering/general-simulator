@@ -7,7 +7,7 @@
   for piecewise-linear devices, plus compiling continuous blocks into descriptor-DAE fragments
   — netlist parsing stays in `general-spice-core`, linear-device MNA stamping stays in `general-mna`.
 - A map of the module split: `lib.rs` (diode-only transient loop, the core LCP fold),
-  `block_graph.rs` (MOSFET + block-graph transient loop, gate resolution, causality/cycles),
+  `block_graph.rs` (ideal switch + block-graph transient loop, gate resolution, causality/cycles),
   `step_control.rs` (adaptive stepping), `closed_loop.rs` (the lighter fixed-topology
   convenience), `topology.rs`, `linsolve.rs`.
 - Forward-reference every other chapter that already covers a piece of this crate in depth

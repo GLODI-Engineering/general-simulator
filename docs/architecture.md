@@ -40,8 +40,8 @@ combination of active segments across every PWL device in the circuit simultaneo
 finite pivoting pass — no continuous iteration, no clamping, no path-dependence. This is the
 same rigorous approach commercial piecewise-linear circuit solvers use.
 
-The MOSFET's four-way behavior (gate-state × current-sign) needs more than a single
-diode-style guard; the exact number of complementarity pairs per MOSFET instance is worked out
+The ideal switch's four-way behavior (gate-state × current-sign) needs more than a single
+diode-style guard; the exact number of complementarity pairs per ideal-switch instance is worked out
 concretely in Milestone 4 (see the repository's plan), not assumed here.
 
 ## One descriptor system for circuit and continuous blocks alike
@@ -93,14 +93,14 @@ initial conditions" — which only a just-completed backward-Euler-or-DC step gu
 trapezoidal otherwise. Verified by convergence order (halving `dt`, not comparing one-`dt`
 error magnitudes): backward Euler roughly halves error, trapezoidal roughly quarters it.
 
-`simulate_transient_with_mosfets` extends this to MOSFETs with a caller-supplied time-varying
+`simulate_transient_with_ideal_switches` extends this to ideal switches with a caller-supplied time-varying
 gate signal (PWM), rebuilding the symbolic `elspice-mna` system every step (a gate transition
 is a structural stamp change, not just a numeric one) and forcing backward Euler on any step
 whose gate states differ from the previous step's, on top of the existing diode-segment-change
 fallback.
 
 `dae_runtime::simulate_closed_loop` wires a `continuous-blocks` controller (a compiled `Pid`)
-into a real closed loop around a circuit's MOSFET gate(s), as a sampled-data co-simulation
+into a real closed loop around a circuit's ideal-switch gate(s), as a sampled-data co-simulation
 (controller reads the previous step's measured output, steps its own RK4 integrator, decides
 this step's gate states via a caller-supplied PWM comparator) rather than a fully implicit
 unified system — deliberately: this is how a real digital PID+PWM controller actually works,
@@ -206,7 +206,7 @@ this workspace — a cross-check, not a fresh derivation.
 
 All six original milestones, plus everything explicitly deferred from them, are now
 implemented. See the journal for what remains genuinely open (validation against Xyce/ngspice
-baselines, full converter benchmarks, per-instance MOSFET `Ron`, and the smaller scope notes
+baselines, full converter benchmarks, per-instance ideal-switch `Ron`, and the smaller scope notes
 scattered through each milestone's own entry).
 
 ## Numeric stack
@@ -239,12 +239,13 @@ a multi-pivot positive-definite case, a degenerate boundary case, a general
 solution-satisfies-its-own-definition sweep, and a genuinely infeasible case that correctly
 reports ray termination rather than fabricating an answer.
 
-`crates/pwl-devices` (Milestone 2) implements a 3-segment PWL diode via the Chua-Lin canonical
-decomposition described above. Verified two ways: the decomposition matches an independently
-written direct piecewise formula at every segment and both breakpoints
-(`src/diode.rs` unit tests), and a hand-built LCP for the PCNR paper's two-diode circuit
-(`tests/two_diode_circuit.rs`) matches two hand-derived operating points exactly — the first
-proof the whole approach reproduces a real circuit's answer with no Newton-Raphson anywhere.
+`crates/pwl-devices` (Milestone 2) implements a 3-segment PWL ideal diode (`IdealDiode`) via
+the Chua-Lin canonical decomposition described above. Verified two ways: the decomposition
+matches an independently written direct piecewise formula at every segment and both breakpoints
+(`src/ideal_diode.rs` unit tests), and a hand-built LCP for the PCNR paper's two-diode circuit
+(`tests/two_ideal_diode_circuit.rs`) matches two hand-derived operating points exactly — the
+first proof the whole approach reproduces a real circuit's answer with no Newton-Raphson
+anywhere.
 
 `crates/dae-runtime` (Milestone 3) closes the loop for diodes: `elspice-mna` was extended
 (sibling repo, commit `9d190db`) to stamp `'D'` elements as a fixed symbolic conductance plus a
@@ -256,16 +257,18 @@ variables including cross-coupling, substitute into the LCP). Verified by reprod
 Milestone 2's hand-derived two-diode numbers through real netlist parsing instead of a
 hand-typed `(M, q)` — see `crates/dae-runtime/tests/two_diode_via_netlist.rs`.
 
-`pwl_devices::Mosfet` (Milestone 4) needed **no further `elspice-mna` changes**: a gated-on
-MOSFET is a plain bidirectional resistor (reuses `elspice-mna`'s existing switch mechanism), a
-gated-off MOSFET falls back to its intrinsic body diode (reuses the `'D'` stamp and LCP fold
-unchanged, via `Mosfet::body_diode: Diode`). Gate state is exogenous — decided by the caller
-per timestep, not resolved by the LCP — so `dae-runtime::solve_dc_with_mosfets` just routes
+`pwl_devices::IdealSwitch` (Milestone 4; renamed from `Mosfet` — see `docs/journal/` — because
+"MOSFET" is reserved for a future, not-yet-implemented BSIM-style device model) needed **no
+further `elspice-mna` changes**: a gated-on ideal switch is a plain bidirectional resistor
+(reuses `elspice-mna`'s existing switch mechanism), a gated-off ideal switch falls back to its
+intrinsic body diode (reuses the `'D'` stamp and LCP fold unchanged, via
+`IdealSwitch::body_diode: IdealDiode`). Gate state is exogenous — decided by the caller per
+timestep, not resolved by the LCP — so `dae-runtime::solve_dc_with_ideal_switches` just routes
 each instance to whichever mechanism its current gate state calls for. Getting the body
-diode's polarity right reuses `Diode` completely unchanged via a node-order convention
-(`(source, drain)`, not the datasheet `(drain, source)`) — see `Mosfet`'s doc comment.
-MOSFETs must use device letter `'D'` in netlist text (not `'M'`, which `spice-core` correctly
-enforces real 4-node SPICE grammar for).
+diode's polarity right reuses `IdealDiode` completely unchanged via a node-order convention
+(`(source, drain)`, not the datasheet `(drain, source)`) — see `IdealSwitch`'s doc comment.
+Ideal switches must use device letter `'D'` in netlist text (not `'M'`, which `spice-core`
+correctly enforces real 4-node SPICE grammar for).
 
 `crates/continuous-blocks` (Milestone 5) implements the transfer-function/state-space/PID/
 integrator/math-op compilation described above, standalone and verified against hand-derived
@@ -283,7 +286,7 @@ backward Euler after the mandatory first step and after any LCP-resolved mode ch
 verified against an algebraic circuit's exact DC answer at every step, a plain RC charge curve,
 an RC-through-a-diode circuit against a hand-derived closed-form solution combining both
 mechanisms, and directly by convergence order (backward Euler ~halves error as `dt` halves,
-trapezoidal ~quarters it). `simulate_transient_with_mosfets`, `simulate_closed_loop`, and
+trapezoidal ~quarters it). `simulate_transient_with_ideal_switches`, `simulate_closed_loop`, and
 `elspice-pwl-cli` (all described in "Timestep loop" above) closed every gap this paragraph
 used to note as still open — see the journal for the full account, including the two-sided
 anti-windup fix and the cross-simulator validation against Xyce/ngspice on buck, boost

@@ -26,12 +26,12 @@ fn run(args: &[&str]) -> std::process::Output {
         .expect("failed to run general-simulator binary")
 }
 
-/// A permanently-off MOSFET on its own isolated (grounded-through-1e9-ohm) node pair, wired to
+/// A permanently-off ideal switch on its own isolated (grounded-through-1e9-ohm) node pair, wired to
 /// nothing else in the real circuit -- purely so `--mode transient` selects the block-graph-
-/// enabled solver path (gated on at least one declared MOSFET; none of these netlists have a
+/// enabled solver path (gated on at least one declared ideal switch; none of these netlists have a
 /// real one). See `general-simulator-cli`'s own `cscript.rs` test for the general convention, and
 /// `regulators.cir` (`internal-archive` repo) for this exact isolated-dummy variant.
-const DUMMY_MOSFET: &str = "DDUMMY dummy_a dummy_b mosfetmodel\n\
+const DUMMY_IDEAL_SWITCH: &str = "DDUMMY dummy_a dummy_b idealswitchmodel\n\
      DOFFVAL kind=const value=0\n\
      DOFFGATE kind=sig2voltage in=DOFFVAL\n\
      DDUMMY kind=mosfet r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 gate=block ctrl=DOFFGATE\n\
@@ -59,7 +59,7 @@ fn sinwave_and_sin_coexist_in_one_file_without_collision() {
     // plain constant -- both must resolve to their own distinct BlockKind, not shadow one
     // another, even though their CLI keywords differ only by the "wave" suffix.
     let netlist = write_netlist(&format!(
-        "{DUMMY_MOSFET}V1 a 0 SRC_V\nR1 a 0 1000\n\
+        "{DUMMY_IDEAL_SWITCH}V1 a 0 SRC_V\nR1 a 0 1000\n\
          SRC kind=sinwave v0=0 va=5 freq=1000\n\
          SRC_V kind=sig2voltage in=SRC\n\
          HALFPI kind=const value=1.5707963267948966\n\
@@ -108,7 +108,7 @@ fn sinwave_and_sin_coexist_in_one_file_without_collision() {
 #[test]
 fn pwc_and_pwl_repeat_parse_and_wrap_through_the_real_cli() {
     let netlist = write_netlist(&format!(
-        "{DUMMY_MOSFET}V1 a 0 STEP_V\nR1 a 0 1000\nV2 b 0 RAMP_V\nR2 b 0 1000\n\
+        "{DUMMY_IDEAL_SWITCH}V1 a 0 STEP_V\nR1 a 0 1000\nV2 b 0 RAMP_V\nR2 b 0 1000\n\
          STEP kind=pwc points=[[0,1],[0.5e-3,5],[1e-3,1]] repeat=true\n\
          STEP_V kind=sig2voltage in=STEP\n\
          RAMP kind=pwl points=[[0,0],[1e-3,10],[2e-3,0]] repeat=true\n\
@@ -159,7 +159,7 @@ fn pwc_and_pwl_repeat_parse_and_wrap_through_the_real_cli() {
 #[test]
 fn pulsewave_and_expwave_and_sffmwave_parse_through_the_real_cli() {
     let netlist = write_netlist(&format!(
-        "{DUMMY_MOSFET}V1 a 0 P_V\nR1 a 0 1000\nV2 b 0 E_V\nR2 b 0 1000\nV3 c 0 F_V\nR3 c 0 1000\n\
+        "{DUMMY_IDEAL_SWITCH}V1 a 0 P_V\nR1 a 0 1000\nV2 b 0 E_V\nR2 b 0 1000\nV3 c 0 F_V\nR3 c 0 1000\n\
          P kind=pulsewave v1=0 v2=10 tr=1e-4 tf=1e-4 pw=2e-4 per=1e-3\n\
          P_V kind=sig2voltage in=P\n\
          E kind=expwave v1=0 v2=1 tau1=1e-3\n\

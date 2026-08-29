@@ -3,7 +3,7 @@
 //! instants, the way every other gate-timing behavior in this crate is verified, not just "it
 //! ran."
 //!
-//! Circuit: `V1 (10V) -- D1 (MOSFET, drain=a, source=b, plain SPICE node order) -- R1 (1k) --
+//! Circuit: `V1 (10V) -- D1 (ideal switch, drain=a, source=b, plain SPICE node order) -- R1 (1k) --
 //! ground`. Chosen deliberately (not just "the natural declaration") so the body diode's real
 //! forward direction (anode=source=b, cathode=drain=a, i.e. `b -> a`) does *not* match the
 //! normal charging direction (`a -> b`) — otherwise the body diode would keep conducting even
@@ -15,7 +15,7 @@
 //! < duty`, i.e. `ramp` in `[-0.25, 0.25) mod 1 = [0, 0.25) ∪ [0.75, 1.0)`. At `100kHz` (`10µs`
 //! period): ON for `t` in `[0, 2.5µs)`, OFF `[2.5, 7.5µs)`, ON `[7.5, 10µs)`, repeating. Sampled
 //! at `t=1µs` (expect ON, `V(b) ≈ 10*R1/(R1+Ron) ≈ 9.999V`), `t=5µs` (expect OFF, `V(b) ≈ 0V`,
-//! only the MOSFET's own tiny leakage conductance), `t=9µs` (expect ON again).
+//! only the ideal switch's own tiny leakage conductance), `t=9µs` (expect ON again).
 
 use std::collections::BTreeMap;
 
@@ -24,14 +24,14 @@ use dae_runtime::{
     TimeStep,
 };
 use general_spice_core::Dialect;
-use pwl_devices::{Diode, Mosfet};
+use pwl_devices::{IdealDiode, IdealSwitch};
 
 #[test]
 fn phase_shift_pwm_gate_matches_hand_computed_switching_instants() {
-    let netlist = "V1 a 0 10\nD1 a b mosfetmodel\nR1 b 0 1k";
-    let mosfet = Mosfet::new(0.1, Diode::new(0.0, -100.0, 0.0, 0.7, 1.0));
-    let mut mosfets = BTreeMap::new();
-    mosfets.insert("D1".to_string(), mosfet);
+    let netlist = "V1 a 0 10\nD1 a b idealswitchmodel\nR1 b 0 1k";
+    let switch = IdealSwitch::new(0.1, IdealDiode::new(0.0, -100.0, 0.0, 0.7, 1.0));
+    let mut ideal_switches = BTreeMap::new();
+    ideal_switches.insert("D1".to_string(), switch);
     let diodes = BTreeMap::new();
 
     let blocks = vec![
@@ -83,7 +83,7 @@ fn phase_shift_pwm_gate_matches_hand_computed_switching_instants() {
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         &blocks,
         &gates,
         0.1,

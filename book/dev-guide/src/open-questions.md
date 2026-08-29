@@ -3,11 +3,12 @@
 *(Skeleton — outline below; not yet written.)*
 
 ## What goes here
-- A genuinely self-triggering ideal switch (relay, fuse, pure natural-commutation MOSFET with
-  no active gate drive) — state-dependent, but *not* foldable into the diode LCP for the same
-  topology-change reason MOSFET channel switching isn't (see `switch-model-mosfets.md`); would
-  need its own formulation. Left open deliberately, not attempted under time pressure.
-- Per-instance MOSFET `Ron` (today every MOSFET in one call shares `shared_r_on`).
+- A genuinely self-triggering ideal switch (relay, fuse, a pure natural-commutation real MOSFET
+  with no active gate drive) — state-dependent, but *not* foldable into the diode LCP for the
+  same topology-change reason this crate's own ideal-switch channel switching isn't (see
+  `switch-model-ideal-switch.md`); would need its own formulation. Left open deliberately, not
+  attempted under time pressure.
+- Per-instance ideal switch `Ron` (today every ideal switch in one call shares `shared_r_on`).
 - MIMO `StateSpace`/`TransferFunction` in the block graph (the underlying `continuous_blocks::
   StateSpace` type already supports general `(A,B,C,D)`; `block_graph.rs`'s own dispatch
   currently hardcodes single-input/single-output) — folded into

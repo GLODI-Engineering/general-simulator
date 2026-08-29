@@ -11,8 +11,8 @@
 
 # Switching
 
-- [Diodes and MOSFET body diodes: the endogenous case](switch-model-diodes.md)
-- [MOSFET channel state: the exogenous case, and why](switch-model-mosfets.md)
+- [Diodes and ideal-switch body diodes: the endogenous case](switch-model-diodes.md)
+- [Ideal-switch channel state: the exogenous case, and why](switch-model-ideal-switch.md)
 
 # The block graph
 
@@ -25,7 +25,7 @@
 
 - [Workspace layout](crate-tour.md)
 - [`lcp-solver`: Lemke's algorithm](crate-lcp-solver.md)
-- [`pwl-devices`: diode and MOSFET models](crate-pwl-devices.md)
+- [`pwl-devices`: ideal-diode and ideal-switch models](crate-pwl-devices.md)
 - [`dae-runtime`: circuit assembly and the transient loop](crate-dae-runtime.md)
 - [`continuous-blocks`: the block library](crate-continuous-blocks.md)
 - [`cscript-ffi`: the native escape hatch](crate-cscript-ffi.md)

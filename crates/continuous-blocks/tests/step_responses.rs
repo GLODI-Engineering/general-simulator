@@ -1,7 +1,7 @@
 //! Simulates each block's compiled `StateSpace` with RK4 against a step input and compares
 //! against a closed-form response worked out by hand first — the same "derive it
 //! independently, then check the code reproduces it" discipline as the rest of this project's
-//! milestones (see `pwl-devices/tests/two_diode_circuit.rs`, `dae-runtime/tests/mosfet.rs`).
+//! milestones (see `pwl-devices/tests/two_ideal_diode_circuit.rs`, `dae-runtime/tests/ideal_switch.rs`).
 
 use continuous_blocks::{Pid, TransferFunction};
 

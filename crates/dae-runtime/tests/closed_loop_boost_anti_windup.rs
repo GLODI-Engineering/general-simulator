@@ -17,18 +17,21 @@
 use continuous_blocks::Pid;
 use dae_runtime::{sawtooth_carrier, simulate_closed_loop, GateState};
 use general_spice_core::Dialect;
-use pwl_devices::{Diode, Mosfet};
+use pwl_devices::{IdealDiode, IdealSwitch};
 use std::collections::BTreeMap;
 
 #[test]
 fn boost_pid_regulates_without_windup_collapse() {
     let netlist =
-        "V1 vin 0 12\nD1 vx 0 mosfetmodel\nD2 vx vout dmodel\nL1 vin vx 100u\nC1 vout 0 100u\nR1 vout 0 50";
-    let mosfet = Mosfet::new(0.01, Diode::new(0.0, -1e6, 0.0, 1e6, 0.0));
-    let mut mosfets = BTreeMap::new();
-    mosfets.insert("D1".to_string(), mosfet);
+        "V1 vin 0 12\nD1 vx 0 idealswitchmodel\nD2 vx vout dmodel\nL1 vin vx 100u\nC1 vout 0 100u\nR1 vout 0 50";
+    let switch = IdealSwitch::new(0.01, IdealDiode::new(0.0, -1e6, 0.0, 1e6, 0.0));
+    let mut ideal_switches = BTreeMap::new();
+    ideal_switches.insert("D1".to_string(), switch);
     let mut diodes = BTreeMap::new();
-    diodes.insert("D2".to_string(), Diode::new(0.0, -100.0, 0.0, 0.6, 100.0));
+    diodes.insert(
+        "D2".to_string(),
+        IdealDiode::new(0.0, -100.0, 0.0, 0.6, 100.0),
+    );
 
     let reference = 24.0;
     // Kp small enough that proportional action alone doesn't saturate duty from the very
@@ -59,7 +62,7 @@ fn boost_pid_regulates_without_windup_collapse() {
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         &controller,
         move |_| reference,
         measure,

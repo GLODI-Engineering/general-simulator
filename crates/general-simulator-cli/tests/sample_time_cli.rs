@@ -2,8 +2,8 @@
 //! the two new sample-time features -- block-controlled variable scheduling (`ts=variable`,
 //! `cscript_next_sample_hit`) and a fixed-period phase offset (`ts=`/`to=`) -- an end-to-end
 //! confirmation (real CLI, real netlist, real block graph) that both work through the whole
-//! stack, not just `cscript-ffi`'s own lower-level unit tests. No dummy MOSFET needed: the
-//! block graph runs whenever a block is declared, MOSFET or not.
+//! stack, not just `cscript-ffi`'s own lower-level unit tests. No dummy ideal switch needed: the
+//! block graph runs whenever a block is declared, ideal switch or not.
 
 use std::path::PathBuf;
 use std::process::Command;

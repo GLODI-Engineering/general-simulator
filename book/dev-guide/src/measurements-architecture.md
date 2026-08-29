@@ -59,7 +59,7 @@ this integration layer):
 ## How `kind=measure` lines are kept away from `general-mna`
 
 `general_mna::build_system`'s own `kind=` dispatch (`system_builder.rs`'s `build_kind`) has no
-entry for `"measure"`, and its final fallback arm — after trying the diode/mosfet/every declared
+entry for `"measure"`, and its final fallback arm — after trying the diode/ideal switch/every declared
 block kind, then the waveform-arithmetic/logic-gate/flip-flop fallback ladder — is
 `other => Err(format!("line {}: unknown device kind '{other}'", ...))`. So a `kind=measure` line
 handed to `build_system` unmodified would simply fail to parse, the same as any genuinely

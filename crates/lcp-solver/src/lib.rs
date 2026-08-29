@@ -10,7 +10,7 @@
 //! ```
 //!
 //! This is the numerical primitive `general-simulator` uses to decide, once per timestep, which
-//! linear segment of each piecewise-linear device (diode, MOSFET) is active — replacing
+//! linear segment of each piecewise-linear device (ideal diode, ideal switch) is active — replacing
 //! Newton-Raphson + voltage limiting entirely. See `docs/architecture.md` in this repository
 //! for how device segments map onto `(M, q)`.
 //!

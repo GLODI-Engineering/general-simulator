@@ -1,7 +1,7 @@
 //! Runs the actual built `general-simulator` binary against netlists using `kind=pyblock`,
 //! against the `.py` fixture in `tests/fixtures/` (no compile step needed, unlike `cscript`'s
 //! `.c` fixtures -- an end-to-end check through the real CLI parser and `dae-runtime`'s block
-//! graph, not just `pyblock-ffi`'s own lower-level unit tests. Same dummy always-off MOSFET
+//! graph, not just `pyblock-ffi`'s own lower-level unit tests. Same dummy always-off ideal switch
 //! pattern `cscript.rs`'s own tests use, for the same reason.
 
 use std::path::PathBuf;
@@ -50,7 +50,7 @@ fn pyblock_gain_reproduces_a_hand_known_result_every_step() {
          PG kind=pyblock path={} in=SRC\n",
         py_path.display()
     ));
-    let netlist = write_devices_file("V1 a 0 5\nD1 a b mosfetmodel\nR1 b 0 1000\n");
+    let netlist = write_devices_file("V1 a 0 5\nD1 a b idealswitchmodel\nR1 b 0 1000\n");
 
     let output = run(&[
         netlist.to_str().unwrap(),

@@ -1,11 +1,11 @@
-//! A single MOSFET gate transition mid-simulation, exercising `simulate_transient_with_mosfets`
+//! A single ideal switch gate transition mid-simulation, exercising `simulate_transient_with_ideal_switches`
 //! end to end: the netlist is rebuilt (switch <-> `'D'`-stamped body diode) when the gate
 //! state changes, the step lands on backward Euler right at the transition (per
-//! `simulate_transient_with_mosfets`'s own documented policy), and the circuit continues
+//! `simulate_transient_with_ideal_switches`'s own documented policy), and the circuit continues
 //! correctly into a *different* RC time constant afterward — checked against a closed-form
 //! solution derived by hand in two phases, before writing this test.
 //!
-//! Circuit: `V1 (10V) -- D1 (a MOSFET, drain=b, source=a) -- R1 (1 ohm) -- C1 (1F) -- ground`.
+//! Circuit: `V1 (10V) -- D1 (an ideal switch, drain=b, source=a) -- R1 (1 ohm) -- C1 (1F) -- ground`.
 //! `D1`'s body diode: `v_th=0.7`, `g_on=1` (same *diode* parameters as
 //! `tests/transient.rs`'s `rc_charging_through_a_forward_biased_diode_matches_hand_derived_solution`
 //! — but that fixture uses a 5V source, this one 10V, so the derived constants below differ;
@@ -24,17 +24,17 @@
 //! jump), giving `Vc(t) = 10 - (10 - Vc(1)) * e^(-(t-1)/1.1)` for `t >= 1`, where
 //! `Vc(1) = 9.3 * (1 - e^(-0.5))` from phase 1's formula.
 
-use dae_runtime::{simulate_transient_with_mosfets, GateState};
+use dae_runtime::{simulate_transient_with_ideal_switches, GateState};
 use general_spice_core::Dialect;
-use pwl_devices::{Diode, Mosfet};
+use pwl_devices::{IdealDiode, IdealSwitch};
 use std::collections::BTreeMap;
 
 #[test]
 fn gate_transition_mid_simulation_matches_two_phase_hand_derivation() {
-    let netlist = "V1 a 0 10\nD1 b a mosfetmodel\nR1 b c 1\nC1 c 0 1";
-    let mosfet = Mosfet::new(0.1, Diode::new(0.0, -100.0, 0.0, 0.7, 1.0));
-    let mut mosfets = BTreeMap::new();
-    mosfets.insert("D1".to_string(), mosfet);
+    let netlist = "V1 a 0 10\nD1 b a idealswitchmodel\nR1 b c 1\nC1 c 0 1";
+    let switch = IdealSwitch::new(0.1, IdealDiode::new(0.0, -100.0, 0.0, 0.7, 1.0));
+    let mut ideal_switches = BTreeMap::new();
+    ideal_switches.insert("D1".to_string(), switch);
     let diodes = BTreeMap::new();
 
     let gate_signal = |_name: &str, t: f64| {
@@ -45,11 +45,11 @@ fn gate_transition_mid_simulation_matches_two_phase_hand_derivation() {
         }
     };
 
-    let trace = simulate_transient_with_mosfets(
+    let trace = simulate_transient_with_ideal_switches(
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         gate_signal,
         0.1,
         None,

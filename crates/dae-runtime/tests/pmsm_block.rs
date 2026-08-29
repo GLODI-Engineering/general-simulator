@@ -12,13 +12,13 @@ use dae_runtime::{
     simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, Signal, TimeStep,
 };
 use general_spice_core::Dialect;
-use pwl_devices::{Diode, Mosfet};
+use pwl_devices::{IdealDiode, IdealSwitch};
 
 #[test]
 fn pmsm_block_matches_hand_derived_rl_circuit_when_decoupled() {
     let netlist = "V1 a 0 5\nR1 a 0 1k";
-    let mosfets: BTreeMap<String, Mosfet> = BTreeMap::new();
-    let diodes: BTreeMap<String, Diode> = BTreeMap::new();
+    let ideal_switches: BTreeMap<String, IdealSwitch> = BTreeMap::new();
+    let diodes: BTreeMap<String, IdealDiode> = BTreeMap::new();
     let gates = BTreeMap::new();
 
     let (r, l, vd) = (2.0, 5e-3, 10.0);
@@ -68,7 +68,7 @@ fn pmsm_block_matches_hand_derived_rl_circuit_when_decoupled() {
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         &blocks,
         &gates,
         0.1,

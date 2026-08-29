@@ -27,12 +27,12 @@
 //! (`I_D1 + I_D2 = 7/3 = e2 / R`, checks out.)
 //!
 //! The code below builds the *same* circuit as a Linear Complementarity Problem — using each
-//! diode's canonical `(z1, z2)` decomposition (`pwl_devices::DiodeCanonical`) folded through
+//! diode's canonical `(z1, z2)` decomposition (`pwl_devices::IdealDiodeCanonical`) folded through
 //! the one-node KCL equation — and checks that `lcp_solver::solve` recovers `V`, `e2`, `I_D1`,
 //! `I_D2` matching the derivation above, without any Newton iteration.
 
 use lcp_solver::solve;
-use pwl_devices::Diode;
+use pwl_devices::IdealDiode;
 
 /// Build `(M, q)` for "N diodes in parallel between a fixed source `e1` and a node `e2`, with
 /// a resistor `R` from `e2` to ground" — folding each diode's canonical decomposition through
@@ -42,7 +42,7 @@ use pwl_devices::Diode;
 /// This is deliberately specific to this one-node topology (a hand-rolled linear solve, per
 /// this project's Milestone 2 scope) — folding *arbitrary* circuit topologies through PWL
 /// devices generically is `dae-runtime`'s job, a later milestone.
-fn build_lcp(diodes: &[Diode], e1: f64, r: f64) -> (Vec<Vec<f64>>, Vec<f64>) {
+fn build_lcp(diodes: &[IdealDiode], e1: f64, r: f64) -> (Vec<Vec<f64>>, Vec<f64>) {
     let n = diodes.len();
     let canon: Vec<_> = diodes.iter().map(|d| d.canonical()).collect();
 
@@ -81,8 +81,8 @@ fn build_lcp(diodes: &[Diode], e1: f64, r: f64) -> (Vec<Vec<f64>>, Vec<f64>) {
 
 #[test]
 fn two_pwl_diodes_reproduce_hand_derived_operating_point() {
-    let d1 = Diode::new(0.0, -100.0, 0.0, 1.0, 1.0);
-    let d2 = Diode::new(0.0, -100.0, 0.0, 2.0, 1.0);
+    let d1 = IdealDiode::new(0.0, -100.0, 0.0, 1.0, 1.0);
+    let d2 = IdealDiode::new(0.0, -100.0, 0.0, 2.0, 1.0);
     let e1 = 5.0;
     let r = 1.0;
 
@@ -142,8 +142,8 @@ fn two_pwl_diodes_reproduce_hand_derived_operating_point() {
 /// Check: 1.25 > 1 (D1 forward) and 1.25 < 2 (D2 still off) — self-consistent.
 #[test]
 fn only_first_diode_conducts_at_lower_source_voltage() {
-    let d1 = Diode::new(0.0, -100.0, 0.0, 1.0, 1.0);
-    let d2 = Diode::new(0.0, -100.0, 0.0, 2.0, 1.0);
+    let d1 = IdealDiode::new(0.0, -100.0, 0.0, 1.0, 1.0);
+    let d2 = IdealDiode::new(0.0, -100.0, 0.0, 2.0, 1.0);
     let e1 = 1.5;
     let r = 1.0;
 

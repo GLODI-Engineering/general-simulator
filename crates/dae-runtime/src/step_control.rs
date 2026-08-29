@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 
 use general_mna::MnaSystem;
 use general_spice_core::ast::Statement;
-use pwl_devices::Diode;
+use pwl_devices::IdealDiode;
 
 use crate::{
     classify_segments, fold_and_solve, is_ringing, DaeError, OperatingPoint, Scheme, Segment,
@@ -92,7 +92,7 @@ pub(crate) struct LteAttempt {
 
 /// One local-truncation-error attempt at a candidate `dt`, against an already-built `system`
 /// (the caller is responsible for rebuilding `system` at this `dt`/gate-state combination
-/// first, when that matters — e.g. a MOSFET circuit whose gate states are themselves a
+/// first, when that matters — e.g. an ideal switch circuit whose gate states are themselves a
 /// function of `dt` through a block graph; see `block_graph`'s own adaptive loop).
 ///
 /// **The error estimate**: backward Euler (order 1, `O(h^2)` local error) and trapezoidal
@@ -118,7 +118,7 @@ pub(crate) struct LteAttempt {
 pub(crate) fn lte_attempt(
     system: &MnaSystem,
     statements: &[Statement],
-    diodes: &BTreeMap<String, Diode>,
+    diodes: &BTreeMap<String, IdealDiode>,
     x_prev_prev: Option<&[f64]>,
     x_prev: &[f64],
     dt: f64,
@@ -218,7 +218,7 @@ pub(crate) fn lte_attempt(
     }
 }
 
-/// The common case built on [`lte_attempt`]: `system` is fixed for the whole run (no MOSFETs,
+/// The common case built on [`lte_attempt`]: `system` is fixed for the whole run (no ideal switchs,
 /// or any other reason gate/topology doesn't depend on `dt`), so this owns the retry loop
 /// directly. `block_graph`'s adaptive loop can't use this — its `system` is rebuilt from block
 /// outputs that are themselves a function of `dt`, so it drives [`lte_attempt`] with its own
@@ -227,7 +227,7 @@ pub(crate) fn lte_attempt(
 pub(crate) fn adaptive_step(
     system: &MnaSystem,
     statements: &[Statement],
-    diodes: &BTreeMap<String, Diode>,
+    diodes: &BTreeMap<String, IdealDiode>,
     x_prev_prev: Option<&[f64]>,
     x_prev: &[f64],
     dt_trial: f64,

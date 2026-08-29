@@ -1,5 +1,5 @@
 //! `GateBinding` targets must resolve to a `BlockKind::Sig2Voltage` converter, never a raw
-//! control block directly — a MOSFET's gate is itself a voltage, so it shares the same
+//! control block directly — an ideal switch's gate is itself a voltage, so it shares the same
 //! Signal-to-PS boundary a V-source's own magnitude uses; no separate gate-only converter
 //! exists. Checks both that the wrong kind is rejected before any step runs
 //! (`DaeError::GateTargetNotSig2Voltage`, naming the actual offending block and kind) and that
@@ -13,21 +13,21 @@ use dae_runtime::{
     Signal, TimeStep,
 };
 use general_spice_core::Dialect;
-use pwl_devices::{Diode, Mosfet};
+use pwl_devices::{IdealDiode, IdealSwitch};
 
-fn dummy_mosfets() -> BTreeMap<String, Mosfet> {
+fn dummy_ideal_switches() -> BTreeMap<String, IdealSwitch> {
     let mut m = BTreeMap::new();
     m.insert(
         "D1".to_string(),
-        Mosfet::new(0.1, Diode::new(0.0, -1e6, 1e-6, 1e6, 0.0)),
+        IdealSwitch::new(0.1, IdealDiode::new(0.0, -1e6, 1e-6, 1e6, 0.0)),
     );
     m
 }
 
 #[test]
 fn naming_a_raw_block_directly_is_rejected_before_any_step_runs() {
-    let netlist = "V1 a 0 5\nD1 a b mosfetmodel\nR1 b 0 1000";
-    let mosfets = dummy_mosfets();
+    let netlist = "V1 a 0 5\nD1 a b idealswitchmodel\nR1 b 0 1000";
+    let ideal_switches = dummy_ideal_switches();
     let diodes = BTreeMap::new();
 
     let blocks = vec![BlockInstance {
@@ -46,7 +46,7 @@ fn naming_a_raw_block_directly_is_rejected_before_any_step_runs() {
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         &blocks,
         &gates,
         0.1,
@@ -72,8 +72,8 @@ fn naming_a_raw_block_directly_is_rejected_before_any_step_runs() {
 
 #[test]
 fn wrapping_the_same_block_in_sig2voltage_makes_it_work() {
-    let netlist = "V1 a 0 5\nD1 a b mosfetmodel\nR1 b 0 1000";
-    let mosfets = dummy_mosfets();
+    let netlist = "V1 a 0 5\nD1 a b idealswitchmodel\nR1 b 0 1000";
+    let ideal_switches = dummy_ideal_switches();
     let diodes = BTreeMap::new();
 
     let blocks = vec![
@@ -100,7 +100,7 @@ fn wrapping_the_same_block_in_sig2voltage_makes_it_work() {
         netlist,
         Dialect::Ngspice,
         &diodes,
-        &mosfets,
+        &ideal_switches,
         &blocks,
         &gates,
         0.1,
