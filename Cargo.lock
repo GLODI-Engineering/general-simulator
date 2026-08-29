@@ -55,11 +55,16 @@ dependencies = [
  "dae-runtime",
  "general-mna",
  "general-spice-core",
+ "gs-waveform-measurements",
  "pwl-devices",
 ]
 
 [[package]]
 name = "general-spice-core"
+version = "0.1.0"
+
+[[package]]
+name = "gs-waveform-measurements"
 version = "0.1.0"
 
 [[package]]

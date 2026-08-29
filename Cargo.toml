@@ -3,10 +3,12 @@ resolver = "2"
 members = [
     # gs-waveform-measurements was extracted to its own sibling repo
     # (../gs-waveform-measurements) for an independent release cadence and reuse beyond this
-    # workspace. Not currently a dependency of anything here; when a consumer needs it again,
-    # add it back to that crate's own Cargo.toml as a sibling-path dependency during
-    # development, e.g. `gs-waveform-measurements = { path = "../gs-waveform-measurements" }`
-    # (see general-mna's own README for this same convention).
+    # workspace, and is not itself a workspace member here (same convention general-mna's own
+    # README documents) -- it is consumed as an ordinary sibling-path dependency, currently by
+    # crates/general-simulator-cli alone, to evaluate `kind=measure` netlist lines as a
+    # post-processing pass over a completed transient trace (see
+    # crates/general-simulator-cli/src/measure.rs and book/dev-guide/src/measurements.md for why
+    # this is a CLI-level concern, not a dae-runtime/general-mna block-graph one).
     "crates/lcp-solver",
     "crates/pwl-devices",
     "crates/dae-runtime",
