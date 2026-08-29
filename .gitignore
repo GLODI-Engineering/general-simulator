@@ -24,3 +24,7 @@ doc-verify/**/*.pyc
 tests/raw-output-python/.venv/
 tests/raw-output-python/__pycache__/
 *.raw
+
+# tests/measure's own bytecode cache -- fixtures/README.md/_lib.py/test_*.py are the committed
+# source; this is not.
+tests/measure/__pycache__/

@@ -32,6 +32,7 @@
 - [`pyblock-ffi`: the Python escape hatch](python-blocks.md)
 - [`pyblock-ffi`: pure-function blocks (`kind=pyfunc`)](pyfunc-blocks.md)
 - [`general-simulator-cli`: the netlist-in/CSV-out runner](crate-general-simulator-cli.md)
+- [`kind=measure`: post-processing measurements, not a block-graph kind](measurements-architecture.md)
 
 # Contributing
 

@@ -282,6 +282,7 @@
 //! and `experiments/elspice-pwl-buck-underdamped-resonance-filter/` for full worked examples
 //! this syntax was built for.
 
+mod measure;
 mod raw_format;
 
 use std::collections::BTreeMap;
@@ -465,6 +466,15 @@ fn run() -> Result<(), String> {
         Some(path) => fs::read_to_string(path).map_err(|e| format!("reading {path}: {e}"))?,
         None => netlist.clone(),
     };
+    // `kind=measure` lines (see `measure`'s own module doc comment for the full architecture
+    // rationale) are recognized and stripped here, before `general_mna::build_system` ever sees
+    // them -- `general-mna` has no `kind=measure` entry in its own dispatch and would reject it
+    // as an unknown device kind otherwise. The stripped copy (blank lines in place of the
+    // original ones, so every other statement keeps its own line number) is what actually goes
+    // to `build_system`; the collected `MeasureSpec`s are evaluated once the transient trace is
+    // complete, see below.
+    let (devices_for_build, measurements) = measure::extract(&devices_source, dialect)
+        .map_err(|e| format!("parsing kind=measure declarations: {e}"))?;
     let general_mna::System {
         diodes,
         mosfets,
@@ -472,7 +482,7 @@ fn run() -> Result<(), String> {
         blocks,
         shared_r_on,
         ..
-    } = general_mna::build_system(&devices_source, dialect)
+    } = general_mna::build_system(&devices_for_build, dialect)
         .map_err(|e| format!("parsing device/block declarations: {e}"))?;
 
     let (waveform, plot_name) = if mode == "dc" {
@@ -555,6 +565,15 @@ fn run() -> Result<(), String> {
             write_raw_file(&out_path, &waveform, plot_name, netlist_path)?;
         }
     }
+
+    // Measurements print to stderr, never stdout, regardless of `--format` -- see
+    // `book/user-guide/src/measurements.md`'s "Where results are printed" section. This keeps
+    // stdout's own machine-readability (a plain CSV under `--format csv`, or nothing at all
+    // under `--format raw`, which already writes to a file) unconditionally intact: a
+    // `kind=measure`-free netlist produces byte-for-byte the same stdout as before this feature
+    // existed, and even a netlist that does use it never interleaves "name = value" lines into
+    // the CSV a downstream tool parses.
+    print_measurements(&measurements, &waveform);
 
     Ok(())
 }
@@ -701,6 +720,31 @@ fn print_csv(waveform: &Waveform) {
     for row in &waveform.rows {
         let values: Vec<String> = row.iter().map(|v| v.to_string()).collect();
         println!("{}", values.join(","));
+    }
+}
+
+/// Evaluates every collected `kind=measure` spec against the resolved `waveform` and prints each
+/// result to stderr as `name = value`, ngspice's own `.measure` printed style (see the ngspice
+/// manual's `.measure` section: `tdiff = 1.000000e-003 targ= ... trig= ...`). A DC run
+/// (`waveform.rows.len() <= 1`) or a `--mode dc` netlist can't sensibly host a measurement that
+/// needs a real window/crossing search over a trace, so a per-measurement error there (from
+/// `gs_waveform_measurements`'s own `EmptyWindow`/`EmptySeries`) is printed the same as any other
+/// per-measurement evaluation failure, not specially detected — the failure message is already
+/// precise about why.
+fn print_measurements(measurements: &[measure::MeasureSpec], waveform: &Waveform) {
+    if measurements.is_empty() {
+        return;
+    }
+    let results = measure::evaluate_all(measurements, &waveform.headers, &waveform.rows);
+    for (name, result) in results {
+        match result {
+            Ok(values) => {
+                for (label, value) in values {
+                    eprintln!("{label} = {value}");
+                }
+            }
+            Err(e) => eprintln!("measurement '{name}' failed: {e}"),
+        }
     }
 }
 

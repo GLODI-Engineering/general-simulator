@@ -28,6 +28,7 @@ dae-runtime = { path = "../dae-runtime", version = "0.1.0" }
 pwl-devices = { path = "../pwl-devices", version = "0.1.0" }
 general-spice-core = { path = "../../../spice-lsp/servers/core", version = "0.1.0" }
 general-mna = { path = "../../../general-mna", version = "0.1.0" }
+gs-waveform-measurements = { path = "../../../gs-waveform-measurements", version = "0.1.0" }
 
 [[test]]
 name = "pyblock_cli"

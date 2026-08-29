@@ -30,6 +30,10 @@
 - [Command-line flags](cli-reference.md)
 - [Fixed vs. adaptive time stepping](time-stepping.md)
 
+# Post-processing measurements
+
+- [`kind=measure`: ngspice/Xyce-style .measure statements](measurements.md)
+
 # Worked examples
 
 - [Buck converter (open-loop and PID)](examples/buck.md)
