@@ -313,6 +313,33 @@ enum BlockState {
         time_since_sample: f64,
         last_output: Vec<f64>,
     },
+    /// The stateful counterpart to `OctFunction` above, for [`BlockKind::OctBlock`] -- same
+    /// shared, `Rc`-cloned session every other Octave-hosted block kind in this run uses (see
+    /// `OctFunction`'s own doc comment for why sharing is safe/correct even under
+    /// [`TimeStep::Adaptive`]'s clone-per-trial-step loop), but unlike `OctFunction`, this
+    /// block's own opaque per-instance state genuinely lives *inside* that shared session (one
+    /// global struct, keyed by `instance` -- see `octave_ffi::OctaveSession::call_start`'s own
+    /// doc comment), never inside this Rust struct at all. `instance` is this block's own
+    /// `.name` -- the key into that shared struct -- and `xc` is the block's own solver-owned
+    /// continuous-state vector, exactly the same role `CScript`'s/`PyBlock`'s own `xc` field
+    /// has (empty when `xc_count == 0`). `time_since_sample`/`next_hit_dt`/`last_output` are the
+    /// same zero-order-hold bookkeeping every other sample-time-gated block variant already
+    /// carries.
+    OctBlock {
+        session: std::rc::Rc<std::cell::RefCell<octave_ffi::OctaveSession>>,
+        instance: String,
+        time_since_sample: f64,
+        next_hit_dt: f64,
+        last_output: Vec<f64>,
+        xc: Vec<f64>,
+        /// Whether `<function>_update.m` exists in this block's own `path` directory -- checked
+        /// once, up front, at construction (see [`simulate_transient_with_blocks`]'s own
+        /// construction loop), so `evaluate_blocks` never has to speculatively call an
+        /// `_update.m` that might not exist (which would otherwise surface as a spurious
+        /// Octave-side "undefined function" error for the common case where a block simply has
+        /// no discrete bookkeeping to commit).
+        has_update: bool,
+    },
 }
 
 /// One step's result: `(t, OperatingPoint, block_outputs)`, where `block_outputs` is every
@@ -338,6 +365,7 @@ fn block_index_by_name(blocks: &[BlockInstance]) -> Result<BTreeMap<&str, usize>
             | BlockKind::PyBlock { output_names, .. }
             | BlockKind::PyFunction { output_names, .. }
             | BlockKind::OctFunc { output_names, .. }
+            | BlockKind::OctBlock { output_names, .. }
             | BlockKind::CoordinateTransform { output_names, .. }
             | BlockKind::Pmsm { output_names, .. }
             | BlockKind::Pwm { output_names, .. }
@@ -1290,6 +1318,116 @@ fn evaluate_blocks(
                 }
                 SignalValue::Scalar(last_output.first().copied().unwrap_or(0.0))
             }
+            (
+                BlockKind::OctBlock {
+                    output_names,
+                    sample_time,
+                    xc_count,
+                    function,
+                    ..
+                },
+                BlockState::OctBlock {
+                    session,
+                    instance,
+                    time_since_sample,
+                    next_hit_dt,
+                    last_output,
+                    xc,
+                    has_update,
+                },
+            ) => {
+                // Identical sample_time/xc "due" gating to CScript's/PyBlock's own arms above --
+                // unlike OctFunc/PyFunction (stateless, elapsed time discarded), this block's
+                // own contract functions take `t`/`dt` explicitly (see BlockKind::OctBlock's own
+                // file-per-function table), so the accumulated `elapsed` matters here.
+                let threshold = match sample_time {
+                    None => None,
+                    Some(SampleTimeSpec::Periodic { period, .. }) => Some(*period),
+                    Some(SampleTimeSpec::Variable) => Some(*next_hit_dt),
+                };
+                let (due, elapsed) = match threshold {
+                    None => (true, dt),
+                    Some(threshold) => {
+                        *time_since_sample += dt;
+                        if *time_since_sample + 1e-15 >= threshold {
+                            let elapsed = *time_since_sample;
+                            *time_since_sample = 0.0;
+                            (true, elapsed)
+                        } else {
+                            (false, 0.0)
+                        }
+                    }
+                };
+                if due {
+                    // No vector-input support -- same scalar-only restriction OctFunc already
+                    // has (see octave_ffi's own literal-numeric-argument protocol).
+                    let flat_inputs = require_all_scalar(&block.name, &input_vals)?;
+                    // `args` is [t, dt, u0, u1, ...] -- the exact positional shape every
+                    // t/dt-taking contract function expects after its own leading `state`.
+                    let mut args = Vec::with_capacity(2 + flat_inputs.len());
+                    args.push(t);
+                    args.push(elapsed);
+                    args.extend_from_slice(&flat_inputs);
+
+                    *last_output = if *xc_count > 0 {
+                        // Step xc first (RK4, via <function>_derivative -- pure, never touches
+                        // this instance's own opaque state slot), then compute output from the
+                        // *new* xc -- same "step state, then compute output from the updated
+                        // state" ordering CScript's/PyBlock's own xc arms use. Derivative's own
+                        // args exclude t/dt (see the file-per-function table).
+                        *xc = session
+                            .borrow_mut()
+                            .rk4_step_xc_stateful(
+                                &format!("{function}_derivative"),
+                                instance,
+                                xc,
+                                &flat_inputs,
+                                elapsed,
+                            )
+                            .map_err(DaeError::Octave)?;
+                        session
+                            .borrow_mut()
+                            .call_stateful(
+                                &format!("{function}_output_xc"),
+                                instance,
+                                &args,
+                                Some(xc),
+                                output_names.len(),
+                            )
+                            .map_err(DaeError::Octave)?
+                    } else {
+                        session
+                            .borrow_mut()
+                            .call_stateful(function, instance, &args, None, output_names.len())
+                            .map_err(DaeError::Octave)?
+                    };
+                    // Optional, a no-op if <function>_update.m wasn't found at construction --
+                    // the dedicated place discrete bookkeeping commits forward to the next step,
+                    // same role CScript's/PyBlock's own optional update has.
+                    if *has_update {
+                        session
+                            .borrow_mut()
+                            .call_stateful(&format!("{function}_update"), instance, &args, None, 0)
+                            .map_err(DaeError::Octave)?;
+                    }
+                    if matches!(sample_time, Some(SampleTimeSpec::Variable)) {
+                        *next_hit_dt = session
+                            .borrow_mut()
+                            .call_readonly_stateful(
+                                &format!("{function}_next_sample_hit"),
+                                instance,
+                                &args,
+                                None,
+                                1,
+                            )
+                            .map_err(DaeError::Octave)?[0];
+                    }
+                }
+                for (name, v) in output_names.iter().zip(last_output.iter()).skip(1) {
+                    outputs.insert(name.clone(), SignalValue::Scalar(*v));
+                }
+                SignalValue::Scalar(last_output.first().copied().unwrap_or(0.0))
+            }
             _ => unreachable!("BlockState variant always matches its BlockKind"),
         };
         outputs.insert(block.name.clone(), value);
@@ -1723,6 +1861,117 @@ pub fn simulate_transient_with_blocks(
                         Some(SampleTimeSpec::Variable) | None => 0.0,
                     },
                     last_output: vec![0.0; output_names.len()],
+                }
+            }
+            BlockKind::OctBlock {
+                path,
+                function,
+                output_names,
+                sample_time,
+                xc_count,
+            } => {
+                // OctBlock's own per-instance state genuinely lives inside the shared Octave
+                // session (see BlockState::OctBlock's own doc comment) -- a rejected trial step
+                // under TimeStep::Adaptive would silently persist its own state-mutating calls
+                // with no way to roll them back, since block_states.clone() never clones the
+                // Octave-side state at all. Unconditional restriction; see
+                // DaeError::OctBlockDoesNotSupportAdaptiveStep's own doc comment.
+                if matches!(step, TimeStep::Adaptive(_)) {
+                    return Err(DaeError::OctBlockDoesNotSupportAdaptiveStep {
+                        block_name: b.name.clone(),
+                    });
+                }
+                // Spawn the shared session on first use, not eagerly -- same shared session
+                // every other Octave-hosted block kind in this run uses (see OctFunc's own
+                // construction arm above for the full rationale).
+                let session = match &octave_session {
+                    Some(s) => s.clone(),
+                    None => {
+                        let s = octave_ffi::OctaveSession::spawn().map_err(DaeError::Octave)?;
+                        let s = std::rc::Rc::new(std::cell::RefCell::new(s));
+                        octave_session = Some(s.clone());
+                        s
+                    }
+                };
+                // Unlike OctFunc's own `path` (a single .m file), OctBlock's `path` is already
+                // the directory containing every `<function>_<role>.m` file (see
+                // BlockKind::OctBlock's own doc comment, the file-per-function table) -- addpath
+                // this directory itself, once per unique directory, not once per instance.
+                let dir = match path.canonicalize() {
+                    Ok(abs_dir) => abs_dir,
+                    // A directory that doesn't (yet) resolve via canonicalize -- fall back to
+                    // its own literal path, relative to this process's own current directory.
+                    // Any file this session genuinely can't find then surfaces as a clear
+                    // OctBlockMissingRequiredFile error below (checked directly against the
+                    // filesystem, not deferred to Octave's own "undefined function").
+                    Err(_) => path.clone(),
+                };
+                let required = |role: &str| -> Result<(), DaeError> {
+                    let expected_path = dir.join(format!("{function}_{role}.m"));
+                    if expected_path.is_file() {
+                        Ok(())
+                    } else {
+                        Err(DaeError::OctBlockMissingRequiredFile {
+                            block_name: b.name.clone(),
+                            expected_path,
+                        })
+                    }
+                };
+                // <function>_start.m is always required.
+                required("start")?;
+                if *xc_count > 0 {
+                    // The xc_count > 0 contract: <function>_derivative.m/_output_xc.m instead
+                    // of the plain <function>.m -- same split CScript's own xc_count has.
+                    required("derivative")?;
+                    required("output_xc")?;
+                } else {
+                    // The plain contract's own output function is named exactly `<function>.m`,
+                    // not `<function>_output.m` -- checked directly rather than via the
+                    // `required` closure above (which always appends a `_<role>` suffix).
+                    let expected_path = dir.join(format!("{function}.m"));
+                    if !expected_path.is_file() {
+                        return Err(DaeError::OctBlockMissingRequiredFile {
+                            block_name: b.name.clone(),
+                            expected_path,
+                        });
+                    }
+                }
+                if matches!(sample_time, Some(SampleTimeSpec::Variable))
+                    && !dir.join(format!("{function}_next_sample_hit.m")).is_file()
+                {
+                    return Err(
+                        DaeError::OctBlockRequiresNextSampleHitForVariableSampleTime {
+                            block_name: b.name.clone(),
+                        },
+                    );
+                }
+                let has_update = dir.join(format!("{function}_update.m")).is_file();
+
+                if octave_paths_added.insert(dir.clone()) {
+                    session
+                        .borrow_mut()
+                        .add_path(&dir)
+                        .map_err(DaeError::Octave)?;
+                }
+                // Initialize this instance's own state slot once, at construction -- the same
+                // "first-touch" convention PyBlock's own instantiate() already uses (calling
+                // `start()` immediately, not deferred to the first evaluate_blocks call).
+                session
+                    .borrow_mut()
+                    .call_start(function, &b.name)
+                    .map_err(DaeError::Octave)?;
+                BlockState::OctBlock {
+                    session,
+                    instance: b.name.clone(),
+                    // Same rationale as CScript's/PyBlock's own construction arms above.
+                    time_since_sample: match sample_time {
+                        Some(SampleTimeSpec::Periodic { period, offset }) => period - offset,
+                        Some(SampleTimeSpec::Variable) | None => 0.0,
+                    },
+                    next_hit_dt: 0.0,
+                    last_output: vec![0.0; output_names.len()],
+                    xc: vec![0.0; *xc_count],
+                    has_update,
                 }
             }
             _ => BlockState::Stateless,

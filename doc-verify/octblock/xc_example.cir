@@ -1,0 +1,6 @@
+* Exercises kind=octblock's xc_count>0 continuous-state contract (xc_charge_derivative/
+* xc_charge_output_xc instead of the plain xc_charge). G1's analytic solution is
+* xc(t) = 1 - exp(-t); in= is required by the netlist grammar even though the derivative/
+* output_xc functions never read it.
+SRC kind=const value=0
+G1 kind=octblock path=doc-verify/octblock/xc function=xc_charge in=SRC xc_count=1

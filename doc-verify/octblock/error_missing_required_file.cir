@@ -1,0 +1,6 @@
+* ## Errors: a required <function>_*.m file missing from path='s own directory (here,
+* accumulate.m itself is missing -- only accumulate_start.m exists in missing_output/) is
+* rejected at construction time with OctBlockMissingRequiredFile, before octave-cli is even
+* asked about it.
+SRC kind=const value=3
+G1 kind=octblock path=doc-verify/octblock/missing_output function=accumulate in=SRC

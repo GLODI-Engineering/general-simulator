@@ -1,0 +1,4 @@
+* ## Errors: kind=octblock does not support TimeStep::Adaptive (run this with no --dt, i.e.
+* adaptive stepping) -- rejected at construction time with OctBlockDoesNotSupportAdaptiveStep.
+SRC kind=const value=3
+G1 kind=octblock path=doc-verify/octblock/accum function=accumulate in=SRC

@@ -1,0 +1,5 @@
+* Exercises kind=octblock's ts=variable support (requires ticker_next_sample_hit.m -- see
+* ticker/). ticker_next_sample_hit.m always requests a 0.002s interval, so G1 should have
+* advanced by 1 every 0.002s of simulated time.
+SRC kind=const value=0
+G1 kind=octblock path=doc-verify/octblock/ticker function=ticker in=SRC ts=variable

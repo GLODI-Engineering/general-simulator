@@ -157,6 +157,42 @@ pub enum DaeError {
     /// parse and construct; only an actually-missing `octave-cli` binary on `PATH` at runtime
     /// surfaces here, as [`octave_ffi::OctaveError::NotFound`].
     Octave(octave_ffi::OctaveError),
+    /// A [`block_graph::BlockKind::OctBlock`]'s own `path=` directory is missing one of the
+    /// `.m` files its declared contract requires (see that variant's own doc comment for the
+    /// full file-per-function table) — checked once, up front at construction, the same
+    /// "checked once, up front" discipline [`Self::CScriptRequiresCloneForAdaptiveStep`]
+    /// already uses, and deliberately *before* ever spawning `octave-cli` for this block, since
+    /// the filesystem already has the answer without needing a round trip through Octave's own
+    /// "undefined function" error.
+    OctBlockMissingRequiredFile {
+        block_name: String,
+        expected_path: std::path::PathBuf,
+    },
+    /// A netlist declares a [`block_graph::BlockKind::OctBlock`] block with `ts=variable`
+    /// (`block_graph::SampleTimeSpec::Variable`), but `<function>_next_sample_hit.m` doesn't
+    /// exist in its own `path=` directory — the `OctBlock` counterpart to
+    /// [`Self::CScriptRequiresNextSampleHitForVariableSampleTime`]/
+    /// [`Self::PyBlockRequiresNextSampleHitForVariableSampleTime`].
+    OctBlockRequiresNextSampleHitForVariableSampleTime {
+        block_name: String,
+    },
+    /// A netlist declares a [`block_graph::BlockKind::OctBlock`] block, but the run was
+    /// requested with [`TimeStep::Adaptive`], which clones the whole `block_states` vector
+    /// before every trial step and simply discards a rejected trial's clone (see
+    /// [`Self::CScriptRequiresCloneForAdaptiveStep`]'s own doc comment). That protocol depends
+    /// on a block's own state living entirely inside the cloned Rust value -- true for
+    /// `CScript`/`PyBlock` (an owned, independently-cloned native/Python state), but **not**
+    /// true for `OctBlock`: its own opaque per-instance state lives inside the one shared
+    /// `octave-cli` session itself (see [`block_graph::BlockState::OctBlock`]'s own doc
+    /// comment), which is never cloned, so a rejected trial's own state-mutating calls
+    /// (`output`/`output_xc`/`update`) would silently persist in the real Octave-side state
+    /// with no way to roll them back. Unlike `CScriptRequiresCloneForAdaptiveStep` (opt-in,
+    /// satisfiable by exporting `cscript_clone`), this restriction is unconditional -- there is
+    /// no `.m`-file convention that could make Octave's own shared global-struct state
+    /// trial-cloneable. Use a fixed `TimeStep::Fixed` for any netlist using `kind=octblock`.
+    OctBlockDoesNotSupportAdaptiveStep {
+        block_name: String,
+    },
     /// A [`block_graph::GateBinding`] names a block that exists but isn't a
     /// [`block_graph::BlockKind::Sig2Voltage`] — the enforced physical/signal-domain boundary:
     /// an ideal switch's gate is itself a voltage, so any signal driving it must first pass through

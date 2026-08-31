@@ -1,0 +1,8 @@
+* OctBlock component reference -- the "## Example" netlist verbatim. No --features python build
+* needed -- octblock builds and runs unconditionally, only octave-cli itself needs to be
+* installed and on PATH at run time. No title line -- see doc-verify/pid/example.cir's own
+* comment.
+SRC kind=const value=3
+* G1 accumulates SRC every step (see accum/accumulate.m): row N's own G1 = 3*N (state advances
+* by SRC every resolved step, starting from state=0).
+G1 kind=octblock path=doc-verify/octblock/accum function=accumulate in=SRC

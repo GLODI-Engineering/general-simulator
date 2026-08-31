@@ -18,6 +18,17 @@
 //! platform and only fails at *runtime* -- with a clear [`OctaveError::NotFound`] -- if
 //! `octave-cli` isn't on `PATH` when a `kind=octfunc` block is actually used.
 //!
+//! ## Stateful blocks (`kind=octblock`)
+//!
+//! [`OctaveSession::call`]/[`OctaveSession::add_path`] above are the whole surface `kind=octfunc`
+//! (stateless) needs. [`OctaveSession::call_start`], [`OctaveSession::call_stateful`],
+//! [`OctaveSession::call_readonly_stateful`], and [`OctaveSession::rk4_step_xc_stateful`] extend
+//! this session with the stateful counterpart, `kind=octblock` -- see
+//! `general-simulator`'s own `book/dev-guide/src/octave-blocks.md` for the full per-instance
+//! opaque-state design (one shared `__gs_state` global struct in the Octave session itself,
+//! keyed by instance name, never serialized back to Rust) and the file-per-function contract
+//! this protocol calls into.
+//!
 //! ## One shared, persistent process
 //!
 //! [`OctaveSession`] wraps exactly one `octave-cli` child process, meant to be shared by every
@@ -167,6 +178,58 @@ fn format_octave_literal(x: f64) -> String {
     } else {
         format!("{x}")
     }
+}
+
+/// Formats `xs` as an Octave row-vector literal (`[v0, v1, ...]`, `[]` when empty) -- used only
+/// for the solver-owned `xc` continuous-state vector ([`OctaveSession::call_stateful`]/
+/// [`OctaveSession::call_readonly_stateful`]'s own `xc` parameter), the one piece of state this
+/// crate ever passes explicitly rather than leaving inside an instance's own opaque
+/// `__gs_state` slot -- see the module doc comment's "Per-instance state" section.
+fn format_octave_vector(xs: &[f64]) -> String {
+    format!(
+        "[{}]",
+        xs.iter()
+            .map(|x| format_octave_literal(*x))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+/// Shared tail of every stateful/readonly-stateful call: checks for the `ERROR: ` line
+/// [`OctaveSession::call`] itself already checks for, then validates the returned line count
+/// against `num_outputs` and parses each as `f64` -- exactly [`OctaveSession::call`]'s own tail,
+/// factored out so [`OctaveSession::call_stateful`]/[`OctaveSession::call_readonly_stateful`]
+/// don't duplicate it a second and third time; `call` itself is left untouched; nothing about
+/// its own behavior changed by this helper existing.
+fn parse_output_lines(
+    function: &str,
+    lines: &[String],
+    num_outputs: usize,
+) -> Result<Vec<f64>, OctaveError> {
+    if let Some(first) = lines.first() {
+        if let Some(message) = first.strip_prefix("ERROR: ") {
+            return Err(OctaveError::Runtime {
+                message: message.to_string(),
+            });
+        }
+    }
+    if lines.len() != num_outputs {
+        return Err(OctaveError::Runtime {
+            message: format!(
+                "expected {num_outputs} output line(s) from `{function}`, got {} (call \
+                 desynchronized, or the function printed unexpected output): {lines:?}",
+                lines.len()
+            ),
+        });
+    }
+    lines
+        .iter()
+        .map(|l| {
+            l.parse::<f64>().map_err(|_| OctaveError::Runtime {
+                message: format!("could not parse `{l}` as a f64 output of `{function}`"),
+            })
+        })
+        .collect()
 }
 
 /// Escapes `s` for embedding inside a single-quoted Octave string literal (`'...'`) -- Octave's
@@ -412,6 +475,210 @@ impl OctaveSession {
                 })
             })
             .collect()
+    }
+
+    /// Initializes `instance`'s own opaque state slot in the shared `__gs_state` global struct
+    /// by calling `<function>_start()` (no arguments) and storing the result into
+    /// `__gs_state.('<instance>')` -- the stateful counterpart to [`Self::call`], and the first
+    /// call any `kind=octblock` instance must make before [`Self::call_stateful`]/
+    /// [`Self::call_readonly_stateful`] can read a meaningful slot for it. Per-instance
+    /// isolation is purely a property of `instance` being a distinct struct field name in one
+    /// shared global -- two instances calling the *same* `function` with different `instance`
+    /// names never see each other's state, confirmed empirically (see `tests/session.rs`'s own
+    /// `two_instances_of_same_stateful_function_do_not_contaminate_each_others_state`).
+    pub fn call_start(&mut self, function: &str, instance: &str) -> Result<(), OctaveError> {
+        let call_id = self.next_call_id;
+        self.next_call_id += 1;
+        let inst = escape_octave_single_quoted(instance);
+
+        let mut script = String::new();
+        script.push_str("global __gs_state;\n");
+        script.push_str("try\n");
+        script.push_str(&format!("  __gs_state.('{inst}') = {function}_start();\n"));
+        script.push_str(&format!("  printf(\"@@GS_OCT_{call_id}@@\\n\");\n"));
+        script.push_str("catch __err\n");
+        script.push_str("  printf(\"ERROR: %s\\n\", __err.message);\n");
+        script.push_str(&format!("  printf(\"@@GS_OCT_{call_id}@@\\n\");\n"));
+        script.push_str("end\n");
+        script.push_str("fflush(stdout);\n");
+
+        self.write_and_flush(&script)?;
+        let lines = read_until_marker(&mut self.stdout, call_id, &self.stderr_rx)?;
+        if let Some(first) = lines.first() {
+            if let Some(message) = first.strip_prefix("ERROR: ") {
+                return Err(OctaveError::Runtime {
+                    message: message.to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Calls `function(__gs_state.('<instance>'), <args...>[, <xc>])`, expecting `function` to
+    /// return `num_outputs + 1` values: the instance's own *new* state first, then
+    /// `num_outputs` plain numeric outputs -- `[new_state, y0, y1, ...] = function(state, ...)`,
+    /// exactly the shape the file-per-function contract's own `<function>`/`<function>_output_xc`/
+    /// `<function>_update` all share (see `book/dev-guide/src/octave-blocks.md`). `xc`, when
+    /// given, is appended as one literal Octave vector argument after `args` (e.g. `[1, 2, 3]`),
+    /// never flattened into separate scalar arguments -- this is the one piece of *solver*-owned
+    /// state that crosses the pipe explicitly rather than living in the instance's own opaque
+    /// slot.
+    ///
+    /// `__gs_state.('<instance>')` is only overwritten if `function` returns successfully --
+    /// Octave never performs a multi-value assignment's left-hand-side writes if evaluating the
+    /// right-hand side raises, so a caught error here leaves the instance's previous state slot
+    /// completely untouched (confirmed empirically; see `tests/session.rs`'s own
+    /// `stateful_call_that_errors_does_not_corrupt_instance_state`) -- no special-casing needed
+    /// on this crate's own side to get that guarantee.
+    pub fn call_stateful(
+        &mut self,
+        function: &str,
+        instance: &str,
+        args: &[f64],
+        xc: Option<&[f64]>,
+        num_outputs: usize,
+    ) -> Result<Vec<f64>, OctaveError> {
+        let call_id = self.next_call_id;
+        self.next_call_id += 1;
+        let inst = escape_octave_single_quoted(instance);
+
+        let mut call_args: Vec<String> = vec![format!("__gs_state.('{inst}')")];
+        call_args.extend(args.iter().map(|x| format_octave_literal(*x)));
+        if let Some(xc) = xc {
+            call_args.push(format_octave_vector(xc));
+        }
+
+        let out_vars: Vec<String> = (0..num_outputs).map(|i| format!("__o{i}")).collect();
+        let lhs = if out_vars.is_empty() {
+            format!("__gs_state.('{inst}')")
+        } else {
+            format!("[__gs_state.('{inst}'), {}]", out_vars.join(", "))
+        };
+
+        let mut script = String::new();
+        script.push_str("global __gs_state;\n");
+        script.push_str("try\n");
+        script.push_str(&format!(
+            "  {lhs} = {function}({});\n",
+            call_args.join(", ")
+        ));
+        for v in &out_vars {
+            script.push_str(&format!("  printf(\"%.17g\\n\", {v});\n"));
+        }
+        script.push_str(&format!("  printf(\"@@GS_OCT_{call_id}@@\\n\");\n"));
+        script.push_str("catch __err\n");
+        script.push_str("  printf(\"ERROR: %s\\n\", __err.message);\n");
+        script.push_str(&format!("  printf(\"@@GS_OCT_{call_id}@@\\n\");\n"));
+        script.push_str("end\n");
+        script.push_str("fflush(stdout);\n");
+
+        self.write_and_flush(&script)?;
+        let lines = read_until_marker(&mut self.stdout, call_id, &self.stderr_rx)?;
+        parse_output_lines(function, &lines, num_outputs)
+    }
+
+    /// Calls `function(__gs_state.('<instance>'), <args...>[, <xc>])`, expecting `function` to
+    /// return exactly `num_outputs` plain numeric values -- **the instance's own state slot is
+    /// read, but never reassigned** (there is no state variable on the left-hand side at all),
+    /// unlike [`Self::call_stateful`]. This is the shape `<function>_derivative` (pure -- must
+    /// not mutate state) and `<function>_next_sample_hit` both share.
+    pub fn call_readonly_stateful(
+        &mut self,
+        function: &str,
+        instance: &str,
+        args: &[f64],
+        xc: Option<&[f64]>,
+        num_outputs: usize,
+    ) -> Result<Vec<f64>, OctaveError> {
+        let call_id = self.next_call_id;
+        self.next_call_id += 1;
+        let inst = escape_octave_single_quoted(instance);
+
+        let mut call_args: Vec<String> = vec![format!("__gs_state.('{inst}')")];
+        call_args.extend(args.iter().map(|x| format_octave_literal(*x)));
+        if let Some(xc) = xc {
+            call_args.push(format_octave_vector(xc));
+        }
+
+        let out_vars: Vec<String> = (0..num_outputs).map(|i| format!("__o{i}")).collect();
+
+        let mut script = String::new();
+        script.push_str("global __gs_state;\n");
+        script.push_str("try\n  ");
+        if out_vars.is_empty() {
+            script.push_str(&format!("{function}({});\n", call_args.join(", ")));
+        } else if out_vars.len() == 1 {
+            script.push_str(&format!(
+                "{} = {function}({});\n",
+                out_vars[0],
+                call_args.join(", ")
+            ));
+        } else {
+            script.push_str(&format!(
+                "[{}] = {function}({});\n",
+                out_vars.join(", "),
+                call_args.join(", ")
+            ));
+        }
+        for v in &out_vars {
+            script.push_str(&format!("  printf(\"%.17g\\n\", {v});\n"));
+        }
+        script.push_str(&format!("  printf(\"@@GS_OCT_{call_id}@@\\n\");\n"));
+        script.push_str("catch __err\n");
+        script.push_str("  printf(\"ERROR: %s\\n\", __err.message);\n");
+        script.push_str(&format!("  printf(\"@@GS_OCT_{call_id}@@\\n\");\n"));
+        script.push_str("end\n");
+        script.push_str("fflush(stdout);\n");
+
+        self.write_and_flush(&script)?;
+        let lines = read_until_marker(&mut self.stdout, call_id, &self.stderr_rx)?;
+        parse_output_lines(function, &lines, num_outputs)
+    }
+
+    /// RK4-integrates `xc` forward by `dt`, holding `args` fixed across all four stages and
+    /// calling [`Self::call_readonly_stateful`] against `<function>_derivative` up to four
+    /// times (`k1..k4`) -- the direct Octave-hosted analog of
+    /// `cscript_ffi::CScriptInstance::rk4_step_xc`/`pyblock_ffi`'s own RK4 stepper, same
+    /// zero-order-hold convention (`args`, i.e. `t`/`dt`/inputs, held fixed across all four
+    /// stages). `derivative_function` is expected to already carry the `_derivative` suffix
+    /// (callers pass `"<function>_derivative"`, matching the file-per-function contract).
+    pub fn rk4_step_xc_stateful(
+        &mut self,
+        derivative_function: &str,
+        instance: &str,
+        xc: &[f64],
+        args: &[f64],
+        dt: f64,
+    ) -> Result<Vec<f64>, OctaveError> {
+        let add = |a: &[f64], b: &[f64], scale: f64| -> Vec<f64> {
+            a.iter().zip(b).map(|(ai, bi)| ai + scale * bi).collect()
+        };
+        let n = xc.len();
+        let k1 = self.call_readonly_stateful(derivative_function, instance, args, Some(xc), n)?;
+        let k2 = self.call_readonly_stateful(
+            derivative_function,
+            instance,
+            args,
+            Some(&add(xc, &k1, dt / 2.0)),
+            n,
+        )?;
+        let k3 = self.call_readonly_stateful(
+            derivative_function,
+            instance,
+            args,
+            Some(&add(xc, &k2, dt / 2.0)),
+            n,
+        )?;
+        let k4 = self.call_readonly_stateful(
+            derivative_function,
+            instance,
+            args,
+            Some(&add(xc, &k3, dt)),
+            n,
+        )?;
+        Ok((0..n)
+            .map(|i| xc[i] + (dt / 6.0) * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]))
+            .collect())
     }
 
     /// Kills the underlying `octave-cli` process immediately (`SIGKILL`, not a graceful

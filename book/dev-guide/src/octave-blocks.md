@@ -1,8 +1,10 @@
-# Octave pure-function blocks (`kind=octfunc`): design
+# Octave blocks (`kind=octfunc`, `kind=octblock`): design
 
-*(Implemented this session, as a genuinely separate, additive block kind alongside `pyfunc` —
-the direct `octave-cli`-hosted analog, not a mode of anything else. Mirrors `pyfunc-blocks.md`'s
-own before/after structure.)*
+*(`kind=octfunc` implemented first, as a genuinely separate, additive block kind alongside
+`pyfunc` — the direct `octave-cli`-hosted analog, not a mode of anything else, mirroring
+`pyfunc-blocks.md`'s own before/after structure. `kind=octblock` — the stateful sibling,
+`pyblock`'s own Octave-hosted analog — implemented in a later session on top of the same
+`octave_ffi::OctaveSession`; see "Stateful blocks (`kind=octblock`)" below for what it adds.)*
 
 ## What this is, and what it isn't
 
@@ -166,13 +168,11 @@ no flag that keeps `--interactive`'s "never exit at EOF" behavior without also p
 so `--interactive` is simply not passed at all; `octave_ffi::OctaveSession::spawn` uses
 `--no-gui --norc --quiet` only.
 
-## What's deliberately not built
+## What's deliberately not built (`kind=octfunc`)
 
 - No `state`/`t`/`dt`/`xc_count` at all — genuinely out of scope for a stateless function, the
   same restriction `kind=pyfunc` already has, for the same reason. A netlist author who needs
-  persistent state should reach for `kind=pyblock` instead (there is no Octave-hosted
-  counterpart to `pyblock` in this pass — scope was deliberately kept to the stateless analog
-  only).
+  persistent state should reach for `kind=octblock` instead (see below).
 - No vector-input or vector-output support — every input must be `SignalValue::Scalar` (checked
   via `dae-runtime`'s own `require_all_scalar` helper, the same one several other scalar-only
   block kinds already use), matching the literal-numeric-argument protocol above (there is no
@@ -182,3 +182,131 @@ so `--interactive` is simply not passed at all; `octave_ffi::OctaveSession::spaw
   stateless function call has no instance to remember a requested next-hit time against) — see
   `general-mna::system_builder::parse_sample_time`'s own `kind_str`-parameterized rejection
   message, shared by both `pyfunc` and `octfunc`.
+
+## Stateful blocks (`kind=octblock`)
+
+`kind=octblock` is the `pyblock` analog: a user-supplied Octave-compatible function with real
+persistent state across steps (`start`/`output`/`update`/`xc_count`, the same contract shape
+`pyblock`/`cscript` already have), on top of the exact same `octave_ffi::OctaveSession` and
+shared-persistent-process design above — no second `octave-cli` process, no separate crate. Two
+constraints, both discovered empirically against the real installed `octave-cli` (11.1.0), drove
+this design; neither was assumed going in.
+
+### Constraint 1: Octave only auto-loads the first function in a `.m` file
+
+Confirmed directly: given a `.m` file with two `function ... end` blocks, only the *first* one
+(matching the file's own name) is callable from outside the file — the second is an invisible
+private subfunction, exactly Octave's own documented scoping rule for a `.m` file, not a bug or
+a version quirk. `pyblock`'s own single `.py` file holding `start`/`output`/`update`
+all as top-level `def`s has no such restriction (Python has no "only the first def counts"
+rule), so this is a genuine, Octave-specific wrinkle `pyblock`'s own contract shape can't be
+copied verbatim.
+
+**Consequence: every contract function needs its own file**, named `<function>_<role>.m`,
+sharing one directory (`kind=octblock`'s own `path=`, which therefore names a *directory*, not
+a single file — the one place this contract's own `path=` semantics diverge from every other
+block kind's):
+
+| File | Required | Signature |
+|---|---|---|
+| `<function>_start.m` | always | `state = <function>_start()` |
+| `<function>.m` | unless `xc_count>0` | `[new_state, y1, y2, ...] = <function>(state, t, dt, u1, u2, ...)` |
+| `<function>_derivative.m` | only if `xc_count>0` | `xc_dot = <function>_derivative(state, u1, ..., xc)` — pure, must not mutate `state`; called up to 4×/step (RK4 stages) |
+| `<function>_output_xc.m` | only if `xc_count>0` | `[new_state, y1, ...] = <function>_output_xc(state, t, dt, u1, ..., xc)` — `xc` here is this step's own already-integrated continuous state |
+| `<function>_update.m` | optional | `new_state = <function>_update(state, t, dt, u1, ...)` — called once per resolved step, after output; if absent, `output`/`output_xc`'s own returned `new_state` is the only state advance |
+| `<function>_next_sample_hit.m` | only if `ts=variable` | `seconds = <function>_next_sample_hit(state, t, dt, u1, ...)` |
+
+This is documented prominently — in the component reference's own `## Description` (not buried
+in a caveat) — specifically because a user coming from Octave/legacy-tooling habits of "one
+script, many local functions" hits this on their very first attempt.
+
+`dae_runtime::DaeError::OctBlockMissingRequiredFile`/
+`OctBlockRequiresNextSampleHitForVariableSampleTime` check every required file's existence
+directly against the filesystem, once, at construction — *before* `octave-cli` is ever asked
+about it, so a missing file is a clear, immediate error naming the exact expected path, not a
+generic Octave-side "undefined function" surfacing at the first call.
+
+### Constraint 2: per-instance state lives inside the Octave session itself, never serialized back
+
+Unlike `cscript`'s opaque `void*`/`pyblock`'s opaque Python object handle — both owned by a
+Rust-side struct — an `octblock` instance's own `state` (whatever `<function>_start` returns)
+lives entirely **inside the shared `octave-cli` session**, in one global struct keyed by the
+block's own instance name:
+
+```text
+global __gs_state;
+__gs_state.('<instance>') = <function>_start();     % once, at construction
+
+% each resolved step:
+global __gs_state;
+try
+  [__gs_state.('<instance>'), __o0, ...] = \
+      <function>(__gs_state.('<instance>'), <t>, <dt>, <u0>, ...);
+  printf("%.17g\n", __o0); ...
+  printf("@@GS_OCT_<call_id>@@\n");
+catch __err
+  printf("ERROR: %s\n", __err.message);
+  printf("@@GS_OCT_<call_id>@@\n");
+end
+```
+
+Rust's own job is just "call `output` for instance `A`" — `dae_runtime::BlockState::OctBlock`
+holds only `instance: String` (the lookup key) plus the same zero-order-hold bookkeeping every
+other sample-time-gated block already carries; it never holds a copy of the opaque state itself.
+This was validated directly against real `octave-cli`
+(`crates/octave-ffi/tests/stateful_session.rs`'s own
+`two_instances_of_same_stateful_function_do_not_contaminate_each_others_state`): two independent
+instances of the *same* Octave function, calls interleaved both orderings, zero
+cross-contamination — purely a consequence of `instance` being a distinct struct field name in
+one shared global.
+
+**A failed call cannot corrupt state.** Octave never performs a multi-value assignment's
+left-hand-side writes if evaluating the right-hand side raises — so `__gs_state.('<instance>')`
+is only overwritten on a call that actually succeeds; a caught runtime error leaves the previous
+state slot completely untouched, with no special-casing needed on this crate's own side to get
+that guarantee. Confirmed directly:
+`crates/octave-ffi/tests/stateful_session.rs::failed_stateful_call_does_not_corrupt_instance_state`
+deliberately triggers two independent error-then-recovery cycles and checks the instance's own
+state slot is exactly what it was before each failed call, not silently reset or clobbered.
+
+**The one exception: `xc` crosses the pipe explicitly.** The solver-owned continuous-state
+vector (the `xc_count > 0` case) is *not* part of the block's own opaque state — it's the
+solver's own state, integrated by `dae-runtime`'s RK4 stepper the same way `cscript`'s/
+`pyblock`'s own `xc` is — so it has to cross the pipe as explicit numeric data on every call,
+formatted as a literal Octave row-vector argument (`[v0, v1, ...]`), the one place this protocol
+passes anything beyond scalar literals. `octave_ffi::OctaveSession::rk4_step_xc_stateful` mirrors
+`cscript_ffi::CScriptInstance::rk4_step_xc` exactly: RK4 done in Rust, calling
+`<function>_derivative` up to four times per step, holding the block's other inputs fixed across
+all four stages.
+
+### `octave_ffi::OctaveSession`'s own stateful API
+
+Four methods, added alongside `octfunc`'s existing `call`/`add_path` (left byte-for-byte
+unchanged):
+
+- `call_start(function, instance)` — `__gs_state.('<instance>') = <function>_start()`.
+- `call_stateful(function, instance, args, xc, num_outputs)` — the state-*writing* shape
+  (`output`/`output_xc`/`update` all share it — `update` just passes `num_outputs = 0`).
+- `call_readonly_stateful(function, instance, args, xc, num_outputs)` — the state-*reading*
+  shape (`derivative`/`next_sample_hit`), where `__gs_state.('<instance>')` is passed in as an
+  argument but never reassigned.
+- `rk4_step_xc_stateful(derivative_function, instance, xc, args, dt)` — the RK4 stepper above,
+  built on `call_readonly_stateful`.
+
+### A real, documented limitation: no `TimeStep::Adaptive` support
+
+`TimeStep::Adaptive`'s own retry loop clones the whole `block_states` vector before every trial
+step, and simply discards a rejected trial's clone — the protocol every other stateful block kind
+(`cscript`, `pyblock`) depends on: their own state lives *inside* the cloned Rust value, so a
+discarded trial's mutations are discarded along with it. `octblock`'s own state lives inside the
+one shared `octave-cli` session, which is **never cloned** — a rejected trial's own
+`output`/`output_xc`/`update` calls would have already mutated the real Octave-side state, with
+no way to roll them back once the trial is discarded and retried with a smaller `dt`.
+
+Rather than silently producing wrong answers under adaptive stepping, `kind=octblock` is
+rejected outright at construction time whenever `TimeStep::Adaptive` is requested —
+`dae_runtime::DaeError::OctBlockDoesNotSupportAdaptiveStep`, unconditional (unlike
+`CScriptRequiresCloneForAdaptiveStep`, which is opt-in and satisfiable by exporting
+`cscript_clone` — there is no `.m`-file convention that could make Octave's own shared
+global-struct state trial-cloneable). A netlist using `kind=octblock` must run with a fixed
+`--dt`.

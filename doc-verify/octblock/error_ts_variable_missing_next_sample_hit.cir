@@ -1,0 +1,4 @@
+* ## Errors: ts=variable without <function>_next_sample_hit.m present is rejected at
+* construction time -- accum/ has no accumulate_next_sample_hit.m.
+SRC kind=const value=3
+G1 kind=octblock path=doc-verify/octblock/accum function=accumulate in=SRC ts=variable
