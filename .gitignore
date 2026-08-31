@@ -28,3 +28,8 @@ tests/raw-output-python/__pycache__/
 # tests/measure's own bytecode cache -- fixtures/README.md/_lib.py/test_*.py are the committed
 # source; this is not.
 tests/measure/__pycache__/
+
+# octave-cli dumps its own workspace here if it (or its parent) is killed/crashes -- a byproduct
+# of running the real octave-cli in crates/octave-ffi's own tests and doc-verify/octfunc, never
+# something to commit.
+octave-workspace

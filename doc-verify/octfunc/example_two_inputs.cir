@@ -1,0 +1,6 @@
+* OctFunc inputs=A,B calls subtract(A, B) as two genuinely distinct positional arguments, never
+* a bundled array -- A=10, B=3 gives 7, not -7 (which would indicate the arguments were swapped
+* or bundled wrong). No title line.
+A kind=const value=10
+B kind=const value=3
+G1 kind=octfunc path=doc-verify/octfunc/subtract.m function=subtract inputs=A,B

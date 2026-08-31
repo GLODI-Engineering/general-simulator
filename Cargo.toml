@@ -15,6 +15,7 @@ members = [
     "crates/continuous-blocks",
     "crates/cscript-ffi",
     "crates/pyblock-ffi",
+    "crates/octave-ffi",
     "crates/general-simulator-cli",
 ]
 

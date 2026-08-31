@@ -293,6 +293,26 @@ enum BlockState {
         time_since_sample: f64,
         last_output: Vec<f64>,
     },
+    /// The `.m`-file counterpart to `PyFunction` above, for [`BlockKind::OctFunc`] — same
+    /// stateless contract, but `session` is an `Rc<RefCell<_>>` around one shared
+    /// [`octave_ffi::OctaveSession`], not an owned interpreter handle: unlike `pyblock_ffi`'s
+    /// embedded Python (process-global via PyO3, so every `PyFunctionInstance` reaches the same
+    /// interpreter automatically), `octave_ffi::OctaveSession` is a real, separate `octave-cli`
+    /// child process this crate itself owns and must explicitly share across every `OctFunc`
+    /// block instance in the same run (see [`simulate_transient_with_blocks`]'s own construction
+    /// loop, which spawns exactly one `OctaveSession`, lazily, the first time an `OctFunc` block
+    /// is actually encountered, and hands every instance an `Rc::clone` of it). Cloning this
+    /// variant (needed only for [`TimeStep::Adaptive`]'s retry loop) is always cheap and
+    /// infallible — an `Rc::clone`, sharing the same underlying process and its own
+    /// per-process-lifetime call-id counter, never spawning a second `octave-cli`; this is
+    /// correct because [`octave_ffi::OctaveSession::call`] carries no state a rejected trial
+    /// step could corrupt (see the module doc comment, "The call protocol" — nothing is ever
+    /// assigned into the shared Octave workspace).
+    OctFunction {
+        session: std::rc::Rc<std::cell::RefCell<octave_ffi::OctaveSession>>,
+        time_since_sample: f64,
+        last_output: Vec<f64>,
+    },
 }
 
 /// One step's result: `(t, OperatingPoint, block_outputs)`, where `block_outputs` is every
@@ -317,6 +337,7 @@ fn block_index_by_name(blocks: &[BlockInstance]) -> Result<BTreeMap<&str, usize>
             BlockKind::CScript { output_names, .. }
             | BlockKind::PyBlock { output_names, .. }
             | BlockKind::PyFunction { output_names, .. }
+            | BlockKind::OctFunc { output_names, .. }
             | BlockKind::CoordinateTransform { output_names, .. }
             | BlockKind::Pmsm { output_names, .. }
             | BlockKind::Pwm { output_names, .. }
@@ -1219,6 +1240,56 @@ fn evaluate_blocks(
                 }
                 SignalValue::Scalar(last_output.first().copied().unwrap_or(0.0))
             }
+            (
+                BlockKind::OctFunc {
+                    output_names,
+                    sample_time,
+                    function,
+                    ..
+                },
+                BlockState::OctFunction {
+                    session,
+                    time_since_sample,
+                    last_output,
+                    ..
+                },
+            ) => {
+                // Identical zero-order-hold "due" gating to PyFunction's own arm above -- see
+                // its own comment for the full rationale. Same discard-elapsed-time rule too:
+                // OctaveSession::call has no dt parameter, a pure function has no notion of
+                // elapsed time to hand it.
+                let due = match sample_time {
+                    None => true,
+                    // Variable is unreachable here -- rejected at parse time for OctFunc.
+                    Some(SampleTimeSpec::Variable) => true,
+                    Some(SampleTimeSpec::Periodic { period, .. }) => {
+                        *time_since_sample += dt;
+                        if *time_since_sample + 1e-15 >= *period {
+                            *time_since_sample = 0.0;
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                };
+                if due {
+                    // Unlike PyFunction (which keeps each declared input's own scalar/vector
+                    // shape, via numpy), octave_ffi::OctaveSession::call takes a flat &[f64] of
+                    // literal scalar arguments -- there is no vector-input support for octfunc
+                    // (matching this crate's own scalar-only-outputs restriction, and the
+                    // literal-numeric-argument protocol octave_ffi's own module doc comment
+                    // documents), so every declared input must itself be a Scalar.
+                    let flat_inputs = require_all_scalar(&block.name, &input_vals)?;
+                    *last_output = session
+                        .borrow_mut()
+                        .call(function, &flat_inputs, output_names.len())
+                        .map_err(DaeError::Octave)?;
+                }
+                for (name, v) in output_names.iter().zip(last_output.iter()).skip(1) {
+                    outputs.insert(name.clone(), SignalValue::Scalar(*v));
+                }
+                SignalValue::Scalar(last_output.first().copied().unwrap_or(0.0))
+            }
             _ => unreachable!("BlockState variant always matches its BlockKind"),
         };
         outputs.insert(block.name.clone(), value);
@@ -1368,6 +1439,19 @@ pub fn simulate_transient_with_blocks(
     let mut pyblock_registry = pyblock_ffi::PyBlockRegistry::new();
     #[cfg(feature = "python")]
     let mut pyfunction_registry = pyblock_ffi::PyFunctionRegistry::new();
+    // Spawned lazily, the first time a BlockKind::OctFunc block is actually encountered below --
+    // see octave_ffi's own module doc comment for why paying octave-cli's own real startup cost
+    // (~158 ms, measured) should never happen for a run that doesn't use kind=octfunc at all.
+    // Shared (via Rc::clone into every BlockState::OctFunction instance) rather than one process
+    // per block instance -- this is the stateless/pyfunc-style case, so every octfunc block in
+    // one run talks to the same octave-cli session.
+    let mut octave_session: Option<std::rc::Rc<std::cell::RefCell<octave_ffi::OctaveSession>>> =
+        None;
+    // Which directories have already been addpath'd into the shared session -- addpath itself
+    // is harmless to repeat, but there's no reason to pay the round trip twice for two block
+    // instances whose .m files happen to live in the same directory.
+    let mut octave_paths_added: std::collections::BTreeSet<std::path::PathBuf> =
+        std::collections::BTreeSet::new();
     let mut block_states: Vec<BlockState> = Vec::with_capacity(blocks.len());
     for b in blocks {
         let dynamic = |state_space: StateSpace| {
@@ -1587,6 +1671,59 @@ pub fn simulate_transient_with_blocks(
                 return Err(DaeError::PythonSupportNotCompiledIn {
                     block_name: b.name.clone(),
                 });
+            }
+            BlockKind::OctFunc {
+                path,
+                output_names,
+                sample_time,
+                ..
+            } => {
+                // Spawn the shared session on first use, not eagerly -- see its own `let mut
+                // octave_session` declaration above.
+                let session = match &octave_session {
+                    Some(s) => s.clone(),
+                    None => {
+                        let s = octave_ffi::OctaveSession::spawn().map_err(DaeError::Octave)?;
+                        let s = std::rc::Rc::new(std::cell::RefCell::new(s));
+                        octave_session = Some(s.clone());
+                        s
+                    }
+                };
+                // Octave requires the .m file to be on its own path and the file name to match
+                // the function name (see octave_ffi's own module doc comment) -- addpath once
+                // per unique containing directory, not once per block instance.
+                let dir = match path.canonicalize() {
+                    Ok(abs_file) => abs_file
+                        .parent()
+                        .map(std::path::Path::to_path_buf)
+                        .unwrap_or_else(|| std::path::PathBuf::from(".")),
+                    // A .m file that doesn't (yet) resolve via canonicalize -- fall back to its
+                    // own literal parent, relative to this process's own current directory
+                    // (which octave-cli inherits unchanged, since it's spawned with no explicit
+                    // current_dir override). Calling into a function this session genuinely
+                    // can't find then surfaces naturally as an ordinary Octave-side "undefined
+                    // function" DaeError::Octave(OctaveError::Runtime) at call time, rather than
+                    // failing here at construction time.
+                    Err(_) => path
+                        .parent()
+                        .map(std::path::Path::to_path_buf)
+                        .unwrap_or_else(|| std::path::PathBuf::from(".")),
+                };
+                if octave_paths_added.insert(dir.clone()) {
+                    session
+                        .borrow_mut()
+                        .add_path(&dir)
+                        .map_err(DaeError::Octave)?;
+                }
+                BlockState::OctFunction {
+                    session,
+                    // Same rationale as PyFunction's own construction arm above.
+                    time_since_sample: match sample_time {
+                        Some(SampleTimeSpec::Periodic { period, offset }) => period - offset,
+                        Some(SampleTimeSpec::Variable) | None => 0.0,
+                    },
+                    last_output: vec![0.0; output_names.len()],
+                }
             }
             _ => BlockState::Stateless,
         };

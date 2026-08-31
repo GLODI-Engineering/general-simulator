@@ -31,6 +31,7 @@
 - [`cscript-ffi`: the native escape hatch](crate-cscript-ffi.md)
 - [`pyblock-ffi`: the Python escape hatch](python-blocks.md)
 - [`pyblock-ffi`: pure-function blocks (`kind=pyfunc`)](pyfunc-blocks.md)
+- [`octave-ffi`: Octave pure-function blocks (`kind=octfunc`)](octave-blocks.md)
 - [`general-simulator-cli`: the netlist-in/CSV-out runner](crate-general-simulator-cli.md)
 - [`kind=measure`: post-processing measurements, not a block-graph kind](measurements-architecture.md)
 

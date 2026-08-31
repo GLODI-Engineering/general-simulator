@@ -1,0 +1,7 @@
+* OctFunc component reference -- the "## Example" netlist verbatim. No --features python build
+* needed (unlike pyfunc/pyblock) -- octfunc builds and runs unconditionally, only octave-cli
+* itself needs to be installed and on PATH at run time. No title line -- see
+* doc-verify/pid/example.cir's own comment.
+SRC kind=const value=3
+* G1 calls add_one(SRC) every step (see add_one.m). Expect G1 = 4 for SRC = 3, every row.
+G1 kind=octfunc path=doc-verify/octfunc/add_one.m function=add_one in=SRC

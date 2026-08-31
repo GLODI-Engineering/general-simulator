@@ -1,0 +1,4 @@
+* OctFunc "path=" through a directory containing a space requires "double-quoting" -- verifies
+* the ## Parameters claim about path= quoting, same convention as CScript's lib=. No title line.
+SRC kind=const value=3
+G1 kind=octfunc path="doc-verify/octfunc/a lib dir/add_one.m" function=add_one in=SRC

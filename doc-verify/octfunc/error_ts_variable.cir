@@ -1,0 +1,4 @@
+* OctFunc rejects ts=variable at parse time -- verifies the ## Errors claim (a stateless
+* function call has no instance to remember a requested next-hit time against). No title line.
+SRC kind=const value=3
+G1 kind=octfunc path=doc-verify/octfunc/add_one.m function=add_one in=SRC ts=variable

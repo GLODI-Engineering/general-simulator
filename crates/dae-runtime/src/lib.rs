@@ -147,6 +147,16 @@ pub enum DaeError {
     PythonSupportNotCompiledIn {
         block_name: String,
     },
+    /// Spawning the shared `octave-cli` subprocess, adding a [`block_graph::BlockKind::OctFunc`]
+    /// block's own `.m` file directory to its path, or calling into it failed — see
+    /// [`octave_ffi::OctaveError`]'s own three cases (not found on `PATH`, the process died, or
+    /// an ordinary Octave-side runtime error the session survives). Unlike
+    /// [`Self::PythonSupportNotCompiledIn`], there is no "not compiled in" counterpart for this
+    /// variant — `octave-ffi` is an unconditional dependency of this crate (a pure subprocess
+    /// manager, never linking against Octave itself), so `kind=octfunc` is always available to
+    /// parse and construct; only an actually-missing `octave-cli` binary on `PATH` at runtime
+    /// surfaces here, as [`octave_ffi::OctaveError::NotFound`].
+    Octave(octave_ffi::OctaveError),
     /// A [`block_graph::GateBinding`] names a block that exists but isn't a
     /// [`block_graph::BlockKind::Sig2Voltage`] — the enforced physical/signal-domain boundary:
     /// an ideal switch's gate is itself a voltage, so any signal driving it must first pass through

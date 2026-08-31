@@ -654,6 +654,7 @@ fn run_transient_with_ideal_switches(
             BlockKind::CScript { output_names, .. }
             | BlockKind::PyBlock { output_names, .. }
             | BlockKind::PyFunction { output_names, .. }
+            | BlockKind::OctFunc { output_names, .. }
             | BlockKind::CoordinateTransform { output_names, .. }
             | BlockKind::Pmsm { output_names, .. }
             | BlockKind::Pwm { output_names, .. }

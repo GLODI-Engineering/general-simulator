@@ -34,6 +34,7 @@ dependencies = [
  "general-mna",
  "general-spice-core",
  "lcp-solver",
+ "octave-ffi",
  "pwl-devices",
  "pyblock-ffi",
 ]
@@ -160,6 +161,10 @@ dependencies = [
  "pyo3-build-config",
  "rustc-hash",
 ]
+
+[[package]]
+name = "octave-ffi"
+version = "0.1.0"
 
 [[package]]
 name = "once_cell"
