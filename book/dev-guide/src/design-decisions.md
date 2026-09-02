@@ -94,6 +94,64 @@ spline breakpoints) and the one-keyword-per-style convention (`pwc`/`pwl`) stops
 cleanly — at that point, consider a single parameterized block (e.g. `kind=breakpoints
 interp=constant|linear|cubic`) instead of adding a fourth bare keyword.
 
+## `TimeStep::Adaptive` predicting discrete-block/gate events, added 2026-09-02
+
+**Considered:**
+1. Leave the adaptive controller purely LTE-driven: it only ever detects a gate change
+   *after* a trial step has already landed past it (`gate_changed`, forcing a more robust
+   integrator for that one step), never predicts ahead.
+2. Have every `TimeStep::Adaptive` run default to a `dt_max` capped well below any block's own
+   switching period, as a blanket safety margin, documented as a usage requirement.
+3. Give `TimeStep::Adaptive`'s own per-step loop a predicted "earliest next event" clamp,
+   computed in closed form from each in-scope block's *currently persisted* state (and its
+   last-*evaluated* runtime inputs, for `PhaseShiftPwm`), applied to the trial `dt` *before* the
+   LTE-driven retry loop runs at all.
+
+**Chose:** Option 3.
+
+**Because:** Option 1 is a real, previously demonstrated bug, not a hypothetical: an
+`internal-archive` experiment (`experiments/elspice-pwl-ps-pwm-leg-modulator/`) ported
+a phase-shift-PWM-with-dead-time modulator to `kind=pyblock` and measured real gate edges
+**silently missed** (not just jittered) once `dt_max` approached the switching period — 0/100
+missed at `dt_max=0.3x` the period, 30/100 at `0.48x`, 45/100 at `0.9x`, 57/100 at `3x`. If two
+edges fall inside one trial step, only the "state differs from before" signal survives —
+*both* transitions collapse into one detected change and a pulse vanishes outright. Option 2
+pushes the burden onto every caller to know and manually enforce a margin below whatever
+switching frequency their own netlist happens to use, is easy to violate silently (nothing
+rejects a `dt_max` past the period, the corruption is just quietly there in the trace), and
+doesn't help at all for a *closed-loop*-driven frequency that only becomes fast at run time.
+Option 3 fixes the root cause directly, is strictly bounded in cost to at most one extra
+closed-form evaluation per outer-loop iteration (`earliest_next_event_dt`,
+`crates/dae-runtime/src/block_graph.rs`), and needs zero new public API, no `general-mna`
+change, and no change outside `block_graph.rs`'s own adaptive loop and its already-in-scope
+`evaluate_blocks` dispatch: `TimeStep::Fixed`, `lib.rs`'s own no-switch adaptive path (which
+never calls `evaluate_blocks` at all, so it's structurally immune to this bug), and
+`step_control.rs`'s own `lte_attempt`/`AdaptiveConfig` signatures are all untouched.
+
+`BlockKind::Vco` is deliberately excluded from the event prediction (always contributes `None`)
+— its own output is the raw phase itself (a continuous ramp in `[0,1)`), not a discrete/boolean
+gate signal, so it has no "edge" a downstream comparator could silently swallow the way a missed
+`Pwm`/`PhaseShiftPwm` transition is. `kind=octblock` stays separately, unconditionally rejected
+under `TimeStep::Adaptive` (state-rollback reasons, unrelated to this feature) — this clamp
+still computes an estimate for it (for whenever that restriction is eventually lifted) but is
+unreachable in practice today.
+
+Because `PhaseShiftPwm`'s `freq_command`/`phase_offset`/`duty` are runtime inputs (not fixed
+construction params, unlike `Pwm`'s own `freq_hz`), the predicted edge is a same-input estimate,
+valid only until the next step's inputs actually change — the same staleness caveat every other
+closed-loop-driven prediction in this crate already has (e.g. `Pid`'s own anti-windup). Recomputing
+fresh from the block's own currently-persisted state every accepted step (never extrapolating
+multiple steps ahead) bounds that staleness to at most one step's own error, which is strictly
+better than today's zero prediction, never worse — and the LTE-driven retry loop still runs
+after the clamp and can shrink `dt` further; the clamp only ever tightens a trial step, it is not
+a substitute for local-truncation-error control.
+
+**Revisit if:** A future block-graph kind gains its own discrete "next transition" outside the
+zero-order-hold `sample_time`/`PhaseShiftPwm`/`Pwm` shapes already covered — extend
+`earliest_next_event_dt`'s own match rather than special-casing it elsewhere. If `kind=octblock`
+is ever allowed under `TimeStep::Adaptive`, its event-clamp arm is already in place and should
+just start being reachable.
+
 ## Source material to adapt from
 - `docs/journal/2026-08.md`, read end to end — the documentation-planning session's own Q&A
   entry, and everything before it, is largely a sequence of these decisions already reasoned

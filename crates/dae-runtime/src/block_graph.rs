@@ -53,6 +53,18 @@ pub use general_mna::block_graph::{
     PidClamp, SampleTimeSpec, Signal, SignalValue,
 };
 
+/// Hard ceiling on accepted [`TimeStep::Adaptive`] steps for one [`simulate_transient_with_blocks`]
+/// call — see [`DaeError::AdaptiveStepStalled`]'s own doc comment for why this exists. Sized
+/// generously above any legitimate run this project has actually needed (the largest real
+/// fixed-step run on record is 1,000,000 rows for a 20ms/`dt=2e-8` transient; adaptive stepping
+/// should need far fewer accepted steps than that to cover the same window) while staying well
+/// under what would exhaust a typical machine's RAM before this check can fire (each row holds
+/// every node voltage/branch current/block output as `f64`s — a few hundred bytes for a
+/// medium-sized circuit — so even 10,000,000 rows stays in the hundreds-of-MB-to-low-GB range,
+/// not the tens-of-GB range that actually crashed a machine running the unpatched bug this
+/// guards against).
+pub const ADAPTIVE_STEP_HARD_CAP: usize = 10_000_000;
+
 /// Every input must be `Scalar` — the default rule for a `BlockKind` that has no elementwise/
 /// broadcast/flattening rule of its own (`Pid`, `Vco`, `Hysteresis`, `TransferFunction`, `Pwm`,
 /// `PhaseShiftPwm`, `Sig2Phys`). Returns the plain `f64` values in
@@ -510,6 +522,251 @@ fn emit_complementary_pair(
     } else {
         0.0
     }
+}
+
+/// The zero-order-hold "due" threshold shared by [`BlockKind::CScript`]/[`BlockKind::PyBlock`]/
+/// [`BlockKind::OctBlock`]'s own per-step gating: `None` sample_time runs continuously (no
+/// threshold at all), `Periodic` uses its fixed `period`, `Variable` uses whatever `next_hit_dt`
+/// this instance's own `next_sample_hit` last reported. Factored out so
+/// [`earliest_next_event_dt`] can reuse the exact same rule its callers' own "due" checks use,
+/// rather than re-deriving it.
+fn sample_threshold(sample_time: Option<&SampleTimeSpec>, next_hit_dt: f64) -> Option<f64> {
+    match sample_time {
+        None => None,
+        Some(SampleTimeSpec::Periodic { period, .. }) => Some(*period),
+        Some(SampleTimeSpec::Variable) => Some(next_hit_dt),
+    }
+}
+
+/// Smallest non-negative relative `dt` (from "now") at which a zero-order-hold block next
+/// becomes due, given its currently-persisted `time_since_sample` accumulator and (already
+/// resolved) `threshold`. `None` propagates through (never due on its own -- e.g. `sample_time
+/// == None`, run-every-step blocks aren't scheduled events for this purpose since they have no
+/// discrete "next hit" at all).
+fn time_until_due(threshold: Option<f64>, time_since_sample: f64) -> Option<f64> {
+    threshold.map(|th| (th - time_since_sample).max(0.0))
+}
+
+/// The smallest relative `dt` (from theta_now, in the same `[0,1)`-wrapped phase space
+/// `sawtooth_carrier`/`Vco::step` use) at which one of `duty`/`Pwm`'s complementary-pair
+/// dead-time thresholds is next crossed, converted to seconds via `freq` (Hz). Shared by
+/// [`BlockKind::Pwm`] and [`BlockKind::PhaseShiftPwm`]'s own [`earliest_next_event_dt`] arms --
+/// both use the identical `{red_frac, duty, duty + fed_frac}` threshold set
+/// [`continuous_blocks::math_ops::complementary_pwm_with_deadtime`] itself compares against.
+/// `None` if `freq` isn't usable (non-positive or non-finite -- would make `delta_t` meaningless
+/// or divide by zero).
+///
+/// A threshold this function itself just reported (and the adaptive loop then landed a step
+/// exactly on, which is the whole point of calling this at all) reads back as `theta_now ==
+/// that threshold` on the very next call -- naively that's `delta_theta == 0`, i.e. "you're
+/// already there," which the adaptive loop's own `ev.max(1e-15)` clamp turns into a real ~1fs
+/// step instead of an error. Theta barely moves in a step that small, so the SAME threshold
+/// reads back as ~0 again next iteration too: an unbounded near-zero-dt loop that silently
+/// consumes memory (one row per iteration, unbounded) until the process is killed -- this
+/// crashed the machine it ran on once already. `THETA_EPS` (a full period's worth of
+/// `f64::EPSILON`-scale noise, times a wide safety margin -- see the constant's own comment)
+/// shifts the search so a threshold within `THETA_EPS` *behind* `theta_now` reads as "already
+/// crossed, wait a full period," never as "0 away" -- while any threshold more than `THETA_EPS`
+/// ahead is unaffected to double-precision noise. Regression test:
+/// `adaptive_event_landing::stepping_repeatedly_lands_exactly_on_the_same_edge_without_stalling`.
+fn next_pwm_edge_dt(
+    theta_now: f64,
+    duty: f64,
+    red_frac: f64,
+    fed_frac: f64,
+    freq: f64,
+) -> Option<f64> {
+    // theta = (t * freq_hz).fract() (see `sawtooth_carrier`) or a phase accumulator advanced by
+    // `freq * dt` each step (see `Vco::step`) -- both accumulate error on the order of
+    // `f64::EPSILON * theta_now.recip_scale()`, comfortably under 1e-9 for any `t`/`phase`
+    // magnitude this engine's own `AdaptiveConfig::from_t_final` would ever produce (t_final up
+    // to ~1e6s would still keep `t * freq_hz` under 1e18, whose `f64::EPSILON`-scale noise is
+    // ~1e2 in absolute terms -- i.e. this bound would need revisiting only for a `t_final`/`freq`
+    // combination many orders of magnitude past anything this project runs).
+    const THETA_EPS: f64 = 1e-9;
+    if !freq.is_finite() || freq <= 0.0 {
+        return None;
+    }
+    let thresholds = [red_frac, duty, duty + fed_frac];
+    let delta_theta = thresholds
+        .iter()
+        .map(|&r| (r - theta_now - THETA_EPS).rem_euclid(1.0) + THETA_EPS)
+        .fold(f64::INFINITY, f64::min);
+    if !delta_theta.is_finite() {
+        return None;
+    }
+    Some(delta_theta / freq)
+}
+
+/// Resolves `signal` against `prev_outputs` (the previous *accepted* step's own output map, not
+/// a trial-in-progress one) as a scalar, or `None` if unresolvable (unknown name, vector-valued,
+/// or -- on the very first step, before any step has been accepted -- simply not there yet).
+/// `Signal::Block` and `Signal::BlockPrev` are treated identically here: both name the same
+/// "last known value" this function wants, unlike `evaluate_blocks`' own `resolve` closure,
+/// which distinguishes "this step's already-computed upstream output" from "strictly the
+/// previous step's" -- a distinction [`earliest_next_event_dt`] has no use for, since it never
+/// computes a same-step `outputs` map of its own at all.
+fn resolve_prev_scalar(
+    prev_outputs: &BTreeMap<String, SignalValue>,
+    signal: &Signal,
+) -> Option<f64> {
+    let name = match signal {
+        Signal::Block(n) | Signal::BlockPrev(n) => n,
+    };
+    prev_outputs.get(name).and_then(|v| v.as_scalar())
+}
+
+/// Computes the earliest relative `dt` (from `t`, using each block's currently-*persisted*
+/// state -- never a trial evaluation) at which some in-scope block's output would next cross a
+/// discrete threshold (a `Pwm`/`PhaseShiftPwm` gate edge, or a zero-order-hold block's next
+/// sample hit), assuming every block's own runtime inputs stay at their last-*evaluated* values
+/// (i.e. `prev_outputs`, the previous accepted step's own outputs). Returns `None` if no in-scope
+/// block reports a finite estimate.
+///
+/// Read fresh, from `block_states`/`prev_outputs` as they stand at the very start of every
+/// accepted-step iteration of [`TimeStep::Adaptive`]'s own loop -- never extrapolated across
+/// multiple steps -- so a stale prediction (an input that changes again before the predicted
+/// edge, e.g. `PhaseShiftPwm`'s closed-loop-driven `freq_command`/`duty`) is bounded to at most
+/// one step's own error, which is strictly better than today's zero prediction, never worse: this
+/// is a *clamp* on the adaptive step, not a substitute for the LTE-driven retry loop that still
+/// runs after it and can shrink `dt` further.
+///
+/// [`BlockKind::Vco`] is deliberately excluded (always contributes `None`) -- its own output is
+/// the raw phase itself (a continuous ramp `[0,1)`, not a discrete/boolean gate signal), so the
+/// only "discontinuity" it has is the phase-wrap seam, which is a slope/value jump in a ramp
+/// signal feeding into some *other* block, not itself a gate transition a downstream comparator
+/// could silently swallow the way a missed `Pwm`/`PhaseShiftPwm` edge is. Out of scope for this
+/// feature.
+///
+/// `kind=octblock` stays out of scope for `TimeStep::Adaptive` entirely (see
+/// [`simulate_transient_with_blocks`]'s own upfront rejection) -- this function still computes an
+/// estimate for it (reusing the same `sample_threshold`/`time_until_due` helpers CScript/PyBlock
+/// use) for whenever that separate restriction is eventually lifted, but it is unreachable in
+/// practice today.
+fn earliest_next_event_dt(
+    blocks: &[BlockInstance],
+    block_states: &[BlockState],
+    prev_outputs: &BTreeMap<String, SignalValue>,
+    t: f64,
+) -> Option<f64> {
+    blocks
+        .iter()
+        .zip(block_states.iter())
+        .filter_map(|(block, state)| match (&block.kind, state) {
+            (
+                BlockKind::Pwm {
+                    freq_hz, red, fed, ..
+                },
+                _,
+            ) => {
+                let theta_now = sawtooth_carrier(t, *freq_hz);
+                let duty = resolve_prev_scalar(prev_outputs, block.inputs.first()?)?;
+                next_pwm_edge_dt(theta_now, duty, red * freq_hz, fed * freq_hz, *freq_hz)
+            }
+            (
+                BlockKind::PhaseShiftPwm { red, fed, .. },
+                BlockState::PhaseShiftPwm { osc, phase },
+            ) => {
+                let freq_command = resolve_prev_scalar(prev_outputs, block.inputs.first()?)?;
+                let phase_offset = resolve_prev_scalar(prev_outputs, block.inputs.get(1)?)?;
+                let duty = resolve_prev_scalar(prev_outputs, block.inputs.get(2)?)?;
+                let actual_freq = freq_command.clamp(osc.f_min, osc.f_max);
+                let theta_now = (*phase + phase_offset).rem_euclid(1.0);
+                next_pwm_edge_dt(
+                    theta_now,
+                    duty,
+                    red * actual_freq,
+                    fed * actual_freq,
+                    actual_freq,
+                )
+            }
+            // BlockKind::Vco: deliberately excluded, see this function's own doc comment.
+            (
+                BlockKind::CScript { sample_time, .. },
+                BlockState::CScript {
+                    time_since_sample,
+                    next_hit_dt,
+                    ..
+                },
+            ) => time_until_due(
+                sample_threshold(sample_time.as_ref(), *next_hit_dt),
+                *time_since_sample,
+            ),
+            #[cfg(feature = "python")]
+            (
+                BlockKind::PyBlock { sample_time, .. },
+                BlockState::PyBlock {
+                    time_since_sample,
+                    next_hit_dt,
+                    ..
+                },
+            ) => time_until_due(
+                sample_threshold(sample_time.as_ref(), *next_hit_dt),
+                *time_since_sample,
+            ),
+            #[cfg(feature = "python")]
+            (
+                BlockKind::PyFunction { sample_time, .. },
+                BlockState::PyFunction {
+                    time_since_sample, ..
+                },
+            ) => match sample_time {
+                None | Some(SampleTimeSpec::Variable) => None,
+                Some(SampleTimeSpec::Periodic { period, .. }) => {
+                    Some((period - time_since_sample).max(0.0))
+                }
+            },
+            (
+                BlockKind::OctFunc { sample_time, .. },
+                BlockState::OctFunction {
+                    time_since_sample, ..
+                },
+            ) => match sample_time {
+                None | Some(SampleTimeSpec::Variable) => None,
+                Some(SampleTimeSpec::Periodic { period, .. }) => {
+                    Some((period - time_since_sample).max(0.0))
+                }
+            },
+            (
+                BlockKind::OctBlock { sample_time, .. },
+                BlockState::OctBlock {
+                    time_since_sample,
+                    next_hit_dt,
+                    ..
+                },
+            ) => time_until_due(
+                sample_threshold(sample_time.as_ref(), *next_hit_dt),
+                *time_since_sample,
+            ),
+            (
+                BlockKind::DiscreteStateSpace { sample_time, .. }
+                | BlockKind::DiscreteTransferFunction { sample_time, .. },
+                BlockState::DiscreteDynamic {
+                    time_since_sample, ..
+                },
+            ) => match sample_time {
+                SampleTimeSpec::Periodic { period, .. } => {
+                    Some((period - time_since_sample).max(0.0))
+                }
+                SampleTimeSpec::Variable => None, // rejected at parse time for this kind
+            },
+            (
+                BlockKind::DiscretePid { sample_time, .. },
+                BlockState::DiscretePid {
+                    time_since_sample, ..
+                },
+            ) => match sample_time {
+                SampleTimeSpec::Periodic { period, .. } => {
+                    Some((period - time_since_sample).max(0.0))
+                }
+                SampleTimeSpec::Variable => None, // rejected at parse time for this kind
+            },
+            _ => None,
+        })
+        .fold(None, |acc, dt| match acc {
+            None => Some(dt),
+            Some(best) => Some(best.min(dt)),
+        })
 }
 
 fn evaluate_blocks(
@@ -1076,11 +1333,7 @@ fn evaluate_blocks(
                 // unset, the same way any other continuously-evaluated block already works here
                 // -- xc never advances on a step this block isn't "due" on, exactly like
                 // last_output is held rather than recomputed on those steps.
-                let threshold = match sample_time {
-                    None => None,
-                    Some(SampleTimeSpec::Periodic { period, .. }) => Some(*period),
-                    Some(SampleTimeSpec::Variable) => Some(*next_hit_dt),
-                };
+                let threshold = sample_threshold(sample_time.as_ref(), *next_hit_dt);
                 let (due, elapsed) = match threshold {
                     None => (true, dt),
                     Some(threshold) => {
@@ -1149,11 +1402,7 @@ fn evaluate_blocks(
             ) => {
                 // Identical sample_time/xc gating to BlockKind::CScript's own arm above -- see
                 // its own comment for the full rationale, unchanged here.
-                let threshold = match sample_time {
-                    None => None,
-                    Some(SampleTimeSpec::Periodic { period, .. }) => Some(*period),
-                    Some(SampleTimeSpec::Variable) => Some(*next_hit_dt),
-                };
+                let threshold = sample_threshold(sample_time.as_ref(), *next_hit_dt);
                 let (due, elapsed) = match threshold {
                     None => (true, dt),
                     Some(threshold) => {
@@ -1340,11 +1589,7 @@ fn evaluate_blocks(
                 // unlike OctFunc/PyFunction (stateless, elapsed time discarded), this block's
                 // own contract functions take `t`/`dt` explicitly (see BlockKind::OctBlock's own
                 // file-per-function table), so the accumulated `elapsed` matters here.
-                let threshold = match sample_time {
-                    None => None,
-                    Some(SampleTimeSpec::Periodic { period, .. }) => Some(*period),
-                    Some(SampleTimeSpec::Variable) => Some(*next_hit_dt),
-                };
+                let threshold = sample_threshold(sample_time.as_ref(), *next_hit_dt);
                 let (due, elapsed) = match threshold {
                     None => (true, dt),
                     Some(threshold) => {
@@ -1467,6 +1712,42 @@ pub fn simulate_transient_with_blocks(
     x_initial: Option<&[f64]>,
     t_final: f64,
     step: TimeStep,
+) -> Result<Vec<TransientWithBlocksStep>, DaeError> {
+    simulate_transient_with_blocks_capped(
+        source,
+        dialect,
+        diodes,
+        ideal_switches,
+        blocks,
+        gates,
+        shared_r_on,
+        x_initial,
+        t_final,
+        step,
+        ADAPTIVE_STEP_HARD_CAP,
+    )
+}
+
+/// Identical to [`simulate_transient_with_blocks`], with one addition: `max_adaptive_steps`
+/// overrides [`ADAPTIVE_STEP_HARD_CAP`] (see [`DaeError::AdaptiveStepStalled`]'s own doc comment
+/// for what this guards against) instead of always using the built-in default. A separate
+/// function, rather than adding a parameter to `simulate_transient_with_blocks` itself, so this
+/// project's own ~20 existing call sites (mostly tests, positional-argument calls) don't all need
+/// updating for a cap most of them will never want to change — `general-simulator-cli`'s own
+/// `--max-steps` flag is the intended caller.
+#[allow(clippy::too_many_arguments)]
+pub fn simulate_transient_with_blocks_capped(
+    source: &str,
+    dialect: Dialect,
+    diodes: &BTreeMap<String, IdealDiode>,
+    ideal_switches: &BTreeMap<String, IdealSwitch>,
+    blocks: &[BlockInstance],
+    gates: &BTreeMap<String, GateBinding>,
+    shared_r_on: f64,
+    x_initial: Option<&[f64]>,
+    t_final: f64,
+    step: TimeStep,
+    max_adaptive_steps: usize,
 ) -> Result<Vec<TransientWithBlocksStep>, DaeError> {
     let statements = general_mna::parse_and_flatten(source, dialect).map_err(DaeError::Parse)?;
 
@@ -2081,6 +2362,22 @@ pub fn simulate_transient_with_blocks(
             let mut step_index = 0usize;
             while t < t_final {
                 let mut dt = dt_next.min(t_final - t);
+                // Clamp to the earliest predicted discrete-block/gate-edge event so a trial step
+                // lands (approximately) exactly on it, instead of stepping past it and only
+                // detecting the change after the fact via `gate_changed` -- the fix for silently
+                // missed edges when `dt_max` approaches or exceeds the switching period (see
+                // `earliest_next_event_dt`'s own doc comment). This can only shrink `dt` here;
+                // the inner LTE-retry loop below may shrink it further via
+                // `attempt.suggested_dt_next` on rejection, but never grows it back past this
+                // clamp within the same outer iteration. Landing exactly on a predicted event
+                // takes priority over `config.dt_min` -- missing an edge is worse than one small
+                // out-of-target step; the `1e-15` floor just avoids a zero/negative-dt retry loop
+                // from float noise when we're already sitting on the event.
+                if let Some(event_dt) =
+                    earliest_next_event_dt(blocks, &block_states, &prev_outputs, t)
+                {
+                    dt = dt.min(event_dt.max(1e-15));
+                }
                 loop {
                     let mut trial_block_states = block_states.clone();
                     let t_candidate = t + dt;
@@ -2157,10 +2454,84 @@ pub fn simulate_transient_with_blocks(
                     point_prev = attempt.point.clone();
                     trace.push((t, attempt.point, outputs));
                     step_index += 1;
+                    if trace.len() > max_adaptive_steps {
+                        return Err(DaeError::AdaptiveStepStalled {
+                            steps_taken: trace.len(),
+                            t_reached: t,
+                            t_final,
+                        });
+                    }
                     break;
                 }
             }
         }
     }
     Ok(trace)
+}
+
+#[cfg(test)]
+mod next_pwm_edge_dt_tests {
+    use super::next_pwm_edge_dt;
+
+    /// The exact bug this guards against: once the adaptive loop lands a step precisely on a
+    /// threshold (the whole point of `earliest_next_event_dt`), `theta_now == threshold` to
+    /// float precision on the very next call. Naively that reads as "0 away," which an outer
+    /// `.max(1e-15)` clamp turns into a real near-zero step instead of an error -- and since
+    /// theta barely advances in a step that small, the SAME threshold reads as ~0 again next
+    /// call too: an unbounded near-zero-dt stall that grows the in-memory row buffer without
+    /// limit until the process (and, in the real run that found this, the whole machine) runs
+    /// out of memory. Asserts the fixed behavior directly: landing exactly on `duty` must report
+    /// "a full period away," not "already there."
+    #[test]
+    fn landing_exactly_on_a_threshold_reports_a_full_period_not_zero() {
+        let freq = 600_000.0;
+        let duty = 0.4;
+        let red_frac = 0.0;
+        let fed_frac = 0.0;
+        let dt = next_pwm_edge_dt(duty, duty, red_frac, fed_frac, freq)
+            .expect("finite freq must always report a next-edge estimate");
+        let half_period = 0.5 / freq;
+        assert!(
+            dt > half_period,
+            "landing exactly on duty's own threshold must report ~a full period away \
+             ({half_period:.3e}s expected), not ~0 (got {dt:.3e}s) -- ~0 is exactly the bug \
+             that stalled the adaptive loop and exhausted memory on a real run",
+        );
+    }
+
+    /// Same case for the `red_frac` threshold (the other edge `Pwm`/`PhaseShiftPwm` compare
+    /// against), landed a few `f64::EPSILON`-scale ULPs *past* the exact instant (real
+    /// floating-point accumulation can produce this just as easily as landing exactly on it) --
+    /// with `duty` set to the SAME threshold so there's only one edge in play, isolating this
+    /// from the (correct, separately-tested) case where a genuinely different, nearer threshold
+    /// exists.
+    #[test]
+    fn landing_a_few_ulps_past_a_threshold_also_reports_a_full_period_not_zero() {
+        let freq = 300_000.0;
+        let red_frac = 0.1;
+        let theta_now = red_frac + 4.0 * f64::EPSILON;
+        let dt = next_pwm_edge_dt(theta_now, red_frac, red_frac, 0.0, freq)
+            .expect("finite freq must always report a next-edge estimate");
+        let half_period = 0.5 / freq;
+        assert!(
+            dt > half_period,
+            "landing a few ULPs past red_frac must report ~a full period away \
+             ({half_period:.3e}s expected), not ~0 (got {dt:.3e}s)",
+        );
+    }
+
+    /// Normal, non-degenerate cases stay essentially unchanged: a threshold genuinely ahead of
+    /// `theta_now` reports (approximately) the real distance to it, not a full period.
+    #[test]
+    fn a_threshold_genuinely_ahead_reports_the_real_distance() {
+        let freq = 100_000.0; // period = 10us
+        let theta_now = 0.1;
+        let duty = 0.4; // 0.3 of a period ahead
+        let dt = next_pwm_edge_dt(theta_now, duty, 0.0, 0.0, freq).unwrap();
+        let expected = 0.3 / freq;
+        assert!(
+            (dt - expected).abs() < 1e-9 / freq,
+            "expected ~{expected:.3e}s, got {dt:.3e}s"
+        );
+    }
 }

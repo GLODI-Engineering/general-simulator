@@ -5,11 +5,15 @@ against a real, committed .cir fixture under fixtures/ -- these are integration 
 real binary (mirroring tests/raw-output-python/_lib.py's own convention), not calls into any Rust
 code directly.
 
-kind=measure results print to stderr as "name = value" lines (see
-crates/general-simulator-cli/src/main.rs's print_measurements, and
-book/user-guide/src/measurements.md's "Where results are printed" section, for why stderr and not
-stdout -- stdout stays pure CSV/raw, unaffected by whether a netlist uses this feature at all).
-parse_measurements() below parses exactly that stream.
+kind=measure results write to a "<netlist stem>.log" file, "name = value" lines -- matching real
+SPICE tools' own .measure logging convention (see
+crates/general-simulator-cli/src/main.rs's write_measurements_log, and
+book/user-guide/src/measurements.md's "Where results are written" section, for why a log file and
+not stdout/stderr -- stdout stays pure CSV/raw and stderr stays free of measurement text,
+unaffected by whether a netlist uses this feature at all). run_measure() below reads and returns
+that file's content in place of stderr (kept as the 3rd tuple element so every existing
+`_, _, stderr = run_measure(...)` call site in this directory needed no changes); parse_measurements()
+parses exactly that text.
 
 Build the CLI first (from the general-simulator repo root):
     cargo build --release -p general-simulator-cli
@@ -41,11 +45,16 @@ def cli_path():
 def run_measure(fixture_name, *extra_args, tfinal=None, dt=None):
     """Runs the CLI in --mode transient against fixtures/<fixture_name> with the given --tfinal/
     --dt (dt=None means adaptive stepping -- no --dt flag at all), plus any extra_args. Returns
-    (returncode, stdout, stderr) -- asserts a zero exit code (a measurement fixture is expected
-    to run cleanly; a specific measurement's own failure is reported per-line on stderr, not as
-    a nonzero exit code, since one bad measurement must not abort the others -- see
-    print_measurements's own doc comment)."""
+    (returncode, stdout, log_text) -- asserts a zero exit code (a measurement fixture is expected
+    to run cleanly; a specific measurement's own failure is reported per-line in the log file, not
+    as a nonzero exit code, since one bad measurement must not abort the others -- see
+    write_measurements_log's own doc comment). log_text is the content of
+    fixtures/<fixture_name stem>.log (empty string if the CLI wrote no log at all, e.g. a
+    netlist with no kind=measure lines) -- deleted before the run so a stale file from a previous
+    test can't leak in if this run's own CLI invocation fails before writing one."""
     cir_path = FIXTURES / fixture_name
+    log_path = cir_path.with_suffix(".log")
+    log_path.unlink(missing_ok=True)
     args = ["--mode", "transient"]
     if tfinal is not None:
         args += ["--tfinal", str(tfinal)]
@@ -62,15 +71,16 @@ def run_measure(fixture_name, *extra_args, tfinal=None, dt=None):
         f"expected success running {fixture_name}, got exit {result.returncode}\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
-    return result.returncode, result.stdout, result.stderr
+    log_text = log_path.read_text() if log_path.exists() else ""
+    return result.returncode, result.stdout, log_text
 
 
-def parse_measurements(stderr):
-    """Parses the CLI's stderr "name = value" lines into a {name: float} dict. A `four`
+def parse_measurements(log_text):
+    """Parses the CLI's measurement-log "name = value" lines into a {name: float} dict. A `four`
     measurement's harmonic sub-results (`<name>_h1_mag`, `<name>_h1_phase_deg`, `<name>_dc`,
     `<name>_thd_percent`) come back as ordinary extra keys, exactly as printed."""
     out = {}
-    for line in stderr.splitlines():
+    for line in log_text.splitlines():
         m = _LINE_RE.match(line.strip())
         if not m:
             continue

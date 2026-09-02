@@ -9,9 +9,10 @@ own module doc comment), so it lives here rather than under `doc-verify/`, the s
 `tests/raw-output-python/README.md` documents for its own feature.
 
 Every test runs the actual built `general-simulator` binary as a subprocess against a committed
-`.cir` fixture under `fixtures/` and parses its `stderr` (`kind=measure` results always print to
-stderr, never stdout — see `measure.rs`'s `print_measurements` doc comment for why). No mocking,
-no calling into Rust measurement code directly.
+`.cir` fixture under `fixtures/` and parses the `<fixture>.log` file it writes (`kind=measure`
+results always write to a `<netlist stem>.log` file, never stdout or stderr — matching real SPICE
+tools' own `.measure` logging convention; see `main.rs`'s `write_measurements_log` doc comment for
+why). No mocking, no calling into Rust measurement code directly.
 
 ## What's tested, and why each expected value is trustworthy
 
@@ -47,7 +48,7 @@ cargo build --release -p general-simulator-cli   # from the general-simulator re
 
 No Python packages beyond the standard library are needed (unlike `tests/raw-output-python`,
 which needs PySpice/spicelib to parse a binary rawfile) — these tests only run the CLI and parse
-its plain-text CSV/stderr output.
+its plain-text CSV/log-file output.
 
 ## Running
 

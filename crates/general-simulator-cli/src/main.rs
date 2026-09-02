@@ -1,10 +1,14 @@
 //! Thin runner for `general-simulator`: `general-simulator <netlist> [--devices <file>] --mode
-//! {dc|transient} [--tfinal T] [--dt DT | --dt-max/--dt-min/--dt-init/--reltol/--abstol]`
-//! prints a CSV waveform (`t,V(node1),V(node2),...`) to stdout, one row per resolved timestep
-//! (a single row for `--mode dc`). `--dt` fixes the step size; omit it for adaptive step-size
-//! control instead (the default — see `dae_runtime::TimeStep`/`AdaptiveConfig`'s own doc
-//! comments for the algorithm), with `--dt-max`/`--dt-min`/`--dt-init`/`--reltol`/`--abstol`
-//! overriding individual defaults derived from `--tfinal`.
+//! {dc|transient} [--tfinal T] [--dt DT | --dt-max/--dt-min/--dt-init/--reltol/--abstol]
+//! [--max-steps N]` prints a CSV waveform (`t,V(node1),V(node2),...`) to stdout, one row per
+//! resolved timestep (a single row for `--mode dc`). `--dt` fixes the step size; omit it for
+//! adaptive step-size control instead (the default — see `dae_runtime::TimeStep`/
+//! `AdaptiveConfig`'s own doc comments for the algorithm), with `--dt-max`/`--dt-min`/
+//! `--dt-init`/`--reltol`/`--abstol` overriding individual defaults derived from `--tfinal`.
+//! `--max-steps` caps how many accepted adaptive steps one run may take (default
+//! [`dae_runtime::ADAPTIVE_STEP_HARD_CAP`]) before aborting with `DaeError::AdaptiveStepStalled`
+//! instead of growing its in-memory trace without limit — see that error's own doc comment.
+//! Any `kind=measure` results write to `<netlist stem>.log`, never stdout/stderr.
 //!
 //! **The netlist is the one file** — PWL device parameters and any controller block graph
 //! live directly inside it, the same way a real SPICE deck is self-contained, not split across
@@ -292,13 +296,13 @@ mod raw_format;
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::io::BufWriter;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use dae_runtime::{
-    simulate_transient, simulate_transient_with_blocks, solve_dc, AdaptiveConfig, BlockInstance,
-    BlockKind, GateBinding, TimeStep,
+    simulate_transient, simulate_transient_with_blocks_capped, solve_dc, AdaptiveConfig,
+    BlockInstance, BlockKind, GateBinding, TimeStep, ADAPTIVE_STEP_HARD_CAP,
 };
 use general_spice_core::Dialect;
 use pwl_devices::{IdealDiode, IdealSwitch};
@@ -349,6 +353,7 @@ fn run() -> Result<(), String> {
     let mut dt_init: Option<f64> = None;
     let mut reltol: Option<f64> = None;
     let mut abstol: Option<f64> = None;
+    let mut max_steps: Option<usize> = None;
     let mut format = "csv".to_string();
     let mut out_path: Option<String> = None;
 
@@ -379,6 +384,15 @@ fn run() -> Result<(), String> {
             "--dt-init" => dt_init = Some(parse_f64("--dt-init", &mut i)?),
             "--reltol" => reltol = Some(parse_f64("--reltol", &mut i)?),
             "--abstol" => abstol = Some(parse_f64("--abstol", &mut i)?),
+            "--max-steps" => {
+                let v: usize = args
+                    .get(i + 1)
+                    .ok_or("--max-steps needs a value")?
+                    .parse()
+                    .map_err(|_| "bad --max-steps".to_string())?;
+                max_steps = Some(v);
+                i += 2;
+            }
             "--format" => {
                 format = args.get(i + 1).ok_or("--format needs a value")?.clone();
                 i += 2;
@@ -556,6 +570,7 @@ fn run() -> Result<(), String> {
                 shared_r_on,
                 t_final,
                 step,
+                max_steps.unwrap_or(ADAPTIVE_STEP_HARD_CAP),
             )?
         };
         (waveform, "Transient Analysis")
@@ -573,16 +588,29 @@ fn run() -> Result<(), String> {
         }
     }
 
-    // Measurements print to stderr, never stdout, regardless of `--format` -- see
-    // `book/user-guide/src/measurements.md`'s "Where results are printed" section. This keeps
+    // Measurements write to a `<netlist stem>.log` file, never stdout or stderr, matching real
+    // SPICE tools' own `.measure`/`.MEASURE` convention (ngspice/Xyce both write measurement
+    // results to a log file alongside the netlist, not to the console) -- see
+    // `book/user-guide/src/measurements.md`'s "Where results are written" section. This keeps
     // stdout's own machine-readability (a plain CSV under `--format csv`, or nothing at all
     // under `--format raw`, which already writes to a file) unconditionally intact: a
     // `kind=measure`-free netlist produces byte-for-byte the same stdout as before this feature
     // existed, and even a netlist that does use it never interleaves "name = value" lines into
-    // the CSV a downstream tool parses.
-    print_measurements(&measurements, &waveform);
+    // the CSV a downstream tool parses, and never mixes them with unrelated stderr diagnostics
+    // either.
+    if !measurements.is_empty() {
+        write_measurements_log(&measurements, &waveform, &default_log_path(netlist_path))?;
+    }
 
     Ok(())
+}
+
+/// `<netlist stem>.log` next to the input file -- where `kind=measure` results are written,
+/// matching real SPICE tools' own measurement-log convention. Always derived from the netlist
+/// path (no `--out`-style override exists for this, unlike `--format raw`'s own output path --
+/// measurements are a secondary artifact of a run, not its primary requested output).
+fn default_log_path(netlist_path: &str) -> PathBuf {
+    Path::new(netlist_path).with_extension("log")
 }
 
 /// `<netlist stem>.raw` next to the input file — the default `--out` destination for
@@ -633,8 +661,9 @@ fn run_transient_with_ideal_switches(
     shared_r_on: f64,
     t_final: f64,
     step: TimeStep,
+    max_steps: usize,
 ) -> Result<Waveform, String> {
-    let trace = simulate_transient_with_blocks(
+    let trace = simulate_transient_with_blocks_capped(
         netlist,
         dialect,
         diodes,
@@ -645,6 +674,7 @@ fn run_transient_with_ideal_switches(
         None,
         t_final,
         step,
+        max_steps,
     )
     .map_err(|e| format!("{e:?}"))?;
 
@@ -732,29 +762,43 @@ fn print_csv(waveform: &Waveform) {
     }
 }
 
-/// Evaluates every collected `kind=measure` spec against the resolved `waveform` and prints each
-/// result to stderr as `name = value`, ngspice's own `.measure` printed style (see the ngspice
-/// manual's `.measure` section: `tdiff = 1.000000e-003 targ= ... trig= ...`). A DC run
-/// (`waveform.rows.len() <= 1`) or a `--mode dc` netlist can't sensibly host a measurement that
-/// needs a real window/crossing search over a trace, so a per-measurement error there (from
-/// `gs_waveform_measurements`'s own `EmptyWindow`/`EmptySeries`) is printed the same as any other
-/// per-measurement evaluation failure, not specially detected — the failure message is already
-/// precise about why.
-fn print_measurements(measurements: &[measure::MeasureSpec], waveform: &Waveform) {
-    if measurements.is_empty() {
-        return;
-    }
+/// Evaluates every collected `kind=measure` spec against the resolved `waveform` and writes each
+/// result to `log_path` as `name = value`, ngspice's own `.measure` printed style (see the
+/// ngspice manual's `.measure` section: `tdiff = 1.000000e-003 targ= ... trig= ...`), but to a
+/// log FILE rather than the console — matching real SPICE tools' own convention of writing
+/// measurement results to a `.log` file alongside the netlist, not interleaving them with
+/// console/stderr diagnostics. A DC run (`waveform.rows.len() <= 1`) or a `--mode dc` netlist
+/// can't sensibly host a measurement that needs a real window/crossing search over a trace, so a
+/// per-measurement error there (from `gs_waveform_measurements`'s own `EmptyWindow`/
+/// `EmptySeries`) is written the same as any other per-measurement evaluation failure, not
+/// specially detected — the failure message is already precise about why. Only called when
+/// `measurements` is non-empty (see the caller), so a `kind=measure`-free netlist never creates
+/// a `.log` file at all.
+fn write_measurements_log(
+    measurements: &[measure::MeasureSpec],
+    waveform: &Waveform,
+    log_path: &Path,
+) -> Result<(), String> {
+    let file = fs::File::create(log_path)
+        .map_err(|e| format!("creating measurement log {}: {e}", log_path.display()))?;
+    let mut writer = BufWriter::new(file);
     let results = measure::evaluate_all(measurements, &waveform.headers, &waveform.rows);
     for (name, result) in results {
         match result {
             Ok(values) => {
                 for (label, value) in values {
-                    eprintln!("{label} = {value}");
+                    writeln!(writer, "{label} = {value}").map_err(|e| {
+                        format!("writing measurement log {}: {e}", log_path.display())
+                    })?;
                 }
             }
-            Err(e) => eprintln!("measurement '{name}' failed: {e}"),
+            Err(e) => writeln!(writer, "measurement '{name}' failed: {e}")
+                .map_err(|e| format!("writing measurement log {}: {e}", log_path.display()))?,
         }
     }
+    writer
+        .flush()
+        .map_err(|e| format!("writing measurement log {}: {e}", log_path.display()))
 }
 
 /// Parses a `<signal>` field value: `prev:<block>` for a named block's own output from the
@@ -770,7 +814,7 @@ fn print_measurements(measurements: &[measure::MeasureSpec], waveform: &Waveform
 /// circuit.
 fn usage() -> String {
     "usage: general-simulator <netlist> [--devices <file>] [--mode dc|transient] [--tfinal T] \
-     [--dt DT | --dt-max T --dt-min T --dt-init T --reltol R --abstol A] \
+     [--dt DT | --dt-max T --dt-min T --dt-init T --reltol R --abstol A] [--max-steps N] \
      [--format csv|raw] [--out <path>]\n\
      \n\
      --dt fixes the step size every step (deterministic, exactly reproducible). Omit it (and \
@@ -779,12 +823,24 @@ fn usage() -> String {
      settled, the same local-truncation-error approach every real SPICE-family tool uses by \
      default. --dt and any --dt-*/--reltol/--abstol flag are mutually exclusive.\n\
      \n\
+     --max-steps N caps how many accepted TimeStep::Adaptive steps one run may take before \
+     aborting with an error, instead of running unboundedly (each accepted step holds its own \
+     row in memory for the rest of the run -- an adaptive step-size controller that's stalled, \
+     whether from a real bug or a pathological netlist/tolerance combination, would otherwise \
+     grow that memory without limit until the process, or the whole machine, runs out of it -- \
+     this happened on a real run before this flag existed). Defaults to 10,000,000, far above \
+     any legitimate run this project has needed; only relevant under adaptive stepping (--dt \
+     runs a fixed, precomputed number of steps and can't stall this way).\n\
+     \n\
      --format selects the output serialization: 'csv' (the default, unchanged from before this \
      flag existed) prints t,V(node1),V(node2),...,<block names> to stdout, one row per resolved \
      point. 'raw' writes the same data as a binary SPICE rawfile instead (the format ngspice and \
      the wider SPICE-tooling ecosystem, including Python readers such as PySpice, read and \
      write) -- since a binary format has nowhere sensible to go on a terminal, this always \
      writes to a file: --out <path> if given, otherwise <netlist stem>.raw next to the input \
-     file."
+     file.\n\
+     \n\
+     Any kind=measure lines in the netlist write their results to <netlist stem>.log, regardless \
+     of --format -- see book/user-guide/src/measurements.md."
         .to_string()
 }

@@ -31,9 +31,9 @@ mod step_control;
 mod topology;
 
 pub use block_graph::{
-    simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, GainValue, GateBinding,
-    Phys2SigTarget, PhysicalDomain, PidClamp, SampleTimeSpec, Signal, SignalValue,
-    TransientWithBlocksStep,
+    simulate_transient_with_blocks, simulate_transient_with_blocks_capped, BlockInstance,
+    BlockKind, ConstValue, GainValue, GateBinding, Phys2SigTarget, PhysicalDomain, PidClamp,
+    SampleTimeSpec, Signal, SignalValue, TransientWithBlocksStep, ADAPTIVE_STEP_HARD_CAP,
 };
 pub use closed_loop::{sawtooth_carrier, simulate_closed_loop};
 pub use step_control::{AdaptiveConfig, TimeStep};
@@ -193,6 +193,20 @@ pub enum DaeError {
     /// trial-cloneable. Use a fixed `TimeStep::Fixed` for any netlist using `kind=octblock`.
     OctBlockDoesNotSupportAdaptiveStep {
         block_name: String,
+    },
+    /// [`TimeStep::Adaptive`] took more than [`ADAPTIVE_STEP_HARD_CAP`] accepted steps without
+    /// reaching `t_final` — a hard safety ceiling, not a normal error a well-behaved run should
+    /// ever hit. Exists because the adaptive loop accumulates one row per accepted step into an
+    /// in-memory trace with no other bound, and a genuinely stalled step controller (e.g. a
+    /// near-zero-`dt` loop that never makes real forward progress — the exact class of bug
+    /// `next_pwm_edge_dt`'s own `THETA_EPS` guards against, see its doc comment) would otherwise
+    /// grow that trace without limit until the process — and, on the real run that first hit
+    /// this, the whole machine — ran out of memory. `steps_taken` is how many were accepted
+    /// before the cap tripped; `t_reached`/`t_final` show how far the run actually got.
+    AdaptiveStepStalled {
+        steps_taken: usize,
+        t_reached: f64,
+        t_final: f64,
     },
     /// A [`block_graph::GateBinding`] names a block that exists but isn't a `domain=voltage`
     /// [`block_graph::BlockKind::Sig2Phys`] — the enforced physical/signal-domain boundary:

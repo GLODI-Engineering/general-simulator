@@ -1,5 +1,8 @@
 /target
 *.csv
+# kind=measure's own regenerable output (<netlist stem>.log, written next to any .cir run with
+# measurement lines -- see write_measurements_log in general-simulator-cli/src/main.rs).
+*.log
 
 # doc-verify/ *source* (READMEs, .cir, .c, .py) is committed -- see the write-component-doc
 # skill: it's mandatory, reviewable, reproducible proof each doc entry's Example/Errors were

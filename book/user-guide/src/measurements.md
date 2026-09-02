@@ -45,19 +45,23 @@ or `cross=` (rising-only, falling-only, or either direction) with a value that i
 (`rise=last`). Omitting all three defaults to `rise=1` (ngspice's own default when `RISE=`/
 `FALL=`/`CROSS=` isn't given at all). `trig_targ` uses the same fields prefixed `trig_`/`targ_`.
 
-## Where results are printed
+## Where results are written
 
-Every `kind=measure` result prints to **stderr**, one `name = value` line per result, ngspice's
-own printed style (its manual: `tdiff = 1.000000e-003 targ= ... trig= ...`) — never to stdout.
-This is deliberate: stdout stays exactly what `--format csv` always produced (a plain, machine-
-readable CSV — unaffected byte-for-byte by whether the netlist has any `kind=measure` lines at
-all) or, for `--format raw`, the binary rawfile written to `--out`/its default path, so neither
-existing output format is corrupted by mixing in "name = value" text lines. A `kind=measure`-free
-netlist's stdout is unchanged from before this feature existed.
+Every `kind=measure` result writes to a `<netlist stem>.log` file next to the netlist (e.g.
+`some.cir` → `some.log`), one `name = value` line per result, ngspice's own printed style (its
+manual: `tdiff = 1.000000e-003 targ= ... trig= ...`) — never to stdout or stderr. This matches
+real SPICE tools' own `.measure`/`.MEASURE` convention (both ngspice and Xyce write measurement
+results to a log file, not the console) and is deliberate for the same reason: stdout stays
+exactly what `--format csv` always produced (a plain, machine-readable CSV — unaffected byte-for-
+byte by whether the netlist has any `kind=measure` lines at all) or, for `--format raw`, the
+binary rawfile written to `--out`/its default path, and stderr stays free of measurement text too,
+so neither existing output stream is corrupted by mixing in "name = value" lines. A `kind=measure`-
+free netlist produces no `.log` file at all, and its stdout is unchanged from before this feature
+existed.
 
 A failed measurement (an unknown signal name, a crossing that never occurs in its window, ...)
-prints `measurement 'NAME' failed: <reason>` to stderr and does **not** abort the run or any
-other measurement — every other measurement is still evaluated and printed.
+writes `measurement 'NAME' failed: <reason>` to the same log file and does **not** abort the run
+or any other measurement — every other measurement is still evaluated and written.
 
 ## Full field reference
 

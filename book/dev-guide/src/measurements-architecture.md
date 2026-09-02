@@ -105,32 +105,32 @@ the already-built `Waveform`'s own `headers`/`rows`, the same data `print_csv`/`
 already consume. This keeps `kind=measure` from needing its own notion of "what a signal is" —
 it's exactly whatever the rest of this CLI already knows how to print.
 
-## Output: why stderr, and why that doesn't corrupt the existing formats
+## Output: a `.log` file, and why that doesn't corrupt the existing formats
 
-Measurement results print to **stderr**, one `name = value` line per result (ngspice's own
-`.measure` printed convention), regardless of `--format`. This was a deliberate, explicit
-choice among three options considered:
+Measurement results write to a **`<netlist stem>.log` file** next to the netlist (`write_measurements_log`
+in `general-simulator-cli/src/main.rs`), one `name = value` line per result (ngspice's own
+`.measure` printed convention), regardless of `--format`. This superseded an earlier stderr-based
+design (kept here for context, since the reasoning about stdout still applies unchanged):
 
-1. **Stdout, after the CSV.** Rejected: a tool reading the CLI's stdout as a full CSV stream
-   (e.g. `pandas.read_csv(sys.stdin)`, or any of this project's own existing CLI tests) would
-   see trailing non-CSV lines and either error or silently misparse. `--format csv`'s own
+1. **Stdout, after the CSV.** Rejected then and now: a tool reading the CLI's stdout as a full CSV
+   stream (e.g. `pandas.read_csv(sys.stdin)`, or any of this project's own existing CLI tests)
+   would see trailing non-CSV lines and either error or silently misparse. `--format csv`'s own
    documented contract (unchanged since before this feature existed) is "prints
-   `t,V(node1),...` to stdout, one row per point" — full stop; appending anything else would be
-   a silent, undocumented change to that contract for the (common) case of a netlist that
-   happens to also use `kind=measure`.
-2. **A new `--measure-out <path>` flag.** Rejected as unnecessary complexity for the first cut of
-   this feature: nothing else in this CLI writes a *third* kind of output file, and stderr is
-   already unambiguously "not the machine-readable trace" without inventing new plumbing. This
-   remains the natural place to add such a flag later if a real need for a machine-readable
-   measurement file (JSON, a second CSV, ...) comes up.
-3. **Stderr (chosen).** Keeps stdout's own contract — a plain CSV under `--format csv`, or
-   nothing at all under `--format raw` (which already writes to a file, not stdout) —
-   byte-for-byte unaffected by whether the netlist has any `kind=measure` lines, while still
-   printing every result somewhere a human (or a script specifically parsing stderr, as
-   `tests/measure/_lib.py` does) can see it immediately, without a new flag.
+   `t,V(node1),...` to stdout, one row per point" — full stop.
+2. **Stderr (the original choice, since replaced).** Kept stdout's own contract intact and needed
+   no new plumbing, but mixed measurement text into the same stream as ordinary error/diagnostic
+   output and didn't match how a real SPICE tool actually presents `.measure` results — ngspice
+   and Xyce both write them to a dedicated log file, not the console. A user running this CLI
+   alongside those tools' own workflow would reasonably expect the same convention.
+3. **A `<netlist stem>.log` file (chosen).** Keeps stdout's own contract exactly as before, keeps
+   stderr free of measurement text (so a script watching stderr for genuine errors doesn't have
+   to filter out "name = value" noise), and matches the real SPICE convention this feature was
+   always modeled on. Only written when the netlist actually has `kind=measure` lines — a
+   `kind=measure`-free netlist produces no `.log` file, same "byte-for-byte unaffected" property
+   the original stderr design had for stdout.
 
 A failed individual measurement (an unknown signal name, a crossing that never occurs in its own
-window) is printed the same way, on its own line, and does not abort the run or any other
+window) is written the same way, on its own line, and does not abort the run or any other
 measurement — `measure::evaluate_all` returns one independent `Result` per spec, exactly so one
 bad measurement can't hide the others' results.
 
