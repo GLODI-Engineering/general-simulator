@@ -13,13 +13,13 @@ REF kind=pwl points=[[0,0],[10,10]]
 CONST3 kind=const value=3
 MEASURED_OFFSET kind=sum inputs=REF,CONST3 signs=1,1
 VA a 0 RAMPV
-RAMPV kind=sig2voltage in=RAMP
+RAMPV kind=sig2phys domain=voltage in=RAMP
 R1 a 0 1000
 VB b 0 REFV
-REFV kind=sig2voltage in=REF
+REFV kind=sig2phys domain=voltage in=REF
 R2 b 0 1000
 VC c 0 OFFV
-OFFV kind=sig2voltage in=MEASURED_OFFSET
+OFFV kind=sig2phys domain=voltage in=MEASURED_OFFSET
 R3 c 0 1000
 
 MEAS_ERR1 kind=measure type=err1 out=V(a) ref=V(b)

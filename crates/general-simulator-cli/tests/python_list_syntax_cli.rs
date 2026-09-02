@@ -29,7 +29,7 @@ fn run(args: &[&str]) -> std::process::Output {
 
 const DUMMY_IDEAL_SWITCH: &str = "DDUMMY dummy_a dummy_b idealswitchmodel\n\
      DOFFVAL kind=const value=0\n\
-     DOFFGATE kind=sig2voltage in=DOFFVAL\n\
+     DOFFGATE kind=sig2phys domain=voltage in=DOFFVAL\n\
      DDUMMY kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 gate=block ctrl=DOFFGATE\n\
      Rdummy_a dummy_a 0 1e9\nRdummy_b dummy_b 0 1e9\n";
 

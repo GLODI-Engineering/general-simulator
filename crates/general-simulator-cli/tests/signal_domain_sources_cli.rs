@@ -33,7 +33,7 @@ fn run(args: &[&str]) -> std::process::Output {
 /// `regulators.cir` (`internal-archive` repo) for this exact isolated-dummy variant.
 const DUMMY_IDEAL_SWITCH: &str = "DDUMMY dummy_a dummy_b idealswitchmodel\n\
      DOFFVAL kind=const value=0\n\
-     DOFFGATE kind=sig2voltage in=DOFFVAL\n\
+     DOFFGATE kind=sig2phys domain=voltage in=DOFFVAL\n\
      DDUMMY kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 gate=block ctrl=DOFFGATE\n\
      Rdummy_a dummy_a 0 1e9\nRdummy_b dummy_b 0 1e9\n";
 
@@ -61,7 +61,7 @@ fn sinwave_and_sin_coexist_in_one_file_without_collision() {
     let netlist = write_netlist(&format!(
         "{DUMMY_IDEAL_SWITCH}V1 a 0 SRC_V\nR1 a 0 1000\n\
          SRC kind=sinwave v0=0 va=5 freq=1000\n\
-         SRC_V kind=sig2voltage in=SRC\n\
+         SRC_V kind=sig2phys domain=voltage in=SRC\n\
          HALFPI kind=const value=1.5707963267948966\n\
          MATHSIN kind=sin in=HALFPI\n"
     ));
@@ -110,9 +110,9 @@ fn pwc_and_pwl_repeat_parse_and_wrap_through_the_real_cli() {
     let netlist = write_netlist(&format!(
         "{DUMMY_IDEAL_SWITCH}V1 a 0 STEP_V\nR1 a 0 1000\nV2 b 0 RAMP_V\nR2 b 0 1000\n\
          STEP kind=pwc points=[[0,1],[0.5e-3,5],[1e-3,1]] repeat=true\n\
-         STEP_V kind=sig2voltage in=STEP\n\
+         STEP_V kind=sig2phys domain=voltage in=STEP\n\
          RAMP kind=pwl points=[[0,0],[1e-3,10],[2e-3,0]] repeat=true\n\
-         RAMP_V kind=sig2voltage in=RAMP\n"
+         RAMP_V kind=sig2phys domain=voltage in=RAMP\n"
     ));
 
     let output = run(&[
@@ -161,11 +161,11 @@ fn pulsewave_and_expwave_and_sffmwave_parse_through_the_real_cli() {
     let netlist = write_netlist(&format!(
         "{DUMMY_IDEAL_SWITCH}V1 a 0 P_V\nR1 a 0 1000\nV2 b 0 E_V\nR2 b 0 1000\nV3 c 0 F_V\nR3 c 0 1000\n\
          P kind=pulsewave v1=0 v2=10 tr=1e-4 tf=1e-4 pw=2e-4 per=1e-3\n\
-         P_V kind=sig2voltage in=P\n\
+         P_V kind=sig2phys domain=voltage in=P\n\
          E kind=expwave v1=0 v2=1 tau1=1e-3\n\
-         E_V kind=sig2voltage in=E\n\
+         E_V kind=sig2phys domain=voltage in=E\n\
          F kind=sffmwave va=5 fc=1000 mdi=10 fs=100\n\
-         F_V kind=sig2voltage in=F\n"
+         F_V kind=sig2phys domain=voltage in=F\n"
     ));
 
     let output = run(&[

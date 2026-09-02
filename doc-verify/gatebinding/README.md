@@ -7,9 +7,9 @@ editing that doc comment.
 ## Files
 
 - `example.cir` — the doc comment's own `## Example` (`general-mna`'s `GateBinding::Block`): a
-  `kind=ideal_switch` ideal switch held permanently on via `gate=block ctrl=<sig2voltage>`.
-  Checked that `V(out)` settles to `5 * 1000 / (1000 + 0.1)` (a fully-on 0.1 Ω ideal switch in
-  series with a 1 kΩ load).
+  `kind=ideal_switch` ideal switch held permanently on via
+  `gate=block ctrl=<domain=voltage sig2phys>`. Checked that `V(out)` settles to
+  `5 * 1000 / (1000 + 0.1)` (a fully-on 0.1 Ω ideal switch in series with a 1 kΩ load).
 
 ## Running
 

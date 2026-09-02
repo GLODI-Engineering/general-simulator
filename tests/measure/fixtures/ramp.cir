@@ -23,10 +23,10 @@
 RAMP kind=pwl points=[[0,0],[10,20]]
 OTHER kind=pwl points=[[0,100],[10,200]]
 VRAMP a 0 RAMPV
-RAMPV kind=sig2voltage in=RAMP
+RAMPV kind=sig2phys domain=voltage in=RAMP
 R1 a 0 1000
 VOTHER b 0 OTHERV
-OTHERV kind=sig2voltage in=OTHER
+OTHERV kind=sig2phys domain=voltage in=OTHER
 R2 b 0 1000
 
 MEAS_MAX kind=measure type=max out=V(a)

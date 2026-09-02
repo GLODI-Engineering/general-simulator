@@ -1,4 +1,4 @@
 V1 in 0 5
 R1 in out 1k
 R2 out 0 1k
-PROBE1 kind=probe node=out
+PROBE1 kind=phys2sig node=out

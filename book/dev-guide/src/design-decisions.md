@@ -18,7 +18,7 @@
   - Bench-scale vs. mains-scale for the PFC switching demo, and *not* forcing a "unify
     ideal-switch switching" fix under time pressure — decisions made explicitly, not silently,
     worth recording as decisions even when the underlying problem stayed open.
-  - **Enforced physical/signal-domain converters, implemented 2026-08-21** (`BlockKind::Probe`/
+  - **Enforced physical/signal-domain converters, implemented 2026-08-21** (`BlockKind::Phys2Sig`/
     `Sig2Gate`/`Sig2Voltage`/`Sig2Current`, `docs/journal/2026-08.md` for the full account) —
     no longer an open question, this entry is now `## Physical/signal-domain converters` proper
     (not just a pointer), since the decision and its rationale are settled: user-requested,
@@ -29,7 +29,22 @@
     into `Sig2Voltage` (an ideal switch's gate is itself a voltage, not a distinct discrete-actuation
     signal domain — no dedicated gate-only converter needed); `DaeError::GateTargetNotSig2Gate`
     was renamed `GateTargetNotSig2Voltage` to match. Two converters remain (`Sig2Voltage`/
-    `Sig2Current`), not three.
+    `Sig2Current`), not three. **Revised 2026-09-01**: `Sig2Voltage`/`Sig2Current` were
+    themselves merged into one `BlockKind::Sig2Phys { domain: PhysicalDomain }` variant
+    (`domain=voltage`/`domain=current`) — same rationale as the `Sig2Gate` merger above: the two
+    were identical in shape and evaluation, differing only in which device letter/`GateBinding`
+    target they're allowed to satisfy, which is now expressed as a `PhysicalDomain` field instead
+    of a second enum variant. `DaeError::GateTargetNotSig2Voltage`/
+    `SourceNotSig2PhysicalConverter` keep their names (the enforcement semantics — gate must be
+    `domain=voltage`, `V`/`I` sources must match their own device letter's domain — are
+    unchanged); only the netlist syntax (`kind=sig2phys domain=<voltage|current> in=<signal>`)
+    and the underlying Rust type changed. One converter type remains, parameterized by domain.
+    **Revised 2026-09-01**: `kind=probe` (`BlockKind::Probe`/`ProbeTarget`) was renamed
+    `kind=phys2sig` (`BlockKind::Phys2Sig`/`Phys2SigTarget`), for naming symmetry with
+    `sig2phys` — `phys2sig` reads a circuit quantity into the signal domain, `sig2phys` drives a
+    signal-domain value onto a circuit quantity. Pure rename: fields, validation (including the
+    `branch=` no-current-unknown build-time error and its ammeter-idiom message), and behavior
+    are unchanged; no back-compat alias for the old `probe` name.
   - **Signal-domain `pwc`/`pwl` source naming, resolved 2026-08-23** (`docs/journal/2026-08.md`,
     `2026-08-23 15:24`/`15:52`) — no longer an open question, this entry is now
     `## Signal-domain source naming: pwc vs. pwl` proper (not just a pointer): adding

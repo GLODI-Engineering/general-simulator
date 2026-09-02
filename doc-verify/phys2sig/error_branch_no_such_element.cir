@@ -1,0 +1,6 @@
+* branch=NOPE names an element that doesn't exist anywhere in the netlist at all -- a
+* distinct build-time error from error_branch_not_a_branch_device.cir's "wrong type" case.
+V1 in 0 5
+R1 in out 1000
+R2 out 0 1000
+IMEAS kind=phys2sig branch=NOPE

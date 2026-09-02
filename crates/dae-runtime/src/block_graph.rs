@@ -2,7 +2,7 @@
 //! `GateBinding` — `Const`, `Time`, `Pwc`, `Pwl`, `Sin`, `Pulse`, `Exp`, `Sffm`, `Sum`, `Gain`,
 //! `Pid`, `StateSpace`, `TransferFunction`, `Vco`, `Pwm`, `PhaseShiftPwm`, `Product`,
 //! `Saturation`, `Table`, `MathFn1`/`2`/`3`, `Hysteresis`, `CoordinateTransform`, `Pmsm`,
-//! `CScript`, `Probe`, `Sig2Voltage`, `Sig2Current`), resolving every ideal switch's gate
+//! `CScript`, `Phys2Sig`, `Sig2Phys`), resolving every ideal switch's gate
 //! state each transient step. `general-mna` owns *what these types are* and *parsing them out
 //! of source text* (`general_mna::build_system`); this module owns *evaluating* the graph over
 //! time (`BlockState`, `evaluate_blocks`, `topological_order`,
@@ -14,7 +14,7 @@
 //! **There is no separate "closed-loop mode," and no non-block-driven gate at all** — every
 //! [`GateBinding`] is `Block(name)`, reading a named block's current output (`>= 0.5` means
 //! on), whether that block's own input chain traces back to a
-//! [`BlockKind::Probe`] of the circuit's own state (the historically "closed-loop" case) or is
+//! [`BlockKind::Phys2Sig`] of the circuit's own state (the historically "closed-loop" case) or is
 //! just a `Const` (the historically "open-loop, fixed" case, now expressed as an ordinary block
 //! instead of a special no-block `GateBinding` variant) — both are resolved by exactly the same
 //! code, every step, because from the solver's point of view they're the same kind of question:
@@ -49,13 +49,13 @@ use crate::{
 
 use general_mna::block_graph::block_kind_name;
 pub use general_mna::block_graph::{
-    BlockInstance, BlockKind, ConstValue, GainValue, GateBinding, PidClamp, ProbeTarget,
-    SampleTimeSpec, Signal, SignalValue,
+    BlockInstance, BlockKind, ConstValue, GainValue, GateBinding, Phys2SigTarget, PhysicalDomain,
+    PidClamp, SampleTimeSpec, Signal, SignalValue,
 };
 
 /// Every input must be `Scalar` — the default rule for a `BlockKind` that has no elementwise/
 /// broadcast/flattening rule of its own (`Pid`, `Vco`, `Hysteresis`, `TransferFunction`, `Pwm`,
-/// `PhaseShiftPwm`, `Sig2Voltage`, `Sig2Current`). Returns the plain `f64` values in
+/// `PhaseShiftPwm`, `Sig2Phys`). Returns the plain `f64` values in
 /// order, or a clear error naming the block the moment any input is a `Vector`.
 fn require_all_scalar(block_name: &str, input_vals: &[SignalValue]) -> Result<Vec<f64>, DaeError> {
     input_vals
@@ -154,7 +154,7 @@ fn require_uniform_vectors(
 /// Filters a block-graph output map down to its `Scalar` entries only, discarding any `Vector`
 /// ones — used specifically where a `V`/`I` source's own literal value needs a scalar-only
 /// symbol table (`fold_and_solve`'s `extra_values`/`extra_values_prev`): the *only* symbols
-/// that can legitimately appear there are a `Sig2Voltage`/`Sig2Current` converter's own name,
+/// that can legitimately appear there are a `Sig2Phys` converter's own name,
 /// and both are guaranteed `Scalar` (they reject a `Vector` input at evaluation time — see
 /// their own `evaluate_blocks` arm), so dropping any `Vector` entry here is safe, not a silent
 /// bug: nothing that could legitimately need one is ever filtered out.
@@ -384,8 +384,8 @@ fn block_index_by_name(blocks: &[BlockInstance]) -> Result<BTreeMap<&str, usize>
 /// Derives the causal evaluation order for `blocks` from their own `Signal::Block` dependencies
 /// — a topological sort of the same-step dependency graph — instead of relying on declaration
 /// order: a block may name another declared anywhere in the same slice, before or after it.
-/// `BlockKind::Probe`/`Signal::BlockPrev` inputs never contribute a dependency edge here —
-/// `Probe` has zero inputs (a source block, like `Const`/`Time`) and `BlockPrev` reads state
+/// `BlockKind::Phys2Sig`/`Signal::BlockPrev` inputs never contribute a dependency edge here —
+/// `Phys2Sig` has zero inputs (a source block, like `Const`/`Time`) and `BlockPrev` reads state
 /// from strictly before this step (any block's own previous output), so neither can ever
 /// participate in a same-step cycle by construction — exactly the reason `BlockPrev` exists. A
 /// name that doesn't resolve to any block is not
@@ -482,7 +482,7 @@ fn periodic_time(t: f64, points: &[(f64, f64)], repeat: bool) -> f64 {
 
 /// Evaluates every block once, in the causal `order` [`topological_order`] derived from the
 /// graph's own `Signal::Block` dependencies (not declaration order), advancing `block_states`
-/// in place at step size `dt`, reading any [`BlockKind::Probe`] from `point_prev` and any
+/// in place at step size `dt`, reading any [`BlockKind::Phys2Sig`] from `point_prev` and any
 /// [`Signal::BlockPrev`] from `prev_outputs` (the previous call's returned map; an empty map on
 /// the very first step, so every `BlockPrev` reference is `0.0` there) — the one piece of
 /// per-step work both [`TimeStep::Fixed`] and [`TimeStep::Adaptive`] need identically, factored
@@ -552,15 +552,15 @@ fn evaluate_blocks(
                 ConstValue::Vector(xs) => SignalValue::Vector(xs.clone()),
             },
             (BlockKind::Time, _) => SignalValue::Scalar(t),
-            (BlockKind::Probe(target), _) => SignalValue::Scalar(match target {
-                ProbeTarget::Voltage(node) => {
+            (BlockKind::Phys2Sig(target), _) => SignalValue::Scalar(match target {
+                Phys2SigTarget::Voltage(node) => {
                     point_prev.value(&format!("V({node})")).unwrap_or(0.0)
                 }
-                ProbeTarget::Current(branch) => {
+                Phys2SigTarget::Current(branch) => {
                     point_prev.value(&format!("I({branch})")).unwrap_or(0.0)
                 }
             }),
-            (BlockKind::Sig2Voltage | BlockKind::Sig2Current, _) => {
+            (BlockKind::Sig2Phys { .. }, _) => {
                 SignalValue::Scalar(require_all_scalar(&block.name, &input_vals)?[0])
             }
             (BlockKind::Pwc { points, repeat }, _) => {
@@ -1448,7 +1448,7 @@ fn resolve_gates(
 /// Runs a transient with every ideal switch's gate resolved from a [`GateBinding`] each step — see
 /// this module's doc comment for why there's no separate "closed-loop" entry point: a device
 /// gated by a plain [`BlockKind::Hysteresis`] and one gated by a `Sum`-`Pid`-[`BlockKind::PhaseShiftPwm`]
-/// chain that happens to read a [`BlockKind::Probe`] are resolved by exactly the same loop
+/// chain that happens to read a [`BlockKind::Phys2Sig`] are resolved by exactly the same loop
 /// below — every [`GateBinding`] is `Block(name)`, reading whatever `name`'s current output
 /// happens to be. `step` picks fixed or adaptive timing — see [`TimeStep`]/[`AdaptiveConfig`]. Adaptive mode here can't
 /// reuse [`step_control::adaptive_step`] directly (that assumes a `dt`-independent `system`):
@@ -1481,15 +1481,20 @@ pub fn simulate_transient_with_blocks(
             let Some(&idx) = block_names.get(needed) else {
                 return Err(DaeError::UnknownBlockInput(needed.to_string()));
             };
-            // A GateBinding's target must be an explicit Sig2Voltage converter, never a raw
-            // control block directly -- an ideal switch's gate is itself a voltage, so it shares the
-            // same Signal-to-PS boundary a V-source's own magnitude uses (see
-            // BlockKind::Sig2Voltage's own doc comment); no separate gate-only converter type
-            // exists. This also correctly rejects naming a CScript/CoordinateTransform/Pmsm
-            // block's own *extra* output alias directly (block_names maps those to the same
-            // index, whose kind is never Sig2Voltage), so no separate check is needed for that
-            // case.
-            if !matches!(blocks[idx].kind, BlockKind::Sig2Voltage) {
+            // A GateBinding's target must be an explicit domain=voltage Sig2Phys converter,
+            // never a raw control block directly and never a domain=current Sig2Phys either --
+            // an ideal switch's gate is itself a voltage, so it shares the same Signal-to-PS
+            // boundary a V-source's own magnitude uses (see BlockKind::Sig2Phys's own doc
+            // comment); no separate gate-only converter type exists. This also correctly
+            // rejects naming a CScript/CoordinateTransform/Pmsm block's own *extra* output
+            // alias directly (block_names maps those to the same index, whose kind is never
+            // Sig2Phys), so no separate check is needed for that case.
+            if !matches!(
+                blocks[idx].kind,
+                BlockKind::Sig2Phys {
+                    domain: PhysicalDomain::Voltage
+                }
+            ) {
                 return Err(DaeError::GateTargetNotSig2Voltage {
                     gate: switch_name.clone(),
                     block: needed.to_string(),
@@ -1510,7 +1515,7 @@ pub fn simulate_transient_with_blocks(
     // would perturb `x_prev` away from `x_initial` before the real first step even runs, a
     // real behavioral difference from `simulate_transient_with_ideal_switches` for the plain
     // fixed/PWM case (caught by exactly that mismatch: this function must reduce to identical
-    // numbers as that one whenever no block reads a `BlockKind::Probe`).
+    // numbers as that one whenever no block reads a `BlockKind::Phys2Sig`).
     let initial_states: BTreeMap<String, (IdealSwitch, GateState)> = ideal_switches
         .iter()
         .map(|(name, m)| (name.clone(), (*m, GateState::Off)))
@@ -1529,10 +1534,10 @@ pub fn simulate_transient_with_blocks(
     // too, with the symbol set to the source's *own* element name (`sym == name`, resolved via
     // `system.transient_sources`, an entirely separate mechanism this check must not confuse
     // with a block-driven source). Any *other* symbol is a block-driven source candidate: it
-    // must name a declared block, and that block must be the matching `Sig2Voltage`/
-    // `Sig2Current` converter (never a raw control block directly) -- source element names are
-    // always their own SPICE device letter (`V`/`I`) by construction, which is what picks the
-    // expected converter kind below. V/I source stamps never depend on switch state, so
+    // must name a declared block, and that block must be a `Sig2Phys` converter of the matching
+    // domain (never a raw control block directly, and never the wrong domain) -- source element
+    // names are always their own SPICE device letter (`V`/`I`) by construction, which is what
+    // picks the expected domain below. V/I source stamps never depend on switch state, so
     // checking `system0` once here is representative of every later per-step rebuild.
     for (name, expr) in system0.inputs.iter().zip(&system0.input_values) {
         let general_mna::Expression::Symbol(sym) = expr else {
@@ -1545,8 +1550,18 @@ pub fn simulate_transient_with_blocks(
             continue;
         };
         let expected = match name.chars().next() {
-            Some('V') | Some('v') => (BlockKind::Sig2Voltage, "sig2voltage"),
-            Some('I') | Some('i') => (BlockKind::Sig2Current, "sig2current"),
+            Some('V') | Some('v') => (
+                BlockKind::Sig2Phys {
+                    domain: PhysicalDomain::Voltage,
+                },
+                "sig2phys(domain=voltage)",
+            ),
+            Some('I') | Some('i') => (
+                BlockKind::Sig2Phys {
+                    domain: PhysicalDomain::Current,
+                },
+                "sig2phys(domain=current)",
+            ),
             _ => continue,
         };
         if blocks[idx].kind != expected.0 {

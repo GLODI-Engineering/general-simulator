@@ -9,7 +9,7 @@
 * documented technique).
 SIG kind=sinwave v0=0 va=2 freq=5
 VSIG a 0 SIGV
-SIGV kind=sig2voltage in=SIG
+SIGV kind=sig2phys domain=voltage in=SIG
 R1 a 0 1000
 
 MEAS_FOUR kind=measure type=four out=V(a) fundamental=5 harmonics=5

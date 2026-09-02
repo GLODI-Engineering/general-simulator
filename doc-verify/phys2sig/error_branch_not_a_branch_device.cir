@@ -1,0 +1,7 @@
+* branch=R1 names a real element, but R1 is a resistor -- not V/L/E/H -- so it has no MNA
+* branch-current unknown at all. This must be a hard build-time error, not a silent 0.0
+* read-back (see BlockKind::Phys2Sig's own Errors doc).
+V1 in 0 5
+R1 in out 1000
+R2 out 0 1000
+IMEAS kind=phys2sig branch=R1

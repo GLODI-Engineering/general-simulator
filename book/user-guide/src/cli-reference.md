@@ -51,7 +51,7 @@ readers (`tests/raw-output-python/`).
 
 ## `--mode dc` and block-driven gates
 
-Every ideal switch gate in this crate is block-driven (`gate=block ctrl=<sig2voltage-name>`, resolved
+Every ideal switch gate in this crate is block-driven (`gate=block ctrl=<sig2phys-voltage-name>`, resolved
 by reading the named block's current output each step — see the module doc comment on
 `crates/general-simulator-cli/src/main.rs`). A `.op`-style DC operating point (`--mode dc`) has
 no notion of a block's time-stepped state at all, so any netlist declaring an ideal switch is rejected

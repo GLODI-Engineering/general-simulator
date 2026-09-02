@@ -1,0 +1,10 @@
+* The MNA "ammeter" idiom: R1 has no branch-current unknown of its own (only V/L/E/H
+* elements do), so to measure the current through it, insert a 0V voltage source (VAMM) in
+* series and read *that* instead -- a 0V source perturbs nothing electrically, but is a V
+* element, so it gets a branch-current unknown for free.
+* Expected: IMEAS == I(VAMM) == 5 / (1000 + 1000) = 0.0025 A exactly.
+V1 in 0 5
+VAMM in mid 0
+R1 mid out 1000
+R2 out 0 1000
+IMEAS kind=phys2sig branch=VAMM

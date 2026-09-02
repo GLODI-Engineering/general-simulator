@@ -45,7 +45,7 @@ fn clarke_and_clarkepark_blocks_appear_as_named_csv_columns() {
     let netlist = fixture("cscript_gain.cir"); // V1 a 0 5 / D1 a b idealswitchmodel / R1 b 0 1000
     let devices = write_devices_file(
         "OFFVAL kind=const value=0\n\
-         OFFGATE kind=sig2voltage in=OFFVAL\n\
+         OFFGATE kind=sig2phys domain=voltage in=OFFVAL\n\
          D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 gate=block ctrl=OFFGATE\n\
          A kind=const value=1\n\
          B kind=const value=-0.5\n\

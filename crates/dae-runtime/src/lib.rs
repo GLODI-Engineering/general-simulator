@@ -32,7 +32,8 @@ mod topology;
 
 pub use block_graph::{
     simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, GainValue, GateBinding,
-    PidClamp, ProbeTarget, SampleTimeSpec, Signal, SignalValue, TransientWithBlocksStep,
+    Phys2SigTarget, PhysicalDomain, PidClamp, SampleTimeSpec, Signal, SignalValue,
+    TransientWithBlocksStep,
 };
 pub use closed_loop::{sawtooth_carrier, simulate_closed_loop};
 pub use step_control::{AdaptiveConfig, TimeStep};
@@ -193,23 +194,22 @@ pub enum DaeError {
     OctBlockDoesNotSupportAdaptiveStep {
         block_name: String,
     },
-    /// A [`block_graph::GateBinding`] names a block that exists but isn't a
-    /// [`block_graph::BlockKind::Sig2Voltage`] — the enforced physical/signal-domain boundary:
+    /// A [`block_graph::GateBinding`] names a block that exists but isn't a `domain=voltage`
+    /// [`block_graph::BlockKind::Sig2Phys`] — the enforced physical/signal-domain boundary:
     /// an ideal switch's gate is itself a voltage, so any signal driving it must first pass through
-    /// the same `Sig2Voltage` converter a `V`-source's own magnitude uses, never a raw
-    /// `Pid`/`Vco`/`Hysteresis`/etc. block directly. `gate` is the ideal switch this binding belongs
-    /// to; `block` and `found_kind` name the offending target and (for a human-readable
-    /// message) what it actually is.
+    /// the same `domain=voltage` `Sig2Phys` converter a `V`-source's own magnitude uses, never a
+    /// raw `Pid`/`Vco`/`Hysteresis`/etc. block directly, and never a `domain=current` `Sig2Phys`
+    /// either. `gate` is the ideal switch this binding belongs to; `block` and `found_kind` name
+    /// the offending target and (for a human-readable message) what it actually is.
     GateTargetNotSig2Voltage {
         gate: String,
         block: String,
         found_kind: &'static str,
     },
     /// An independent `V`/`I` source's own literal value in the netlist is a bare symbol that
-    /// names a declared block, but that block isn't the matching
-    /// [`block_graph::BlockKind::Sig2Voltage`]/[`block_graph::BlockKind::Sig2Current`] converter
-    /// (`V` needs `Sig2Voltage`, `I` needs `Sig2Current`) — the enforced Signal-to-PS boundary
-    /// for driving a source's own magnitude from the block graph.
+    /// names a declared block, but that block isn't a [`block_graph::BlockKind::Sig2Phys`] of
+    /// the matching domain (`V` needs `domain=voltage`, `I` needs `domain=current`) — the
+    /// enforced Signal-to-PS boundary for driving a source's own magnitude from the block graph.
     SourceNotSig2PhysicalConverter {
         source: String,
         block: String,
@@ -769,8 +769,8 @@ fn fold_and_solve(
     // is this step's full block-graph output map (empty for every caller with no block graph at
     // all) -- `system.evaluate` only ever substitutes a symbol actually present in an
     // expression tree, so passing every block's output here unconditionally is harmless; the
-    // *only* symbols that can legitimately appear this way are a `BlockKind::Sig2Voltage`/
-    // `Sig2Current` converter's own name, since `simulate_transient_with_blocks` already
+    // *only* symbols that can legitimately appear this way are a `BlockKind::Sig2Phys`
+    // converter's own name, since `simulate_transient_with_blocks` already
     // rejects any other block name appearing as a bare V/I source literal before any step runs
     // (see `DaeError::SourceNotSig2PhysicalConverter`).
     let mut base_values = BTreeMap::new();
@@ -826,7 +826,7 @@ fn fold_and_solve(
                 // computed block outputs -- a block-driven source has no analytic form to
                 // re-evaluate, only the discrete sample already used last step, zero-order-held
                 // for that step, exactly the sampled-data convention this whole block graph
-                // uses) for a `Sig2Voltage`/`Sig2Current`-driven one. Skipped (and `numeric0.u`
+                // uses) for a `Sig2Phys`-driven one. Skipped (and `numeric0.u`
                 // cloned directly, exactly the previous behavior) only when there are neither,
                 // since u_n == u_{n+1} trivially and a second `evaluate` call would be pure
                 // overhead.

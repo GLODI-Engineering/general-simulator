@@ -1,0 +1,5 @@
+* domain= must be exactly 'voltage' or 'current' -- anything else is rejected at parse time.
+CMD kind=const value=5
+VDRV kind=sig2phys domain=power in=CMD
+V1 a 0 VDRV
+R1 a 0 1k

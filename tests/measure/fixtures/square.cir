@@ -5,7 +5,7 @@
 * OFF_TIME = 0.5s per cycle (the 1us edges are within any reasonable tolerance of exactly 0.5).
 SQ kind=pulsewave v1=0 v2=1 td=0 tr=1e-6 tf=1e-6 pw=0.5 per=1.0
 VSQ a 0 SQV
-SQV kind=sig2voltage in=SQ
+SQV kind=sig2phys domain=voltage in=SQ
 R1 a 0 1000
 
 MEAS_FREQ kind=measure type=freq out=V(a) on=0.5 off=0.5

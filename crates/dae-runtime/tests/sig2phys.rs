@@ -1,10 +1,11 @@
-//! `BlockKind::Sig2Voltage`/`BlockKind::Sig2Current` — the enforced Signal-to-PS boundary for a
-//! block driving an independent source's own magnitude, closing the write-direction gap
-//! `BlockKind::Probe` alone leaves open (a block could previously only ever observe a circuit,
+//! `BlockKind::Sig2Phys` (`domain=voltage`/`domain=current`) — the enforced Signal-to-PS boundary
+//! for a block driving an independent source's own magnitude, closing the write-direction gap
+//! `BlockKind::Phys2Sig` alone leaves open (a block could previously only ever observe a circuit,
 //! never load or drive it — see `elspice-pwl-buck-dc-motor-cascade`'s own documented
 //! limitation). Verifies both the enforcement (a `V`/`I` source's bare-symbol literal must name
-//! the matching converter kind, not any other block, `V` needs `Sig2Voltage`/`I` needs
-//! `Sig2Current`) and the actual numeric substitution, against exact hand-derived values: first
+//! a `Sig2Phys` converter of the matching domain, not any other block, `V` needs
+//! `domain=voltage`/`I` needs `domain=current`) and the actual numeric substitution, against
+//! exact hand-derived values: first
 //! a pure resistive circuit with no reactive elements, so the circuit's own response is an
 //! *identity*, not an approximation — the cleanest possible check that the source's magnitude
 //! genuinely comes from the block graph's own output every step; then a genuine RC circuit
@@ -15,14 +16,14 @@
 use std::collections::BTreeMap;
 
 use dae_runtime::{
-    simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, DaeError, Signal,
-    TimeStep,
+    simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, DaeError, PhysicalDomain,
+    Signal, TimeStep,
 };
 use general_spice_core::Dialect;
 use pwl_devices::{IdealDiode, IdealSwitch};
 
 #[test]
-fn sig2voltage_drives_a_voltage_source_exactly_through_a_pwl_ramp() {
+fn sig2phys_voltage_drives_a_voltage_source_exactly_through_a_pwl_ramp() {
     // V1's own literal names CMD_V directly -- general-mna already accepts a bare symbol there
     // (Expression::Symbol), confirmed to need no change on that side.
     let netlist = "V1 a 0 CMD_V\nR1 a 0 1000";
@@ -41,7 +42,9 @@ fn sig2voltage_drives_a_voltage_source_exactly_through_a_pwl_ramp() {
         },
         BlockInstance {
             name: "CMD_V".to_string(),
-            kind: BlockKind::Sig2Voltage,
+            kind: BlockKind::Sig2Phys {
+                domain: PhysicalDomain::Voltage,
+            },
             inputs: vec![Signal::Block("CMD".to_string())],
         },
     ];
@@ -76,7 +79,7 @@ fn sig2voltage_drives_a_voltage_source_exactly_through_a_pwl_ramp() {
 }
 
 #[test]
-fn sig2current_drives_a_current_source_matching_ohms_law_exactly() {
+fn sig2phys_current_drives_a_current_source_matching_ohms_law_exactly() {
     let netlist = "I1 0 a CMD_I\nR1 a 0 1000";
     let ideal_switches: BTreeMap<String, IdealSwitch> = BTreeMap::new();
     let diodes: BTreeMap<String, IdealDiode> = BTreeMap::new();
@@ -90,7 +93,9 @@ fn sig2current_drives_a_current_source_matching_ohms_law_exactly() {
         },
         BlockInstance {
             name: "CMD_I".to_string(),
-            kind: BlockKind::Sig2Current,
+            kind: BlockKind::Sig2Phys {
+                domain: PhysicalDomain::Current,
+            },
             inputs: vec![Signal::Block("CMD".to_string())],
         },
     ];
@@ -120,9 +125,10 @@ fn sig2current_drives_a_current_source_matching_ohms_law_exactly() {
 }
 
 #[test]
-fn a_voltage_source_naming_a_sig2current_block_is_rejected() {
-    // V1's own literal names CMD_I, which is Sig2Current -- V needs Sig2Voltage specifically,
-    // so this must be rejected even though CMD_I is a legitimate converter of the *other* kind.
+fn a_voltage_source_naming_a_domain_current_sig2phys_block_is_rejected() {
+    // V1's own literal names CMD_I, which is domain=current -- V needs domain=voltage
+    // specifically, so this must be rejected even though CMD_I is a legitimate converter of the
+    // *other* domain.
     let netlist = "V1 a 0 CMD_I\nR1 a 0 1000";
     let ideal_switches: BTreeMap<String, IdealSwitch> = BTreeMap::new();
     let diodes: BTreeMap<String, IdealDiode> = BTreeMap::new();
@@ -135,7 +141,9 @@ fn a_voltage_source_naming_a_sig2current_block_is_rejected() {
         },
         BlockInstance {
             name: "CMD_I".to_string(),
-            kind: BlockKind::Sig2Current,
+            kind: BlockKind::Sig2Phys {
+                domain: PhysicalDomain::Current,
+            },
             inputs: vec![Signal::Block("CMD".to_string())],
         },
     ];
@@ -163,8 +171,8 @@ fn a_voltage_source_naming_a_sig2current_block_is_rejected() {
         } => {
             assert_eq!(source, "V1");
             assert_eq!(block, "CMD_I");
-            assert_eq!(expected_kind, "sig2voltage");
-            assert_eq!(found_kind, "sig2current");
+            assert_eq!(expected_kind, "sig2phys(domain=voltage)");
+            assert_eq!(found_kind, "sig2phys(domain=current)");
         }
         other => panic!("expected SourceNotSig2PhysicalConverter, got {other:?}"),
     }
@@ -205,7 +213,7 @@ fn a_voltage_source_naming_a_plain_block_directly_is_rejected() {
         } => {
             assert_eq!(source, "V1");
             assert_eq!(block, "CMD");
-            assert_eq!(expected_kind, "sig2voltage");
+            assert_eq!(expected_kind, "sig2phys(domain=voltage)");
             assert_eq!(found_kind, "const");
         }
         other => panic!("expected SourceNotSig2PhysicalConverter, got {other:?}"),
@@ -213,7 +221,7 @@ fn a_voltage_source_naming_a_plain_block_directly_is_rejected() {
 }
 
 #[test]
-fn sig2voltage_driven_source_produces_correct_rc_charging_dynamics_under_trapezoidal() {
+fn sig2phys_voltage_driven_source_produces_correct_rc_charging_dynamics_under_trapezoidal() {
     // R1=1k, C1=1uF -> tau=1ms. CMD steps 0V -> 10V at t=0 (a plain PWL, not a fixed literal),
     // driving V1 through CMD_V -- unlike the two resistive-only tests above, C1 gives this
     // circuit a real K != 0, so Scheme::Trapezoidal's own u_prev history-averaging path is
@@ -235,7 +243,9 @@ fn sig2voltage_driven_source_produces_correct_rc_charging_dynamics_under_trapezo
         },
         BlockInstance {
             name: "CMD_V".to_string(),
-            kind: BlockKind::Sig2Voltage,
+            kind: BlockKind::Sig2Phys {
+                domain: PhysicalDomain::Voltage,
+            },
             inputs: vec![Signal::Block("CMD".to_string())],
         },
     ];

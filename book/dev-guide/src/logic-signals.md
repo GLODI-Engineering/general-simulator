@@ -12,7 +12,7 @@ block, and more — stays a candidate list for a later pass, not designed here.)
 its own type" question, twice, before this survey existed: `Hysteresis`'s own comparator output
 is already `SignalValue::Scalar(if on {1.0} else {0.0})`, and `GateBinding::resolve` thresholds
 *any* block's output at `>= 0.5` regardless of what produced it. A logic gate's output is just
-another `Scalar(1.0/0.0)` — directly wireable into a `Gain`, a `Sig2Voltage`, an ideal switch's own
+another `Scalar(1.0/0.0)` — directly wireable into a `Gain`, a `Sig2Phys`, an ideal switch's own
 `ctrl=`, with no cast block and no type error, unlike some typed block-diagram tools' own
 `bool`/`double` split. That split exists there for code-generation memory-layout correctness (a
 real `bool` is 1 byte, a real `double` is 8, and generated C can't silently mix them) — this
@@ -188,8 +188,7 @@ the same reasoning `Gain`'s scalar-vs-matrix modes and `LogicGate`'s op enum alr
 - A single shared "rising edge detected" helper (`clk >= 0.5 && prev_clk < 0.5`), used by both
   Category 3 and Category 4 rather than duplicated three-plus times.
 - **Not affected**: `SignalValue`, `topological_order`/`block_index_by_name` (agnostic to what a
-  block computes), the physical/signal-domain converter boundary (`Sig2Voltage`/`Sig2Current`/
-  `Probe` are unaffected — a logic block's `Scalar` output crosses that boundary exactly like
+  block computes), the physical/signal-domain converter boundary (`Sig2Phys`/`Phys2Sig` are unaffected — a logic block's `Scalar` output crosses that boundary exactly like
   any other block's already does).
 
 ## Deferred (explicitly out of scope for this pass)

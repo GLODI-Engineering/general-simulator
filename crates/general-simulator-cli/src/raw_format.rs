@@ -28,7 +28,7 @@
 //! Every variable in a real SPICE rawfile is either a circuit voltage, a circuit current, the
 //! `time`/`frequency` axis, or (in some dialects) another physically-typed quantity — there is
 //! no "generic signal" type in the format. This crate's own CSV output has no such restriction
-//! (a `kind=pid`/`kind=probe`/... block's named output is just another column), so a
+//! (a `kind=pid`/`kind=phys2sig`/... block's named output is just another column), so a
 //! signal-domain block output written here that isn't a `V(...)`/`I(...)` circuit unknown is
 //! given the type `voltage` as the broadest-compatibility fallback: PySpice's own rawfile reader
 //! hard-codes a 4-entry `time`/`voltage`/`current`/`frequency` lookup table and raises `KeyError`

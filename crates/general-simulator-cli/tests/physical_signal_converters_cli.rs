@@ -1,8 +1,8 @@
-//! `kind=probe`/`kind=sig2voltage`/`kind=sig2current` through the real CLI parser — an
+//! `kind=phys2sig`/`kind=sig2phys domain=voltage`/`kind=sig2phys domain=current` through the real CLI parser — an
 //! end-to-end check that the enforced physical/signal-domain converter grammar documented in
 //! `main.rs`'s module doc comment actually parses and reaches `dae-runtime`'s block graph, not
 //! just the `BlockKind` construction tested directly in `dae-runtime`'s own
-//! `probe_block.rs`/`sig2voltage_gate_enforcement.rs`/`sig2voltage_sig2current.rs`.
+//! `phys2sig_block.rs`/`sig2phys_gate_enforcement.rs`/`sig2phys.rs`.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -32,13 +32,13 @@ fn run(args: &[&str]) -> std::process::Output {
 }
 
 #[test]
-fn probe_reads_a_node_voltage_through_the_real_parser() {
+fn phys2sig_reads_a_node_voltage_through_the_real_parser() {
     let netlist = fixture("cscript_gain.cir"); // V1 a 0 5 / D1 a b idealswitchmodel / R1 b 0 1000
     let devices = write_devices_file(
         "OFFVAL kind=const value=0\n\
-         OFFGATE kind=sig2voltage in=OFFVAL\n\
+         OFFGATE kind=sig2phys domain=voltage in=OFFVAL\n\
          D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 gate=block ctrl=OFFGATE\n\
-         VMEAS kind=probe node=b\n",
+         VMEAS kind=phys2sig node=b\n",
     );
 
     let output = run(&[
@@ -68,7 +68,7 @@ fn probe_reads_a_node_voltage_through_the_real_parser() {
     let v_b_idx = header.iter().position(|h| *h == "V(b)").unwrap();
     let vmeas: f64 = last[vmeas_idx].parse().unwrap();
     let v_b_prev: f64 = {
-        // Probe reads the *previous* step -- compare against the second-to-last row's own
+        // Phys2Sig reads the *previous* step -- compare against the second-to-last row's own
         // V(b), not the last row's (which is what a same-step read would wrongly expect).
         let prev: Vec<&str> = lines[lines.len() - 2].split(',').collect();
         prev[v_b_idx].parse().unwrap()
@@ -80,7 +80,7 @@ fn probe_reads_a_node_voltage_through_the_real_parser() {
 }
 
 #[test]
-fn a_gate_naming_a_raw_block_instead_of_sig2voltage_is_rejected_with_a_clear_error() {
+fn a_gate_naming_a_raw_block_instead_of_sig2phys_is_rejected_with_a_clear_error() {
     let netlist = fixture("cscript_gain.cir");
     let devices = write_devices_file(
         "DUTY kind=const value=0.3\n\
@@ -103,16 +103,16 @@ fn a_gate_naming_a_raw_block_instead_of_sig2voltage_is_rejected_with_a_clear_err
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("GateTargetNotSig2Voltage") || stderr.contains("Sig2Voltage"),
-        "expected a Sig2Voltage-related error, got: {stderr}"
+        "expected a GateTargetNotSig2Voltage-related error, got: {stderr}"
     );
 }
 
 #[test]
-fn sig2voltage_wrapper_makes_gate_block_work() {
+fn sig2phys_voltage_wrapper_makes_gate_block_work() {
     let netlist = fixture("cscript_gain.cir");
     let devices = write_devices_file(
         "DUTY kind=const value=0.3\n\
-         DUTY_GATE kind=sig2voltage in=DUTY\n\
+         DUTY_GATE kind=sig2phys domain=voltage in=DUTY\n\
          D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 \
          gate=block ctrl=DUTY_GATE\n",
     );
@@ -136,16 +136,16 @@ fn sig2voltage_wrapper_makes_gate_block_work() {
 }
 
 #[test]
-fn sig2voltage_drives_a_voltage_source_via_its_own_literal_value_field() {
+fn sig2phys_voltage_drives_a_voltage_source_via_its_own_literal_value_field() {
     // A dummy always-off ideal switch reaches the block-graph code path; the real action is CMD_V
     // driving V1's own magnitude directly, checked against Ohm's law on a pure resistive
     // divider (V(a) must equal CMD's own commanded value exactly).
     let devices = write_devices_file(
         "OFFVAL kind=const value=0\n\
-         OFFGATE kind=sig2voltage in=OFFVAL\n\
+         OFFGATE kind=sig2phys domain=voltage in=OFFVAL\n\
          D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=1e6 g_on=0 gate=block ctrl=OFFGATE\n\
          CMD kind=const value=7\n\
-         CMD_V kind=sig2voltage in=CMD\n",
+         CMD_V kind=sig2phys domain=voltage in=CMD\n",
     );
     let netlist_path = write_devices_file("V1 a 0 CMD_V\nD1 a b idealswitchmodel\nR1 b 0 1000\n");
 

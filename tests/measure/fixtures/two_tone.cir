@@ -10,7 +10,7 @@ SIG1 kind=sinwave v0=0 va=1 freq=10
 SIG2 kind=sinwave v0=0 va=0.1 freq=20
 TOTAL kind=sum inputs=SIG1,SIG2 signs=1,1
 VTOT a 0 TOTALV
-TOTALV kind=sig2voltage in=TOTAL
+TOTALV kind=sig2phys domain=voltage in=TOTAL
 R1 a 0 1000
 
 MEAS_FOUR kind=measure type=four out=V(a) fundamental=10 harmonics=4

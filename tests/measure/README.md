@@ -17,7 +17,7 @@ no calling into Rust measurement code directly.
 
 Every fixture drives its signal(s) from an exact, closed-form source (`kind=pwl` two-point ramps,
 `kind=sinwave`/`kind=pulsewave` — real SPICE `SIN()`/`PULSE()` sources) fed onto a node through an
-ideal ­­`sig2voltage`/V-source pair, so the measured node voltage is *exactly* that closed-form
+ideal ­­`sig2phys domain=voltage`/V-source pair, so the measured node voltage is *exactly* that closed-form
 function of time at every simulated instant — never an approximation from real circuit dynamics.
 Every expected value below is a hand-derived closed-form number, not something read back from the
 tool's own output (see each fixture's own header comment for the derivation):

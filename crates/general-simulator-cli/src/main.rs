@@ -16,11 +16,11 @@
 //! ```text
 //! D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1
 //! ONVAL kind=const value=1
-//! ONGATE kind=sig2voltage in=ONVAL
+//! ONGATE kind=sig2phys domain=voltage in=ONVAL
 //! D2 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=block ctrl=ONGATE
 //! DUTY kind=const value=0.6
 //! PWM1 kind=pwm freq=10000 in=DUTY outputs=PWM1_ON,PWM1_OFF
-//! PWM1G kind=sig2voltage in=PWM1_ON
+//! PWM1G kind=sig2phys domain=voltage in=PWM1_ON
 //! D3 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=block ctrl=PWM1G
 //! ```
 //!
@@ -39,13 +39,14 @@
 //! ## Wiring a controller into a gate
 //!
 //! **There is no separate "closed-loop mode," and no non-block-driven gate at all.** Every
-//! ideal switch's gate is `gate=block ctrl=<sig2voltage-name>` — always resolved the same way, every
+//! ideal switch's gate is `gate=block ctrl=<sig2phys-voltage-name>` — always resolved the same way, every
 //! step, by reading the named block's current output (`>= 0.5` means on). Even a permanently-on
 //! or permanently-off gate is an ordinary block (`kind=const value=1`, wrapped in a
-//! `kind=sig2voltage` like any other gate target — an ideal switch's gate is itself a voltage, so it
-//! shares the same converter a `V`-source's own magnitude uses, not a dedicated gate-only
-//! type), not a special fixed-state escape hatch — see "Physical/signal-domain converters"
-//! below for why every `ctrl=` target must specifically be a `sig2voltage` converter.
+//! `kind=sig2phys domain=voltage` like any other gate target — an ideal switch's gate is itself
+//! a voltage, so it shares the same converter a `V`-source's own magnitude uses, not a
+//! dedicated gate-only type), not a special fixed-state escape hatch — see
+//! "Physical/signal-domain converters" below for why every `ctrl=` target must specifically be
+//! a `domain=voltage` `sig2phys` converter.
 //! `continuous-blocks` supplies the vocabulary the device file wires
 //! together — `const`, `time` (zero-input, outputs the current step's own simulated time — the
 //! standard "clock" source, needed to build a `sin(2*pi*f*t)`-style signal via `MathFn1`/`Gain`
@@ -54,7 +55,7 @@
 //! `gain`, `pid`, `statespace` (arbitrary `(A,B,C,D)`), `tf` (a rational `N(s)/D(s)`), `vco` (a
 //! bare oscillator ramp), and the two PWM modulators this vocabulary is ultimately *for* —
 //! `pwm`/`pspwm`, see their own section below. Whether a graph happens to read the circuit's own
-//! state back (through a `kind=probe`, see below,
+//! state back (through a `kind=phys2sig`, see below,
 //! making it what's conventionally called "closed-loop") is just a property of how the blocks
 //! are wired, the same as it would be in any real block-diagram simulation tool — the solver
 //! doesn't need to be told which case it is, because it resolves both exactly the same way:
@@ -89,31 +90,33 @@
 //! block-diagram tool enforces with its own physical/signal converter blocks, applied here at
 //! the netlist level (a companion UI is intended to enforce the same rule visually later; this
 //! grammar is the ground truth). There are two converters, one per
-//! crossing direction (read vs. write) — the write direction, `sig2voltage`/`sig2current`,
-//! covers both a gate command and a source's own magnitude, since an ideal switch's gate is itself a
-//! voltage rather than a distinct discrete-actuation signal domain:
+//! crossing direction (read vs. write) — the write direction, `sig2phys` (parameterized by
+//! `domain=voltage`/`domain=current`), covers both a gate command and a source's own magnitude,
+//! since an ideal switch's gate is itself a voltage rather than a distinct discrete-actuation
+//! signal domain:
 //!
-//! - `kind=probe node=<name>` (reads `V(node)`) or `kind=probe branch=<name>` (reads
+//! - `kind=phys2sig node=<name>` (reads `V(node)`) or `kind=phys2sig branch=<name>` (reads
 //!   `I(branch)`, mutually exclusive with `node=`) is the **only** way a circuit quantity enters
 //!   the signal domain. Zero inputs (a source block, like `const`/`time`); reference its output
 //!   afterward exactly like any other block's, e.g. `ERR kind=sum inputs=REF,VOUT_PROBE
-//!   signs=1,-1` where `VOUT_PROBE kind=probe node=vout` was declared earlier.
-//! - `kind=sig2voltage in=<signal>` / `kind=sig2current in=<signal>` are the **only** legal way a
-//!   signal-domain block drives an independent voltage/current source's own magnitude, *or* an
-//!   ideal switch's gate. For a source: name the converter block directly as that source's own literal
-//!   value in the netlist, e.g. `V1 a 0 VDRV` where `VDRV kind=sig2voltage in=CTRL` was declared
-//!   earlier (`general-mna` already accepts a bare symbol there; no change was needed on that
-//!   side). `V` sources need `sig2voltage`, `I` sources need `sig2current` — a mismatch, or
-//!   naming any other kind of block, is rejected
-//!   (`dae_runtime::DaeError::SourceNotSig2PhysicalConverter`) before any step runs. For a gate:
-//!   `gate=block ctrl=<name>` requires `<name>` to be a `sig2voltage` converter too, not a raw
-//!   `pid`/`vco`/`pwm`/`hysteresis`/etc. block directly
+//!   signs=1,-1` where `VOUT_PROBE kind=phys2sig node=vout` was declared earlier.
+//! - `kind=sig2phys domain=voltage in=<signal>` / `kind=sig2phys domain=current in=<signal>`
+//!   are the **only** legal way a signal-domain block drives an independent voltage/current
+//!   source's own magnitude, *or* an ideal switch's gate. For a source: name the converter
+//!   block directly as that source's own literal value in the netlist, e.g. `V1 a 0 VDRV` where
+//!   `VDRV kind=sig2phys domain=voltage in=CTRL` was declared earlier (`general-mna` already
+//!   accepts a bare symbol there; no change was needed on that side). `V` sources need
+//!   `domain=voltage`, `I` sources need `domain=current` — a mismatch, or naming any other kind
+//!   of block, is rejected (`dae_runtime::DaeError::SourceNotSig2PhysicalConverter`) before any
+//!   step runs. For a gate: `gate=block ctrl=<name>` requires `<name>` to be a `domain=voltage`
+//!   `sig2phys` converter too, not a raw `pid`/`vco`/`pwm`/`hysteresis`/etc. block directly, and
+//!   not a `domain=current` `sig2phys` either
 //!   (`dae_runtime::DaeError::GateTargetNotSig2Voltage` otherwise). Purely an identity
 //!   pass-through numerically in both roles — its whole purpose is marking, in the netlist
 //!   text, exactly where a signal stops being "a number a controller computed" and starts being
 //!   a physical voltage, whether that voltage sources a node or gates a switch. This closes
 //!   a real, previously-open gap: without it, a block could only ever *observe* the circuit
-//!   (via `kind=probe`), never load or drive it — see `elspice-pwl-buck-dc-motor-cascade` in the
+//!   (via `kind=phys2sig`), never load or drive it — see `elspice-pwl-buck-dc-motor-cascade` in the
 //!   sibling `internal-archive` repo for the concrete limitation this fixes.
 //!
 //! `kind=pid kp=<f64> ki=<f64> kd=<f64> n=<f64> in=<signal>` plus either `clamp_lo=<f64>
@@ -241,12 +244,13 @@
 //!   variable-frequency converter's own ZVS margin, not just bookkeeping. `outputs=` defaults
 //!   the same way as PWM Modulator 1.
 //!
-//! Both feed `gate=block ctrl=<sig2voltage-name>` on each switch — one `sig2voltage` wrapping
-//! `main`, another wrapping `complement`, for a true half-bridge leg's two switches; a topology
-//! with only one actively-driven switch (a buck's own high-side, freewheeling through a diode)
-//! just leaves the `complement` output unwired. **Every `ctrl=` target must resolve to a
-//! `kind=sig2voltage` converter** (see "Physical/signal-domain converters" above), never the raw
-//! `pwm`/`pspwm`/`hysteresis`/etc. block directly.
+//! Both feed `gate=block ctrl=<sig2phys-voltage-name>` on each switch — one `domain=voltage`
+//! `sig2phys` wrapping `main`, another wrapping `complement`, for a true half-bridge leg's two
+//! switches; a topology with only one actively-driven switch (a buck's own high-side,
+//! freewheeling through a diode) just leaves the `complement` output unwired. **Every `ctrl=`
+//! target must resolve to a `domain=voltage` `kind=sig2phys` converter** (see
+//! "Physical/signal-domain converters" above), never the raw `pwm`/`pspwm`/`hysteresis`/etc.
+//! block directly.
 //!
 //! Example — a frequency-modulated half-bridge PID (LLC-family converters regulate by
 //! switching frequency, not PWM duty, unlike buck/boost) with a reference step test, as it
@@ -257,7 +261,7 @@
 //! * D1 kind=ideal_switch r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=block ctrl=LEG_MAIN_G
 //! * D2 kind=ideal_switch r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 gate=block ctrl=LEG_COMP_G
 //! ... (Lr, Cr, transformer, rectifier, Cout, Rout -- ordinary SPICE elements)
-//! * VOUT_PROBE kind=probe node=vout
+//! * VOUT_PROBE kind=phys2sig node=vout
 //! * REF     kind=pwc points=[[0,20],[0.014,17]]
 //! * ERR     kind=sum inputs=REF,VOUT_PROBE signs=1,-1
 //! * PID1    kind=pid kp=800 ki=4e6 kd=0 n=1000 clamp_lo=-15000 clamp_hi=15000 in=ERR
@@ -266,8 +270,8 @@
 //! * ZEROPH  kind=const value=0
 //! * HALFDUTY kind=const value=0.48
 //! * LEG     kind=pspwm f_min=100000 f_max=130000 inputs=FREQ,ZEROPH,HALFDUTY outputs=LEG_MAIN,LEG_COMP
-//! * LEG_MAIN_G kind=sig2voltage in=LEG_MAIN
-//! * LEG_COMP_G kind=sig2voltage in=LEG_COMP
+//! * LEG_MAIN_G kind=sig2phys domain=voltage in=LEG_MAIN
+//! * LEG_COMP_G kind=sig2phys domain=voltage in=LEG_COMP
 //! ```
 //!
 //! A real SPICE tool opening this file sees eleven ordinary comment lines and an otherwise
@@ -655,6 +659,7 @@ fn run_transient_with_ideal_switches(
             | BlockKind::PyBlock { output_names, .. }
             | BlockKind::PyFunction { output_names, .. }
             | BlockKind::OctFunc { output_names, .. }
+            | BlockKind::OctBlock { output_names, .. }
             | BlockKind::CoordinateTransform { output_names, .. }
             | BlockKind::Pmsm { output_names, .. }
             | BlockKind::Pwm { output_names, .. }
@@ -757,9 +762,9 @@ fn print_measurements(measurements: &[measure::MeasureSpec], waveform: &Waveform
 /// (a controller regulating a `kind=pmsm`'s own `id`/`iq` outputs, or a PLL's angle estimate
 /// feeding the very `kind=park` block that produced its own error signal), where a same-step
 /// reference would be a genuine algebraic loop. Anything else is another block's name (this
-/// same step's output) — including a `kind=probe` block, the *only* legal way to read a circuit
+/// same step's output) — including a `kind=phys2sig` block, the *only* legal way to read a circuit
 /// quantity into the signal domain (there is deliberately no `meas:`-style inline shortcut
-/// anymore; see `kind=probe`'s own doc section above). A stray `meas:<node>` left over from
+/// anymore; see `kind=phys2sig`'s own doc section above). A stray `meas:<node>` left over from
 /// before this convention was enforced is simply treated as an ordinary (and therefore unknown)
 /// block name, surfacing as a clear `UnknownBlockInput` error rather than silently reading the
 /// circuit.

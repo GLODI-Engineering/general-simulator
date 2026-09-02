@@ -1,0 +1,7 @@
+* V1's own literal names CMD_I, which is domain=current -- a V source needs domain=voltage
+* specifically, so this is rejected even though CMD_I is a legitimate converter of the other
+* domain.
+CMD kind=const value=5
+CMD_I kind=sig2phys domain=current in=CMD
+V1 a 0 CMD_I
+R1 a 0 1k

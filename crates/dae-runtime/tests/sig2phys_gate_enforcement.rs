@@ -1,16 +1,17 @@
-//! `GateBinding` targets must resolve to a `BlockKind::Sig2Voltage` converter, never a raw
-//! control block directly — an ideal switch's gate is itself a voltage, so it shares the same
-//! Signal-to-PS boundary a V-source's own magnitude uses; no separate gate-only converter
-//! exists. Checks both that the wrong kind is rejected before any step runs
-//! (`DaeError::GateTargetNotSig2Voltage`, naming the actual offending block and kind) and that
-//! the correct kind (wrapped in `Sig2Voltage`) works exactly as the pre-enforcement direct
-//! reference used to.
+//! `GateBinding` targets must resolve to a `domain=voltage` `BlockKind::Sig2Phys` converter,
+//! never a raw control block directly and never a `domain=current` `Sig2Phys` either — an ideal
+//! switch's gate is itself a voltage, so it shares the same Signal-to-PS boundary a V-source's
+//! own magnitude uses; no separate gate-only converter exists. Checks that the wrong kind is
+//! rejected before any step runs (`DaeError::GateTargetNotSig2Voltage`, naming the actual
+//! offending block and kind) for both a raw control block and a `domain=current` `Sig2Phys`, and
+//! that the correct kind (wrapped in a `domain=voltage` `Sig2Phys`) works exactly as the
+//! pre-enforcement direct reference used to.
 
 use std::collections::BTreeMap;
 
 use dae_runtime::{
     simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, DaeError, GateBinding,
-    Signal, TimeStep,
+    PhysicalDomain, Signal, TimeStep,
 };
 use general_spice_core::Dialect;
 use pwl_devices::{IdealDiode, IdealSwitch};
@@ -38,7 +39,7 @@ fn naming_a_raw_block_directly_is_rejected_before_any_step_runs() {
     let mut gates = BTreeMap::new();
     gates.insert(
         "D1".to_string(),
-        // raw Const, not wrapped in Sig2Voltage -- must be rejected
+        // raw Const, not wrapped in a domain=voltage Sig2Phys -- must be rejected
         GateBinding::Block("DUTY".to_string()),
     );
 
@@ -71,7 +72,9 @@ fn naming_a_raw_block_directly_is_rejected_before_any_step_runs() {
 }
 
 #[test]
-fn wrapping_the_same_block_in_sig2voltage_makes_it_work() {
+fn naming_a_domain_current_sig2phys_block_is_also_rejected() {
+    // The load-bearing asymmetry: a gate must specifically be domain=voltage. A domain=current
+    // Sig2Phys is a legitimate converter of the *other* domain, and must still be rejected here.
     let netlist = "V1 a 0 5\nD1 a b idealswitchmodel\nR1 b 0 1000";
     let ideal_switches = dummy_ideal_switches();
     let diodes = BTreeMap::new();
@@ -84,7 +87,63 @@ fn wrapping_the_same_block_in_sig2voltage_makes_it_work() {
         },
         BlockInstance {
             name: "DUTY_GATE".to_string(),
-            kind: BlockKind::Sig2Voltage,
+            kind: BlockKind::Sig2Phys {
+                domain: PhysicalDomain::Current,
+            },
+            inputs: vec![Signal::Block("DUTY".to_string())],
+        },
+    ];
+    let mut gates = BTreeMap::new();
+    gates.insert(
+        "D1".to_string(),
+        GateBinding::Block("DUTY_GATE".to_string()),
+    );
+
+    let err = simulate_transient_with_blocks(
+        netlist,
+        Dialect::Ngspice,
+        &diodes,
+        &ideal_switches,
+        &blocks,
+        &gates,
+        0.1,
+        None,
+        1e-5,
+        TimeStep::Fixed(1e-6),
+    )
+    .unwrap_err();
+
+    match err {
+        DaeError::GateTargetNotSig2Voltage {
+            gate,
+            block,
+            found_kind,
+        } => {
+            assert_eq!(gate, "D1");
+            assert_eq!(block, "DUTY_GATE");
+            assert_eq!(found_kind, "sig2phys(domain=current)");
+        }
+        other => panic!("expected GateTargetNotSig2Voltage, got {other:?}"),
+    }
+}
+
+#[test]
+fn wrapping_the_same_block_in_a_domain_voltage_sig2phys_makes_it_work() {
+    let netlist = "V1 a 0 5\nD1 a b idealswitchmodel\nR1 b 0 1000";
+    let ideal_switches = dummy_ideal_switches();
+    let diodes = BTreeMap::new();
+
+    let blocks = vec![
+        BlockInstance {
+            name: "DUTY".to_string(),
+            kind: BlockKind::Const(ConstValue::Scalar(0.3)),
+            inputs: vec![],
+        },
+        BlockInstance {
+            name: "DUTY_GATE".to_string(),
+            kind: BlockKind::Sig2Phys {
+                domain: PhysicalDomain::Voltage,
+            },
             inputs: vec![Signal::Block("DUTY".to_string())],
         },
     ];

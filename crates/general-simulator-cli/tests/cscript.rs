@@ -2,7 +2,8 @@
 //! the `.c` fixtures in `tests/fixtures/` into real shared libraries at test time (via the
 //! system `cc`) -- an end-to-end check through the real CLI parser and `dae-runtime`'s block
 //! graph, not just `cscript-ffi`'s own lower-level unit tests. Both fixture netlists use a
-//! dummy always-off ideal switch (`gate=block` reading a `Const(0)` wrapped in `sig2voltage`) purely so
+//! dummy always-off ideal switch (`gate=block` reading a `Const(0)` wrapped in a `domain=voltage`
+//! `sig2phys`) purely so
 //! `simulate_transient_with_blocks`'s code path
 //! is reached at all -- `general-simulator-cli` only evaluates the block graph when at least one
 //! ideal switch is declared (see `main.rs`'s `run()`); the ideal switch being off never affects R1/the
@@ -55,7 +56,7 @@ fn cscript_gain_reproduces_a_hand_known_result_every_step() {
     let lib = compile_fixture("cscript_gain");
     let devices = write_devices_file(&format!(
         "OFFVAL kind=const value=0\n\
-         OFFGATE kind=sig2voltage in=OFFVAL\n\
+         OFFGATE kind=sig2phys domain=voltage in=OFFVAL\n\
          D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
          SRC kind=const value=5\n\
          CG kind=cscript lib={} in=SRC\n",
@@ -93,7 +94,7 @@ fn cscript_sample_time_holds_between_samples_zero_order() {
     // dt=0.0001, ts=0.0005 -> the counter should only increment once every 5 rows.
     let devices = write_devices_file(&format!(
         "OFFVAL kind=const value=0\n\
-         OFFGATE kind=sig2voltage in=OFFVAL\n\
+         OFFGATE kind=sig2phys domain=voltage in=OFFVAL\n\
          D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
          SRC kind=const value=0\n\
          CNT kind=cscript lib={} in=SRC ts=0.0005\n",
@@ -173,7 +174,7 @@ fn cscript_xc_matches_the_closed_form_step_response() {
     let lib = compile_fixture("cscript_decay_xc");
     let devices = write_devices_file(&format!(
         "OFFVAL kind=const value=0\n\
-         OFFGATE kind=sig2voltage in=OFFVAL\n\
+         OFFGATE kind=sig2phys domain=voltage in=OFFVAL\n\
          D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
          SRC kind=const value=10\n\
          CG kind=cscript lib={} in=SRC xc_count=1\n",
@@ -221,7 +222,7 @@ fn cscript_without_clone_is_rejected_under_adaptive_step_not_silently_wrong() {
     let lib = compile_fixture("cscript_gain"); // exports no cscript_clone
     let devices = write_devices_file(&format!(
         "OFFVAL kind=const value=0\n\
-         OFFGATE kind=sig2voltage in=OFFVAL\n\
+         OFFGATE kind=sig2phys domain=voltage in=OFFVAL\n\
          D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
          SRC kind=const value=5\n\
          CG kind=cscript lib={} in=SRC\n",

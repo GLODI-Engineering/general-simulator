@@ -6,7 +6,7 @@
 //! can express a genuinely periodic breakpoint list (`repeat=true`), which the electrical
 //! domain's own `PWL(...)` source has no option for.
 //!
-//! Every check here drives a `Sig2Voltage`-converted source through a purely resistive circuit
+//! Every check here drives a `Sig2Phys`-converted source through a purely resistive circuit
 //! (`V1 a 0 CMD_V\nR1 a 0 1000`) so `V(a)` equals the source block's own output *exactly*, every
 //! step (no reactive element to introduce any lag/approximation) — the same identity-check
 //! pattern `sig2v_sig2i.rs`'s own resistive-only tests use.
@@ -14,7 +14,8 @@
 use std::collections::BTreeMap;
 
 use dae_runtime::{
-    simulate_transient_with_blocks, BlockInstance, BlockKind, Signal, TimeStep, TransientFunction,
+    simulate_transient_with_blocks, BlockInstance, BlockKind, PhysicalDomain, Signal, TimeStep,
+    TransientFunction,
 };
 use general_spice_core::Dialect;
 use pwl_devices::{IdealDiode, IdealSwitch};
@@ -33,7 +34,9 @@ fn run_source(kind: BlockKind, t_final: f64, dt: f64) -> Vec<(f64, f64)> {
         },
         BlockInstance {
             name: "CMD_V".to_string(),
-            kind: BlockKind::Sig2Voltage,
+            kind: BlockKind::Sig2Phys {
+                domain: PhysicalDomain::Voltage,
+            },
             inputs: vec![Signal::Block("CMD".to_string())],
         },
     ];
@@ -159,7 +162,7 @@ fn pwl_repeat_produces_a_periodic_triangle_wave() {
 #[test]
 fn waveform_sin_matches_hand_computed_values() {
     // Same SIN(0 10 1000 0 0 0) parameters general-mna's own transient_source.rs test uses,
-    // cross-checked through the full block-graph + Sig2Voltage + circuit path here instead of
+    // cross-checked through the full block-graph + Sig2Phys + circuit path here instead of
     // calling TransientFunction::value_at directly.
     let trace = run_source(
         BlockKind::Waveform(TransientFunction::Sin {

@@ -1,4 +1,4 @@
 CMD kind=const value=5
-VDRV kind=sig2voltage in=CMD
+VDRV kind=sig2phys domain=voltage in=CMD
 V1 a 0 VDRV
 R1 a 0 1k

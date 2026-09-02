@@ -1,7 +1,7 @@
 //! Runs the actual built `general-simulator` binary against a netlist demonstrating the real
 //! motivating use case for this whole block family: a sticky fault latch, aggregated from two
 //! independent trip conditions through an `or` gate, gating a real ideal switch through the existing
-//! `sig2voltage` Signal-to-PS boundary -- end-to-end confirmation (real CLI, real netlist, real
+//! `sig2phys domain=voltage` Signal-to-PS boundary -- end-to-end confirmation (real CLI, real netlist, real
 //! electrical circuit) that logic blocks compose with the rest of the signal domain, not just
 //! with each other in isolation.
 
@@ -37,7 +37,7 @@ fn an_or_aggregated_fault_latch_stays_tripped_and_blocks_the_ideal_switch_even_a
          RESETCMD kind=const value=0\n\
          LATCH kind=srlatch set=TRIP reset=RESETCMD\n\
          ENABLE kind=not in=LATCH\n\
-         GATE_V kind=sig2voltage in=ENABLE\n\
+         GATE_V kind=sig2phys domain=voltage in=ENABLE\n\
          D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 \
          gate=block ctrl=GATE_V\n",
     );

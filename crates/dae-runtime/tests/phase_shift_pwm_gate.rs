@@ -20,8 +20,8 @@
 use std::collections::BTreeMap;
 
 use dae_runtime::{
-    simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, GateBinding, Signal,
-    TimeStep,
+    simulate_transient_with_blocks, BlockInstance, BlockKind, ConstValue, GateBinding,
+    PhysicalDomain, Signal, TimeStep,
 };
 use general_spice_core::Dialect;
 use pwl_devices::{IdealDiode, IdealSwitch};
@@ -66,7 +66,9 @@ fn phase_shift_pwm_gate_matches_hand_computed_switching_instants() {
         },
         BlockInstance {
             name: "MOD_MAIN_GATE".to_string(),
-            kind: BlockKind::Sig2Voltage,
+            kind: BlockKind::Sig2Phys {
+                domain: PhysicalDomain::Voltage,
+            },
             // The primary output is always bound to the block's own name ("MOD"), not
             // output_names[0] -- see evaluate_blocks' own `outputs.insert(block.name...)`.
             inputs: vec![Signal::Block("MOD".to_string())],
