@@ -61,5 +61,33 @@ def test_voltage_source_naming_a_domain_current_converter_is_rejected():
     assert "sig2phys(domain=current)" in stderr
 
 
+def test_converter_wired_into_the_netlist_as_a_node_is_rejected_in_transient():
+    """## Errors: a converter is consumed by name, never by a wire -- using its name as a node
+    on an element line is Sig2PhysUsedAsCircuitNode, not a silent V(...) = 0."""
+    code, stdout, stderr = _lib.run_transient(
+        HERE / "error_converter_wired_as_a_node.cir",
+        tfinal=1e-4,
+        dt=1e-5,
+        expect_success=False,
+    )
+    assert code != 0
+    assert "Sig2PhysUsedAsCircuitNode" in stderr
+    # The message has to say what to write instead -- the whole failure mode was that the wrong
+    # answer looked exactly like a legitimately-zero node.
+    assert "kind=sig2phys converter, not a device with terminals" in stderr
+    assert "V1 a 0 VDRV" in stderr
+    assert stdout.strip() == "", "nothing may be solved or printed before the rejection"
+
+
+def test_converter_wired_into_the_netlist_as_a_node_is_rejected_in_dc_too():
+    """## Errors: --mode dc never enters the block-graph engine, so it needs the same check --
+    it reported the same silent V(VDRV) = 0 before this."""
+    code, _, stderr = _lib.run_dc(
+        HERE / "error_converter_wired_as_a_node.cir", expect_success=False
+    )
+    assert code != 0
+    assert "Sig2PhysUsedAsCircuitNode" in stderr
+
+
 if __name__ == "__main__":
     _lib.run_all(sys.modules[__name__])

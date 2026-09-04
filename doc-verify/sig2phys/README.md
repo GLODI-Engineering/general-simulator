@@ -18,6 +18,12 @@ folders — `Sig2Voltage`/`Sig2Current` were merged into one `Sig2Phys` variant 
 - `error_voltage_source_names_current_domain.cir` — a `V` source's own literal value naming a
   `domain=current` converter — rejected (`DaeError::SourceNotSig2PhysicalConverter`); a `V`
   source needs `domain=voltage` specifically.
+- `error_converter_wired_as_a_node.cir` — the converter's name used as an ordinary circuit node
+  on an element line instead of being referenced by name — rejected
+  (`DaeError::Sig2PhysUsedAsCircuitNode`) in `--mode dc` and `--mode transient` alike. This one
+  used to *succeed*, silently reporting `V(VDRV) = 0`; the `## Errors` entry for it is still
+  owed in `general-mna`'s own `BlockKind::Sig2Phys` doc comment (that repo was not touched by
+  the fix, which lives entirely in `dae-runtime`/`general-simulator-cli`).
 
 ## Running
 

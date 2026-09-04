@@ -1,0 +1,10 @@
+* A kind=sig2phys converter has no terminals and stamps nothing into the MNA system -- it is
+* consumed by *name* (an independent source's own value field, or an ideal switch's
+* gate=/ctrl=), never by a wire. Here R1 wires node "VDRV", which merely happens to be the
+* converter's name, so nothing drives that node at all: `G*v = 0` is perfectly non-singular and
+* the run used to succeed silently, reporting V(VDRV) = 0 next to the block's own correct,
+* non-zero VDRV output column. It must be a hard build-time error instead
+* (DaeError::Sig2PhysUsedAsCircuitNode), in --mode dc as well as --mode transient.
+CMD kind=const value=5
+VDRV kind=sig2phys domain=voltage in=CMD
+R1 VDRV 0 1k

@@ -221,6 +221,148 @@ fn a_voltage_source_naming_a_plain_block_directly_is_rejected() {
 }
 
 #[test]
+fn wiring_a_converter_into_the_netlist_as_a_node_is_rejected_before_any_step_runs() {
+    // The silent-zero bug this guards: `CMD_V` is a Sig2Phys converter, which has no terminals
+    // and stamps nothing, so the net that happens to share its name was just an ordinary
+    // undriven node -- R1 to ground makes `G*v = 0` perfectly non-singular, so the solve
+    // *succeeded* and reported V(CMD_V) = 0 next to the block's own correct, non-zero output
+    // column. A converter is consumed by name (a V/I source's value field, or a switch's
+    // gate=/ctrl=), never by a wire, so this must be a hard build-time error instead.
+    let netlist = "R1 CMD_V 0 1000";
+    let ideal_switches: BTreeMap<String, IdealSwitch> = BTreeMap::new();
+    let diodes: BTreeMap<String, IdealDiode> = BTreeMap::new();
+
+    let blocks = vec![
+        BlockInstance {
+            name: "CMD".to_string(),
+            kind: BlockKind::Const(ConstValue::Scalar(5.0)),
+            inputs: vec![],
+        },
+        BlockInstance {
+            name: "CMD_V".to_string(),
+            kind: BlockKind::Sig2Phys {
+                domain: PhysicalDomain::Voltage,
+            },
+            inputs: vec![Signal::Block("CMD".to_string())],
+        },
+    ];
+
+    let err = simulate_transient_with_blocks(
+        netlist,
+        Dialect::Ngspice,
+        &diodes,
+        &ideal_switches,
+        &blocks,
+        &BTreeMap::new(),
+        0.1,
+        None,
+        1e-4,
+        TimeStep::Fixed(1e-5),
+    )
+    .unwrap_err();
+
+    match err {
+        DaeError::Sig2PhysUsedAsCircuitNode {
+            block,
+            element,
+            node,
+        } => {
+            assert_eq!(block, "CMD_V");
+            assert_eq!(element, "R1");
+            assert_eq!(node, "CMD_V");
+        }
+        other => panic!("expected Sig2PhysUsedAsCircuitNode, got {other:?}"),
+    }
+}
+
+#[test]
+fn wiring_a_converter_as_a_node_is_rejected_case_insensitively() {
+    // Node names are one namespace regardless of case in this grammar (`A` and `a` are the same
+    // node), so `R1 cmd_v 0` against a converter declared `CMD_V` is the identical mistake and
+    // must produce the identical error -- reported with the node token exactly as written.
+    let netlist = "V1 a 0 5\nR1 a cmd_v 1000\nR2 cmd_v 0 1000";
+    let ideal_switches: BTreeMap<String, IdealSwitch> = BTreeMap::new();
+    let diodes: BTreeMap<String, IdealDiode> = BTreeMap::new();
+
+    let blocks = vec![
+        BlockInstance {
+            name: "CMD".to_string(),
+            kind: BlockKind::Const(ConstValue::Scalar(5.0)),
+            inputs: vec![],
+        },
+        BlockInstance {
+            name: "CMD_V".to_string(),
+            kind: BlockKind::Sig2Phys {
+                domain: PhysicalDomain::Current,
+            },
+            inputs: vec![Signal::Block("CMD".to_string())],
+        },
+    ];
+
+    let err = simulate_transient_with_blocks(
+        netlist,
+        Dialect::Ngspice,
+        &diodes,
+        &ideal_switches,
+        &blocks,
+        &BTreeMap::new(),
+        0.1,
+        None,
+        1e-4,
+        TimeStep::Fixed(1e-5),
+    )
+    .unwrap_err();
+
+    match err {
+        DaeError::Sig2PhysUsedAsCircuitNode {
+            block,
+            element,
+            node,
+        } => {
+            assert_eq!(block, "CMD_V");
+            // R1 is the first element wiring it, not R2.
+            assert_eq!(element, "R1");
+            assert_eq!(node, "cmd_v");
+        }
+        other => panic!("expected Sig2PhysUsedAsCircuitNode, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_node_merely_named_like_a_non_converter_block_is_still_allowed() {
+    // The check is deliberately Sig2Phys-only: naming, say, a phys2sig probe after the node it
+    // measures is a plausible habit and must keep working. `PROBE` here is a plain Const, and
+    // node `PROBE` is a legitimate, driven node -- nothing to reject.
+    let netlist = "V1 PROBE 0 5\nR1 PROBE 0 1000";
+    let ideal_switches: BTreeMap<String, IdealSwitch> = BTreeMap::new();
+    let diodes: BTreeMap<String, IdealDiode> = BTreeMap::new();
+
+    let blocks = vec![BlockInstance {
+        name: "PROBE".to_string(),
+        kind: BlockKind::Const(ConstValue::Scalar(1.0)),
+        inputs: vec![],
+    }];
+
+    let trace = simulate_transient_with_blocks(
+        netlist,
+        Dialect::Ngspice,
+        &diodes,
+        &ideal_switches,
+        &blocks,
+        &BTreeMap::new(),
+        0.1,
+        None,
+        1e-4,
+        TimeStep::Fixed(1e-5),
+    )
+    .unwrap();
+
+    for (_, point, _) in &trace {
+        assert!((point.value("V(PROBE)").unwrap() - 5.0).abs() < 1e-9);
+    }
+}
+
+#[test]
 fn sig2phys_voltage_driven_source_produces_correct_rc_charging_dynamics_under_trapezoidal() {
     // R1=1k, C1=1uF -> tau=1ms. CMD steps 0V -> 10V at t=0 (a plain PWL, not a fixed literal),
     // driving V1 through CMD_V -- unlike the two resistive-only tests above, C1 gives this
