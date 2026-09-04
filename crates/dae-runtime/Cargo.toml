@@ -1,6 +1,6 @@
 [package]
 name = "dae-runtime"
-version = "0.1.0"
+version = "0.2.0"
 description = "Assembles a circuit's linear MNA system (via general-mna) with PWL device segments (via pwl-devices) into one LCP, solves it (via lcp-solver), and reports the resolved DC operating point -- no Newton-Raphson."
 edition.workspace = true
 license.workspace = true
@@ -20,16 +20,16 @@ default = []
 python = ["dep:pyblock-ffi"]
 
 [dependencies]
-lcp-solver = { path = "../lcp-solver", version = "0.1.0" }
-pwl-devices = { path = "../pwl-devices", version = "0.1.0" }
-continuous-blocks = { path = "../continuous-blocks", version = "0.1.0" }
-cscript-ffi = { path = "../cscript-ffi", version = "0.1.0" }
-pyblock-ffi = { path = "../pyblock-ffi", version = "0.1.0", optional = true }
+lcp-solver = { path = "../lcp-solver", version = "0.2.0" }
+pwl-devices = { path = "../pwl-devices", version = "0.2.0" }
+continuous-blocks = { path = "../continuous-blocks", version = "0.2.0" }
+cscript-ffi = { path = "../cscript-ffi", version = "0.2.0" }
+pyblock-ffi = { path = "../pyblock-ffi", version = "0.2.0", optional = true }
 # octave-ffi is a pure-subprocess crate (spawns the separately-installed octave-cli binary --
 # never links against any Octave library), so unlike pyblock-ffi it needs no special build-time
 # dependency and no optional feature gate -- see octave_ffi's own module doc comment for the
 # licensing rationale.
-octave-ffi = { path = "../octave-ffi", version = "0.1.0" }
+octave-ffi = { path = "../octave-ffi", version = "0.2.0" }
 # Cross-repo: general-spice-core lives in the separate spice-lsp repo, general-mna in its own.
 # `path` keeps local builds working against the sibling checkouts already required today;
 # `version` is what actually resolves once these are published, and is required for a `cargo
