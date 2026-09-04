@@ -31,10 +31,10 @@ mod step_control;
 mod topology;
 
 pub use block_graph::{
-    simulate_transient_with_blocks, simulate_transient_with_blocks_capped,
-    simulate_transient_with_blocks_streamed, BlockInstance, BlockKind, ConstValue, GainValue,
-    GateBinding, Phys2SigTarget, PhysicalDomain, PidClamp, SampleTimeSpec, Signal, SignalValue,
-    TransientWithBlocksStep, ADAPTIVE_STEP_HARD_CAP,
+    reject_sig2phys_wired_into_circuit, simulate_transient_with_blocks,
+    simulate_transient_with_blocks_capped, simulate_transient_with_blocks_streamed, BlockInstance,
+    BlockKind, ConstValue, GainValue, GateBinding, Phys2SigTarget, PhysicalDomain, PidClamp,
+    SampleTimeSpec, Signal, SignalValue, TransientWithBlocksStep, ADAPTIVE_STEP_HARD_CAP,
 };
 pub use closed_loop::{sawtooth_carrier, simulate_closed_loop};
 pub use step_control::{AdaptiveConfig, TimeStep};
@@ -235,6 +235,31 @@ pub enum DaeError {
         block: String,
         expected_kind: &'static str,
         found_kind: &'static str,
+    },
+    /// A [`block_graph::BlockKind::Sig2Phys`] converter's own name is also used as an ordinary
+    /// circuit node on an element line — i.e. the converter was *wired into* the physical
+    /// network instead of being *referenced by name* from the one place that can consume it.
+    ///
+    /// A `kind=sig2phys` block has no terminals and stamps nothing into the MNA system; it is
+    /// purely a named Signal-to-PS value another statement substitutes. So a net that happens to
+    /// share its name is just an ordinary, otherwise-undriven node: its KCL row is solved
+    /// consistently at `0` (a resistor to ground is a perfectly non-singular
+    /// `G·v = 0`) and the run silently reports `V(<name>) = 0` next to the block's own,
+    /// correct, non-zero output column. That silent wrong answer is exactly what this variant
+    /// exists to turn into a build-time error, before any step is solved.
+    ///
+    /// The two legitimate ways to consume a `Sig2Phys` are both by name, never by wire:
+    /// an independent `V`/`I` source's own value field (`V1 a 0 VDRV`, see
+    /// [`DaeError::SourceNotSig2PhysicalConverter`]) and an ideal switch's `gate=`/`ctrl=` field
+    /// (see [`DaeError::GateTargetNotSig2Voltage`]).
+    ///
+    /// `block` is the converter as declared, `element` the first element line that wires it, and
+    /// `node` that element's node token as written. Node names are matched case-insensitively,
+    /// matching how the netlist grammar itself treats them (`A` and `a` are one node).
+    Sig2PhysUsedAsCircuitNode {
+        block: String,
+        element: String,
+        node: String,
     },
     /// Two blocks in the same slice resolve to the same name — either two
     /// [`block_graph::BlockInstance`]s declared with the same `.name`, or one block's own

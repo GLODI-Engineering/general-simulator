@@ -1680,6 +1680,52 @@ fn evaluate_blocks(
     Ok(outputs)
 }
 
+/// Rejects a `kind=sig2phys` converter that was *wired into* the physical network — i.e. a block
+/// whose own name is also used as a node on some element line — before any system is built or any
+/// step is solved. See [`DaeError::Sig2PhysUsedAsCircuitNode`] for the full rationale; the short
+/// version is that a `Sig2Phys` block has no terminals and stamps nothing, so such a net is an
+/// ordinary undriven node that silently solves to `0` instead of failing.
+///
+/// Call this with the *flattened* statements ([`general_mna::parse_and_flatten`]), so a converter
+/// wired inside a `.subckt` body is caught under its final, flattened node name too.
+///
+/// Node names are compared case-insensitively (ASCII), because the netlist grammar itself treats
+/// `A` and `a` as one node — writing `R1 vdrv 0 1k` against a converter declared `VDRV` is the
+/// same mistake, and must produce the same error.
+pub fn reject_sig2phys_wired_into_circuit(
+    statements: &[general_spice_core::ast::Statement],
+    blocks: &[BlockInstance],
+) -> Result<(), DaeError> {
+    // Only `Sig2Phys` blocks are checked, not every block kind: it is the only kind that claims
+    // to drive the physical domain at all, so it is the only one anybody is tempted to draw a
+    // wire from. (Wiring any *other* block's name as a node is the same silent-zero shape, but
+    // rejecting every block/node name collision outright would also reject the harmless, and
+    // plausible, habit of naming a `kind=phys2sig` probe after the node it measures.)
+    let converters: BTreeMap<String, &str> = blocks
+        .iter()
+        .filter(|b| matches!(b.kind, BlockKind::Sig2Phys { .. }))
+        .map(|b| (b.name.to_ascii_lowercase(), b.name.as_str()))
+        .collect();
+    if converters.is_empty() {
+        return Ok(());
+    }
+    for statement in statements {
+        let general_spice_core::ast::Statement::ElementInstance(element) = statement else {
+            continue;
+        };
+        for node in &element.nodes {
+            if let Some(declared) = converters.get(&node.to_ascii_lowercase()) {
+                return Err(DaeError::Sig2PhysUsedAsCircuitNode {
+                    block: (*declared).to_string(),
+                    element: element.name.clone(),
+                    node: node.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 fn resolve_gates(
     gates: &BTreeMap<String, GateBinding>,
     outputs: &BTreeMap<String, SignalValue>,
@@ -1808,6 +1854,12 @@ pub fn simulate_transient_with_blocks_streamed(
     // count as "known" here, or a valid netlist referencing one of those extra names gets
     // rejected before it ever runs.
     let block_names = block_index_by_name(blocks)?;
+
+    // Structural check first: a `Sig2Phys` converter is a reference *target*, never a device with
+    // terminals, so wiring one into the netlist as a node is a model error that must be reported
+    // before anything else is examined -- otherwise it solves silently to `V(<name>) = 0`.
+    reject_sig2phys_wired_into_circuit(&statements, blocks)?;
+
     for (switch_name, binding) in gates {
         for needed in binding.source_blocks().into_iter().flatten() {
             let Some(&idx) = block_names.get(needed) else {

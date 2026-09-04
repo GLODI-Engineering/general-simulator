@@ -122,6 +122,13 @@
 //!   a real, previously-open gap: without it, a block could only ever *observe* the circuit
 //!   (via `kind=phys2sig`), never load or drive it — see `elspice-pwl-buck-dc-motor-cascade` in the
 //!   sibling `internal-archive` repo for the concrete limitation this fixes.
+//!   Those two are the *only* ways to consume a converter, and both are by **name**: a
+//!   `kind=sig2phys` block has no terminals and stamps nothing, so it can never be *wired* into
+//!   the netlist. Using its name as a node on an element line (`R1 VDRV 0 1k`) used to build and
+//!   solve without complaint and silently report `V(VDRV) = 0` — an ordinary undriven node — next
+//!   to the block's own correct, non-zero output column; that is now rejected up front, in both
+//!   `--mode dc` and `--mode transient`, with `dae_runtime::DaeError::Sig2PhysUsedAsCircuitNode`
+//!   naming the converter, the offending element, and the node token as written.
 //!
 //! `kind=pid kp=<f64> ki=<f64> kd=<f64> n=<f64> in=<signal>` plus either `clamp_lo=<f64>
 //! clamp_hi=<f64>` (a fixed anti-windup bound, the common case) or `clamp_lo_in=<signal>
@@ -502,6 +509,36 @@ fn run() -> Result<(), String> {
         ..
     } = general_mna::build_system(&devices_for_build, dialect)
         .map_err(|e| format!("parsing device/block declarations: {e}"))?;
+
+    // A `kind=sig2phys` converter has no terminals: it is consumed *by name* (a V/I source's own
+    // value field, or an ideal switch's `gate=`/`ctrl=`), never by a wire. Catching a converter
+    // wired into the netlist as an ordinary node here -- rather than only inside
+    // `simulate_transient_with_blocks_streamed` -- is what makes `--mode dc` fail on it too: that
+    // path never enters the block-graph engine at all (`solve_dc` takes no blocks), so it would
+    // otherwise still report the silent `V(<name>) = 0` this check exists to prevent.
+    let statements = general_mna::parse_and_flatten(&netlist, dialect)
+        .map_err(|e| format!("parsing netlist: {e}"))?;
+    if let Err(e) = dae_runtime::reject_sig2phys_wired_into_circuit(&statements, &blocks) {
+        // Spelled out rather than left as the bare `{e:?}` dump every other DaeError gets here:
+        // the whole point of this check is that the *silent* failure was indistinguishable from a
+        // legitimately-zero node, so the error has to say what to write instead. The `{e:?}`
+        // prefix is kept so the variant name is still greppable in stderr, like every other one.
+        return Err(match &e {
+            DaeError::Sig2PhysUsedAsCircuitNode {
+                block,
+                element,
+                node,
+            } => format!(
+                "{e:?}: element '{element}' wires node '{node}', but '{block}' is a \
+                 kind=sig2phys converter, not a device with terminals -- it has no pins and \
+                 stamps nothing into the circuit, so that node would be undriven and silently \
+                 solve to V({node}) = 0. A converter is consumed by name, never by a wire: name \
+                 it in an independent source's own value field (e.g. `V1 a 0 {block}`) or in an \
+                 ideal switch's gate=/ctrl= field."
+            ),
+            other => format!("{other:?}"),
+        });
+    }
 
     let (waveform, plot_name) = if mode == "dc" {
         let point = if ideal_switches.is_empty() {
