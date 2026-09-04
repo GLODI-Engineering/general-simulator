@@ -182,6 +182,99 @@ pub enum MeasureKind {
     },
 }
 
+/// Every signal name (a CSV/raw column, keyed by `out=`/`*_ref=`/`trig_var=`/`targ_var=`/etc.)
+/// that `specs` will need at evaluation time — used by the CLI's streaming writer to know which
+/// columns to keep a full `(t, value)` history for while every other column streams straight to
+/// disk without ever being held in memory (see `evaluate_one`'s own use of `samples_of`, which
+/// only ever looks up columns by name — a "shadow" waveform containing just these names plus
+/// `"t"` works identically to the real, full one). Matches every `MeasureKind`/`EventCfg`/
+/// `ThresholdCfg` variant explicitly (no wildcard arm) so adding a new variant with its own
+/// signal-name field is a compile error here until this function accounts for it too.
+pub fn referenced_signals(specs: &[MeasureSpec]) -> std::collections::BTreeSet<String> {
+    fn threshold(t: &ThresholdCfg, out: &mut std::collections::BTreeSet<String>) {
+        if let ThresholdCfg::Ref(name) = t {
+            out.insert(name.clone());
+        }
+    }
+    fn event_cfg(e: &EventCfg, out: &mut std::collections::BTreeSet<String>) {
+        match e {
+            EventCfg::At(_) => {}
+            EventCfg::Crossing {
+                var, threshold: th, ..
+            } => {
+                out.insert(var.clone());
+                threshold(th, out);
+            }
+            EventCfg::FracMax { var, .. } => {
+                out.insert(var.clone());
+            }
+        }
+    }
+
+    let mut out = std::collections::BTreeSet::new();
+    for spec in specs {
+        match &spec.kind {
+            MeasureKind::Max { out: o, .. }
+            | MeasureKind::Min { out: o, .. }
+            | MeasureKind::MaxAt { out: o, .. }
+            | MeasureKind::MinAt { out: o, .. }
+            | MeasureKind::Pp { out: o, .. }
+            | MeasureKind::Avg { out: o, .. }
+            | MeasureKind::Rms { out: o, .. }
+            | MeasureKind::Integ { out: o, .. }
+            | MeasureKind::DerivAt { out: o, .. }
+            | MeasureKind::FindAt { out: o, .. }
+            | MeasureKind::Freq { out: o, .. }
+            | MeasureKind::OnTime { out: o, .. }
+            | MeasureKind::OffTime { out: o, .. }
+            | MeasureKind::Four { out: o, .. } => {
+                out.insert(o.clone());
+            }
+            MeasureKind::DerivWhen {
+                out: o,
+                when_var,
+                threshold: th,
+                ..
+            }
+            | MeasureKind::FindWhen {
+                out: o,
+                when_var,
+                threshold: th,
+                ..
+            } => {
+                out.insert(o.clone());
+                out.insert(when_var.clone());
+                threshold(th, &mut out);
+            }
+            MeasureKind::When {
+                out: o,
+                threshold: th,
+                ..
+            } => {
+                out.insert(o.clone());
+                threshold(th, &mut out);
+            }
+            MeasureKind::TrigTarg { trig, targ } => {
+                event_cfg(trig, &mut out);
+                event_cfg(targ, &mut out);
+            }
+            MeasureKind::Err1 {
+                out: o, reference, ..
+            }
+            | MeasureKind::Err2 {
+                out: o, reference, ..
+            }
+            | MeasureKind::Error {
+                out: o, reference, ..
+            } => {
+                out.insert(o.clone());
+                out.insert(reference.clone());
+            }
+        }
+    }
+    out
+}
+
 /// Scans `source` for `kind=measure` `BlockInstance` lines, returning `(source with those exact
 /// lines blanked out, the parsed measurement specs)`. Blanking (not deleting) preserves every
 /// other statement's own line span, so re-parsing the returned text for `general_mna::

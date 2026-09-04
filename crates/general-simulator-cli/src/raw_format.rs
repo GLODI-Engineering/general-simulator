@@ -71,18 +71,50 @@ fn variable_type(name: &str) -> &'static str {
 /// time/sweep column (`"t"` in this crate's own CSV header) and is renamed to SPICE's own
 /// conventional `time` variable name in the header — see this module's doc comment for "same
 /// data, different serialization" and the exact byte layout.
+///
+/// A thin wrapper over [`write_header`]/[`write_row`] — kept for callers (and this module's own
+/// round-trip test) that already have the whole waveform in memory. A streaming writer that
+/// doesn't need `waveform.rows.len()` known upfront (the SPICE format's `No. Points:` header
+/// field means it otherwise would be) should call those two functions directly instead — see
+/// `general-simulator-cli::main`'s own streaming CSV/raw writer for the pattern: write each row's
+/// binary data to a temporary file as it's produced (via `write_row`, `No. Points` not needed
+/// yet), then once the real point count is known, write the real output file's header (`write_header`)
+/// followed by a plain byte-for-byte copy of the temp file's contents.
 pub fn write_raw<W: Write>(w: &mut W, waveform: &Waveform) -> io::Result<()> {
-    let n_vars = waveform.names.len();
-    let n_points = waveform.rows.len();
+    write_header(
+        w,
+        waveform.names,
+        waveform.rows.len(),
+        waveform.plot_name,
+        waveform.title,
+    )?;
+    for row in waveform.rows {
+        write_row(w, row, waveform.names.len())?;
+    }
+    Ok(())
+}
 
-    writeln!(w, "Title: {}", waveform.title)?;
+/// The text header + `Binary:` marker only — everything in a rawfile before the first row's
+/// binary bytes. `n_points` must be the REAL, final point count (the format's own `No. Points:`
+/// field is read upfront by every reader this was validated against, so writing it before all
+/// points are known — e.g. a placeholder later patched — isn't an option; a streaming caller
+/// must know or compute this before calling, which is exactly why `write_raw` itself can't
+/// stream: it only has `waveform.rows.len()` once the whole `Vec` already exists).
+pub fn write_header<W: Write>(
+    w: &mut W,
+    names: &[String],
+    n_points: usize,
+    plot_name: &str,
+    title: &str,
+) -> io::Result<()> {
+    writeln!(w, "Title: {title}")?;
     writeln!(w, "Date: {}", now_unix_seconds())?;
-    writeln!(w, "Plotname: {}", waveform.plot_name)?;
+    writeln!(w, "Plotname: {plot_name}")?;
     writeln!(w, "Flags: real")?;
-    writeln!(w, "No. Variables: {n_vars}")?;
+    writeln!(w, "No. Variables: {}", names.len())?;
     writeln!(w, "No. Points: {n_points}")?;
     writeln!(w, "Variables:")?;
-    for (i, name) in waveform.names.iter().enumerate() {
+    for (i, name) in names.iter().enumerate() {
         if i == 0 {
             writeln!(w, "\t{i}\ttime\ttime")?;
         } else {
@@ -90,16 +122,20 @@ pub fn write_raw<W: Write>(w: &mut W, waveform: &Waveform) -> io::Result<()> {
         }
     }
     writeln!(w, "Binary:")?;
+    Ok(())
+}
 
-    for row in waveform.rows {
-        debug_assert_eq!(
-            row.len(),
-            n_vars,
-            "row width must match the declared variable count"
-        );
-        for value in row {
-            w.write_all(&value.to_le_bytes())?;
-        }
+/// One row's worth of binary `f64`s (point-major, variable-minor, matching `write_raw`'s own
+/// layout) — `n_vars` is asserted against `row.len()` the same way `write_raw`'s own loop did,
+/// just per-call instead of once over the whole `rows` slice.
+pub fn write_row<W: Write>(w: &mut W, row: &[f64], n_vars: usize) -> io::Result<()> {
+    debug_assert_eq!(
+        row.len(),
+        n_vars,
+        "row width must match the declared variable count"
+    );
+    for value in row {
+        w.write_all(&value.to_le_bytes())?;
     }
     Ok(())
 }

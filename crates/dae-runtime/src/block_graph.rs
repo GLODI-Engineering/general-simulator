@@ -1735,6 +1735,14 @@ pub fn simulate_transient_with_blocks(
 /// project's own ~20 existing call sites (mostly tests, positional-argument calls) don't all need
 /// updating for a cap most of them will never want to change — `general-simulator-cli`'s own
 /// `--max-steps` flag is the intended caller.
+///
+/// Collects the whole run into a `Vec` before returning, exactly like `simulate_transient_with_blocks`
+/// — a thin wrapper over [`simulate_transient_with_blocks_streamed`], which does the actual work
+/// and holds nothing in memory beyond what its caller's own callback chooses to keep. Prefer the
+/// streamed form directly for a run whose row count isn't known to be small (this repo's own
+/// experience: a single real run drove a 14GB machine to ~11GB RSS / 24GB swap before being
+/// killed, entirely because of this function's own full-`Vec` buffering — see
+/// `general-simulator-cli`'s own streaming CSV/raw writer for the fix in practice).
 #[allow(clippy::too_many_arguments)]
 pub fn simulate_transient_with_blocks_capped(
     source: &str,
@@ -1749,6 +1757,49 @@ pub fn simulate_transient_with_blocks_capped(
     step: TimeStep,
     max_adaptive_steps: usize,
 ) -> Result<Vec<TransientWithBlocksStep>, DaeError> {
+    let mut trace = Vec::new();
+    simulate_transient_with_blocks_streamed(
+        source,
+        dialect,
+        diodes,
+        ideal_switches,
+        blocks,
+        gates,
+        shared_r_on,
+        x_initial,
+        t_final,
+        step,
+        max_adaptive_steps,
+        |t, point, outputs| {
+            trace.push((t, point, outputs));
+            Ok(())
+        },
+    )?;
+    Ok(trace)
+}
+
+/// The actual transient engine — every other `simulate_transient_with_blocks*` function is a
+/// thin wrapper over this one. Calls `on_step(t, point, outputs)` once per *accepted* step, in
+/// order, and holds nothing beyond one step's own data itself: a caller that only needs summary
+/// statistics, or that writes each row straight to a file/stream as it arrives, never pays for a
+/// full in-memory trace the way `simulate_transient_with_blocks`/`_capped` do by design (they
+/// exist for exactly the callers — mostly this project's own tests — that want the whole
+/// `Vec` back). `on_step` returning `Err` aborts the run immediately with that error.
+#[allow(clippy::too_many_arguments)]
+pub fn simulate_transient_with_blocks_streamed(
+    source: &str,
+    dialect: Dialect,
+    diodes: &BTreeMap<String, IdealDiode>,
+    ideal_switches: &BTreeMap<String, IdealSwitch>,
+    blocks: &[BlockInstance],
+    gates: &BTreeMap<String, GateBinding>,
+    shared_r_on: f64,
+    x_initial: Option<&[f64]>,
+    t_final: f64,
+    step: TimeStep,
+    max_adaptive_steps: usize,
+    mut on_step: impl FnMut(f64, OperatingPoint, BTreeMap<String, SignalValue>) -> Result<(), DaeError>,
+) -> Result<(), DaeError> {
     let statements = general_mna::parse_and_flatten(source, dialect).map_err(DaeError::Parse)?;
 
     // A CScript, CoordinateTransform, or Pmsm block's own `.name` is only its *primary* output
@@ -2284,13 +2335,12 @@ pub fn simulate_transient_with_blocks_capped(
     // output.
     let mut prev_outputs: BTreeMap<String, SignalValue> = BTreeMap::new();
 
-    let mut trace = Vec::new();
+    let mut accepted_steps: usize = 0;
     let mut t = 0.0;
 
     match step {
         TimeStep::Fixed(dt) => {
             let steps = (t_final / dt).round() as usize;
-            trace.reserve(steps);
             for step_index in 0..steps {
                 t += dt;
 
@@ -2354,7 +2404,7 @@ pub fn simulate_transient_with_blocks_capped(
                 x_prev_prev = Some(std::mem::replace(&mut x_prev, point.x.clone()));
                 point_prev = point.clone();
                 prev_outputs = outputs.clone();
-                trace.push((t, point, outputs));
+                on_step(t, point, outputs)?;
             }
         }
         TimeStep::Adaptive(config) => {
@@ -2452,11 +2502,12 @@ pub fn simulate_transient_with_blocks_capped(
                         .collect();
                     x_prev_prev = Some(std::mem::replace(&mut x_prev, attempt.point.x.clone()));
                     point_prev = attempt.point.clone();
-                    trace.push((t, attempt.point, outputs));
+                    on_step(t, attempt.point, outputs)?;
+                    accepted_steps += 1;
                     step_index += 1;
-                    if trace.len() > max_adaptive_steps {
+                    if accepted_steps > max_adaptive_steps {
                         return Err(DaeError::AdaptiveStepStalled {
-                            steps_taken: trace.len(),
+                            steps_taken: accepted_steps,
                             t_reached: t,
                             t_final,
                         });
@@ -2466,7 +2517,7 @@ pub fn simulate_transient_with_blocks_capped(
             }
         }
     }
-    Ok(trace)
+    Ok(())
 }
 
 #[cfg(test)]

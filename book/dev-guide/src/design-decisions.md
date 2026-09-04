@@ -152,6 +152,49 @@ zero-order-hold `sample_time`/`PhaseShiftPwm`/`Pwm` shapes already covered — e
 is ever allowed under `TimeStep::Adaptive`, its event-clamp arm is already in place and should
 just start being reachable.
 
+## Streaming transient output instead of buffering the whole run, added 2026-09-04
+
+`simulate_transient_with_blocks`/`_capped` (and the CLI's own predecessor to `run_transient_streamed`)
+accumulated one `(t, OperatingPoint, outputs)` entry per accepted step into a `Vec` covering the
+*entire* run, only printed/written after the whole simulation finished. This was fine for the
+runs this project had actually tried until a real incident: a six-leg, frequently-soft-switched
+circuit under `TimeStep::Adaptive` (see `internal-archive`'s
+`elspice-pwl-tida-pi-pr-modulator-comparison` experiment) drove the development machine to
+~11GB RSS / 24GB swap before being killed — entirely because of this buffering, independent of
+whether the run itself was "stalled" (a real, separate bug fixed the same day, see the adaptive-
+step-events entry above) or just genuinely needed several million steps (which it did, once that
+bug was fixed and the adaptive tolerances were rescaled to the circuit's actual magnitude).
+
+Fix: extracted the actual step loop into `simulate_transient_with_blocks_streamed`, which calls
+an `on_step(t, point, outputs)` callback once per accepted step and holds nothing else —
+`simulate_transient_with_blocks`/`_capped` are now thin wrappers that push into a `Vec` inside
+their own callback, so their existing ~20 callers (mostly tests) see no behavior change at all.
+The CLI's own transient path (`run_transient_streamed`) uses the streamed form directly: CSV rows
+go straight to stdout as each step resolves, and raw-format rows go straight to a temp file (a
+real SPICE rawfile's `No. Points:` header field has to be known before any row is written, so a
+truly single-pass write isn't possible for that format — `raw_format::write_raw` was split into
+`write_header`/`write_row` so the CLI can write rows to a temp file first, then once the real
+point count is known, write the final file's header immediately followed by a plain byte copy of
+the temp file, which is then deleted; proven byte-correct against real PySpice/spicelib readers,
+see `tests/raw-output-python/`).
+
+`kind=measure` still needs *some* history — a measurement needs the whole time series of
+whichever signal(s) it names — but `measure::referenced_signals` walks every `MeasureKind`/
+`EventCfg`/`ThresholdCfg` variant explicitly (no wildcard arm, so a new variant with its own
+signal-name field won't silently go unaccounted-for) to find exactly which column names are
+actually needed, and only those get a small `(Vec<f64>, Vec<f64>)` kept alongside the streaming
+writer — a run measuring 2 signals out of 70 columns keeps roughly 2/70th of the memory a
+full-`Vec` approach would, independent of the netlist's total column count. `evaluate_one`'s own
+`samples_of` only ever looks up columns by name, so this "shadow" waveform (just `t` plus the
+referenced names) behaves identically to the real, full one — a name that never matches any real
+column is simply absent, giving the same "unknown signal" error a typo'd `out=`/`reference=`
+already produced before this change, not a new failure mode.
+
+**Revisit if:** the no-switch path (`simulate_transient`, `lib.rs`) is ever found to need the same
+treatment — it wasn't touched here, matching the earlier adaptive-step-events fix's own scoping
+(every real netlist in this project that could plausibly grow this large has ideal switches/
+blocks and goes through `simulate_transient_with_blocks*`, not the no-switch path).
+
 ## Source material to adapt from
 - `docs/journal/2026-08.md`, read end to end — the documentation-planning session's own Q&A
   entry, and everything before it, is largely a sequence of these decisions already reasoned

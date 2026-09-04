@@ -296,13 +296,13 @@ mod raw_format;
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::io::{BufWriter, Write};
+use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use dae_runtime::{
-    simulate_transient, simulate_transient_with_blocks_capped, solve_dc, AdaptiveConfig,
-    BlockInstance, BlockKind, GateBinding, TimeStep, ADAPTIVE_STEP_HARD_CAP,
+    simulate_transient, simulate_transient_with_blocks_streamed, solve_dc, AdaptiveConfig,
+    BlockInstance, BlockKind, DaeError, GateBinding, TimeStep, ADAPTIVE_STEP_HARD_CAP,
 };
 use general_spice_core::Dialect;
 use pwl_devices::{IdealDiode, IdealSwitch};
@@ -534,12 +534,12 @@ fn run() -> Result<(), String> {
         // Either an ideal switch or a block alone is enough to need the block-graph-aware path below:
         // a block-only netlist (no ideal switch at all, e.g. a pure controller/signal-processing
         // study with nothing to gate) must still run its block graph, and an ideal switch-only netlist
-        // (no blocks) already did. `run_transient_with_ideal_switches`/`simulate_transient_with_blocks`
+        // (no blocks) already did. `run_transient_streamed`/`simulate_transient_with_blocks_streamed`
         // itself tolerates empty `ideal_switches`/`gates` maps and an empty `blocks` slice equally well
         // (see its own doc comment) -- only the truly block-free, ideal switch-free case still uses
         // the plain `simulate_transient` path, since that's the one case with nothing for a
         // block-graph step to resolve at all.
-        let waveform = if ideal_switches.is_empty() && blocks.is_empty() {
+        if ideal_switches.is_empty() && blocks.is_empty() {
             let trace = simulate_transient(&netlist, dialect, &diodes, None, t_final, step)
                 .map_err(|e| format!("{e:?}"))?;
             let headers = match trace.first() {
@@ -558,9 +558,14 @@ fn run() -> Result<(), String> {
                     row
                 })
                 .collect();
-            Waveform { headers, rows }
+            (Waveform { headers, rows }, "Transient Analysis")
         } else {
-            run_transient_with_ideal_switches(
+            // Streams CSV/raw output directly and writes its own measurement log, rather than
+            // building the shared (waveform, plot_name) tuple this match falls through to below
+            // -- see run_transient_streamed's own doc comment for why. Returns from `run`
+            // immediately, skipping the shared print_csv/write_raw_file/write_measurements_log
+            // block entirely, since it already did the equivalent work incrementally.
+            return run_transient_streamed(
                 &netlist,
                 dialect,
                 &diodes,
@@ -571,9 +576,12 @@ fn run() -> Result<(), String> {
                 t_final,
                 step,
                 max_steps.unwrap_or(ADAPTIVE_STEP_HARD_CAP),
-            )?
-        };
-        (waveform, "Transient Analysis")
+                output_format,
+                raw_out_path.as_deref(),
+                netlist_path,
+                &measurements,
+            );
+        }
     } else {
         return Err(format!(
             "unknown --mode '{mode}' (expected 'dc' or 'transient')"
@@ -647,11 +655,36 @@ fn write_raw_file(
 /// that used to need a block. `--mode transient` with at least one ideal switch *or* at least one
 /// block declared (an ideal switch-free block-graph study is just as legitimate as a block-free
 /// ideal switch circuit — see this file's own `main` for the exact condition): resolves every gate
-/// (always block-driven) via [`dae_runtime::simulate_transient_with_blocks`], which tolerates
-/// an empty `ideal_switches`/`gates` map or an empty `blocks` slice equally well — see this file's
-/// module doc comment for why there's no separate mode for the block-driven case.
+/// (always block-driven) via [`dae_runtime::simulate_transient_with_blocks_streamed`], which
+/// tolerates an empty `ideal_switches`/`gates` map or an empty `blocks` slice equally well — see
+/// this file's module doc comment for why there's no separate mode for the block-driven case.
+///
+/// Genuinely streams: CSV rows go straight to stdout and raw-format rows go straight to a temp
+/// file, both as each step is produced, never accumulated as a `Vec` covering the whole run (the
+/// way `run_transient_with_ideal_switches` — this function's predecessor, removed — used to).
+/// This is the fix for a real incident: a single run of a large, numerically stiff circuit drove
+/// this project's own development machine to ~11GB RSS / 24GB swap before being killed, entirely
+/// because of that old function's full-`Vec` buffering (see `internal-archive`'s
+/// `elspice-pwl-tida-pi-pr-modulator-comparison` experiment for the incident write-up).
+///
+/// The one thing that still needs *some* history kept in memory is `kind=measure` — a
+/// measurement needs the whole time series of whichever signal(s) it names, not just the latest
+/// row — but only for the specific columns some measurement spec actually references
+/// ([`measure::referenced_signals`]), never the full circuit's worth of columns; a run with
+/// measurements on 2 signals out of 70 columns keeps roughly 2/70th of the memory a full-`Vec`
+/// approach would, regardless of the netlist's real column count.
+///
+/// A binary rawfile's own `No. Points:` header field is read upfront by every reader this format
+/// was validated against, so it can't be written until the real point count is known — hence the
+/// temp-file-then-copy dance below: row data streams straight to `<out>.raw.tmp`, and once the
+/// real count is known (the run finished), the actual header (with that count) is written to the
+/// real output path immediately followed by a plain byte-for-byte copy of the temp file, which is
+/// then deleted. Memory cost is the same either way (streamed regardless), but disk cost is
+/// briefly ~2x the final `.raw` file's size for the temp copy — an acceptable trade against never
+/// holding row data in memory, and no worse than what a network/pipe-based writer with the same
+/// "point count must come first" constraint would also have to do.
 #[allow(clippy::too_many_arguments)]
-fn run_transient_with_ideal_switches(
+fn run_transient_streamed(
     netlist: &str,
     dialect: Dialect,
     diodes: &BTreeMap<String, IdealDiode>,
@@ -662,26 +695,17 @@ fn run_transient_with_ideal_switches(
     t_final: f64,
     step: TimeStep,
     max_steps: usize,
-) -> Result<Waveform, String> {
-    let trace = simulate_transient_with_blocks_capped(
-        netlist,
-        dialect,
-        diodes,
-        ideal_switches,
-        blocks,
-        gates,
-        shared_r_on,
-        None,
-        t_final,
-        step,
-        max_steps,
-    )
-    .map_err(|e| format!("{e:?}"))?;
-
+    output_format: OutputFormat,
+    raw_out_path: Option<&Path>,
+    netlist_path: &str,
+    measurements: &[measure::MeasureSpec],
+) -> Result<(), String> {
     // A cscript, coordinate-transform, pmsm, pwm, or pspwm block registers extra named outputs
     // beyond its own block name (see block_graph::evaluate_blocks) -- list those too, so they
     // show up as their own CSV columns instead of only being reachable via Signal::Block from
-    // another declared block.
+    // another declared block. Doesn't need a single row resolved -- purely a function of `blocks`
+    // itself -- so, unlike the header's own vector-arity expansion below, this part is known
+    // upfront.
     let mut block_names: Vec<String> = blocks.iter().map(|b| b.name.clone()).collect();
     for block in blocks {
         match &block.kind {
@@ -699,35 +723,81 @@ fn run_transient_with_ideal_switches(
             _ => {}
         }
     }
-    // A name whose value is a SignalValue::Vector expands into one CSV column per element
-    // (NAME[0], NAME[1], ...) rather than one column holding the whole vector -- arity is fixed
-    // for the whole run once a block declares it (see book/dev-guide/src/vector-signals.md), so
-    // deriving each name's own column count from the *first* step's resolved shape is exactly
-    // as valid as a separate static analysis would be, and reuses this function's own existing
-    // "build the header from trace.first()" convention rather than a new mechanism.
-    let Some((_, first, first_outputs)) = trace.first() else {
-        return Ok(Waveform {
-            headers: vec!["t".to_string()],
-            rows: Vec::new(),
-        });
-    };
-    let mut headers = vec!["t".to_string()];
-    headers.extend(first.unknowns.iter().cloned());
-    if !block_names.is_empty() {
-        headers.extend(block_names.iter().flat_map(|name| {
-            match first_outputs.get(name) {
-                Some(dae_runtime::SignalValue::Vector(v)) => (0..v.len())
-                    .map(|i| format!("{name}[{i}]"))
-                    .collect::<Vec<_>>(),
-                _ => vec![name.clone()],
-            }
-        }));
-    }
 
-    let rows = trace
+    let referenced = measure::referenced_signals(measurements);
+    // (name -> (ts, vs)), one entry per column any measurement spec actually names -- the only
+    // per-row history this function keeps beyond the current row, and only for these columns.
+    let mut measured: BTreeMap<String, (Vec<f64>, Vec<f64>)> = referenced
         .iter()
-        .map(|(t, point, outputs)| {
-            let mut row = vec![*t];
+        .map(|n| (n.clone(), (Vec::new(), Vec::new())))
+        .collect();
+    // Position of each *found* referenced name within the header built from the first row -- a
+    // name that never matches any real column is simply absent here (and from `measured`'s
+    // captured data), which is exactly the "unknown signal" case `evaluate_one`/`samples_of`
+    // already report as an error today; this function doesn't special-case it.
+    let mut referenced_index: Vec<(String, usize)> = Vec::new();
+    let mut headers: Option<Vec<String>> = None;
+
+    let stdout = io::stdout();
+    let mut csv_writer =
+        (output_format == OutputFormat::Csv).then(|| BufWriter::new(stdout.lock()));
+
+    let raw_tmp_path = raw_out_path.map(|p| p.with_extension("raw.tmp"));
+    let mut raw_tmp_writer = match &raw_tmp_path {
+        Some(p) => Some(BufWriter::new(fs::File::create(p).map_err(|e| {
+            format!("creating temporary raw output {}: {e}", p.display())
+        })?)),
+        None => None,
+    };
+    let mut n_points: usize = 0;
+
+    simulate_transient_with_blocks_streamed(
+        netlist,
+        dialect,
+        diodes,
+        ideal_switches,
+        blocks,
+        gates,
+        shared_r_on,
+        None,
+        t_final,
+        step,
+        max_steps,
+        |t, point, outputs| {
+            if headers.is_none() {
+                // A name whose value is a SignalValue::Vector expands into one CSV column per
+                // element (NAME[0], NAME[1], ...) rather than one column holding the whole vector
+                // -- arity is fixed for the whole run once a block declares it (see
+                // book/dev-guide/src/vector-signals.md), so deriving each name's own column count
+                // from the *first* row's resolved shape is exactly as valid as a separate static
+                // analysis would be.
+                let mut h = vec!["t".to_string()];
+                h.extend(point.unknowns.iter().cloned());
+                if !block_names.is_empty() {
+                    h.extend(block_names.iter().flat_map(|name| {
+                        match outputs.get(name) {
+                            Some(dae_runtime::SignalValue::Vector(v)) => (0..v.len())
+                                .map(|i| format!("{name}[{i}]"))
+                                .collect::<Vec<_>>(),
+                            _ => vec![name.clone()],
+                        }
+                    }));
+                }
+                referenced_index = referenced
+                    .iter()
+                    .filter_map(|name| {
+                        h.iter()
+                            .position(|c| c == name)
+                            .map(|idx| (name.clone(), idx))
+                    })
+                    .collect();
+                if let Some(w) = &mut csv_writer {
+                    writeln!(w, "{}", h.join(",")).map_err(|e| DaeError::Io(e.to_string()))?;
+                }
+                headers = Some(h);
+            }
+
+            let mut row = vec![t];
             row.extend(point.x.iter().copied());
             if !block_names.is_empty() {
                 row.extend(block_names.iter().flat_map(|name| match outputs.get(name) {
@@ -736,11 +806,92 @@ fn run_transient_with_ideal_switches(
                     None => vec![f64::NAN],
                 }));
             }
-            row
-        })
-        .collect();
 
-    Ok(Waveform { headers, rows })
+            for (name, idx) in &referenced_index {
+                if let Some((ts, vs)) = measured.get_mut(name) {
+                    ts.push(t);
+                    vs.push(row[*idx]);
+                }
+            }
+
+            if let Some(w) = &mut csv_writer {
+                let values: Vec<String> = row.iter().map(|v| v.to_string()).collect();
+                writeln!(w, "{}", values.join(",")).map_err(|e| DaeError::Io(e.to_string()))?;
+            }
+            if let Some(w) = &mut raw_tmp_writer {
+                raw_format::write_row(w, &row, row.len())
+                    .map_err(|e| DaeError::Io(e.to_string()))?;
+            }
+            n_points += 1;
+            Ok(())
+        },
+    )
+    .map_err(|e| format!("{e:?}"))?;
+
+    if let Some(w) = &mut csv_writer {
+        w.flush()
+            .map_err(|e| format!("writing CSV to stdout: {e}"))?;
+    }
+
+    if let Some(tmp_path) = &raw_tmp_path {
+        // Drop (flush + close) the temp file before reopening it for the copy below.
+        drop(raw_tmp_writer);
+        let out_path = raw_out_path.expect("raw_out_path is Some when raw_tmp_path is Some");
+        let final_headers = headers.clone().unwrap_or_else(|| vec!["t".to_string()]);
+        let file = fs::File::create(out_path)
+            .map_err(|e| format!("creating raw output file {}: {e}", out_path.display()))?;
+        let mut writer = BufWriter::new(file);
+        raw_format::write_header(
+            &mut writer,
+            &final_headers,
+            n_points,
+            "Transient Analysis",
+            netlist_path,
+        )
+        .map_err(|e| format!("writing raw output file {}: {e}", out_path.display()))?;
+        if n_points > 0 {
+            let mut tmp_file = fs::File::open(tmp_path)
+                .map_err(|e| format!("reading temporary raw output {}: {e}", tmp_path.display()))?;
+            io::copy(&mut tmp_file, &mut writer).map_err(|e| {
+                format!(
+                    "copying temporary raw output into {}: {e}",
+                    out_path.display()
+                )
+            })?;
+        }
+        writer
+            .flush()
+            .map_err(|e| format!("writing raw output file {}: {e}", out_path.display()))?;
+        // Best-effort cleanup -- a failure here doesn't invalidate the real output file already
+        // written above, so it's not worth failing the whole run over.
+        let _ = fs::remove_file(tmp_path);
+    }
+
+    if !measurements.is_empty() {
+        // The "shadow" waveform: `t` plus only the columns some measurement spec actually
+        // referenced, built from `measured`'s own small per-column history -- this is the whole
+        // point of tracking `referenced`/`measured` above rather than the full trace.
+        let names_in_order: Vec<String> = referenced_index.iter().map(|(n, _)| n.clone()).collect();
+        let series: Vec<&(Vec<f64>, Vec<f64>)> =
+            names_in_order.iter().map(|n| &measured[n]).collect();
+        let n_rows = series.first().map_or(0, |(ts, _)| ts.len());
+        let mut shadow_headers = vec!["t".to_string()];
+        shadow_headers.extend(names_in_order);
+        let mut shadow_rows = Vec::with_capacity(n_rows);
+        for i in 0..n_rows {
+            let mut row = Vec::with_capacity(shadow_headers.len());
+            row.push(series[0].0[i]);
+            row.extend(series.iter().map(|(_, vs)| vs[i]));
+            shadow_rows.push(row);
+        }
+        let shadow = Waveform {
+            headers: shadow_headers,
+            rows: shadow_rows,
+        };
+        write_measurements_log(measurements, &shadow, &default_log_path(netlist_path))?;
+    }
+
+    Ok(())
 }
 
 /// Prints `waveform` as CSV to stdout, exactly reproducing this crate's original (pre-`--format`)

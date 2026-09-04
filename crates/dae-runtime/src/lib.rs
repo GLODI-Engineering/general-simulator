@@ -31,9 +31,10 @@ mod step_control;
 mod topology;
 
 pub use block_graph::{
-    simulate_transient_with_blocks, simulate_transient_with_blocks_capped, BlockInstance,
-    BlockKind, ConstValue, GainValue, GateBinding, Phys2SigTarget, PhysicalDomain, PidClamp,
-    SampleTimeSpec, Signal, SignalValue, TransientWithBlocksStep, ADAPTIVE_STEP_HARD_CAP,
+    simulate_transient_with_blocks, simulate_transient_with_blocks_capped,
+    simulate_transient_with_blocks_streamed, BlockInstance, BlockKind, ConstValue, GainValue,
+    GateBinding, Phys2SigTarget, PhysicalDomain, PidClamp, SampleTimeSpec, Signal, SignalValue,
+    TransientWithBlocksStep, ADAPTIVE_STEP_HARD_CAP,
 };
 pub use closed_loop::{sawtooth_carrier, simulate_closed_loop};
 pub use step_control::{AdaptiveConfig, TimeStep};
@@ -82,6 +83,11 @@ pub enum DaeError {
     /// from [`DaeError::Build`]'s "parsed fine, but this statement has no valid electrical
     /// stamp" class of error.
     Parse(String),
+    /// A streaming `on_step` callback's own I/O failed (writing a CSV/raw row straight to a
+    /// file/stream as it's produced — see [`block_graph::simulate_transient_with_blocks_streamed`]).
+    /// Carries the formatted underlying `std::io::Error` as a string rather than the error type
+    /// itself, since `DaeError` derives `PartialEq` and `io::Error` doesn't implement it.
+    Io(String),
     Build(BuildError),
     Evaluate(EvaluationError),
     Linear(SingularMatrix),
