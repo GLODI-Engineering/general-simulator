@@ -1904,7 +1904,7 @@ pub fn simulate_transient_with_blocks_streamed(
         .iter()
         .map(|(name, m)| (name.clone(), (*m, GateState::Off)))
         .collect();
-    let (system0, _) = crate::build_with_ideal_switches(
+    let (system0, all_diodes0) = crate::build_with_ideal_switches(
         &statements,
         dialect,
         diodes,
@@ -1958,10 +1958,7 @@ pub fn simulate_transient_with_blocks_streamed(
         }
     }
 
-    let mut x_prev = match x_initial {
-        Some(x) => x.to_vec(),
-        None => vec![0.0; system0.order()],
-    };
+    let mut x_prev = crate::resolve_initial_state(&system0, &all_diodes0, x_initial)?;
     let mut point_prev = OperatingPoint {
         unknowns: system0.unknowns.clone(),
         x: x_prev.clone(),

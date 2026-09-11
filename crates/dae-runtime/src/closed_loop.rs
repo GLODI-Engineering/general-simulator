@@ -96,10 +96,7 @@ pub fn simulate_closed_loop(
         &initial_states,
         shared_r_on,
     )?;
-    let mut x_prev = match x_initial {
-        Some(x) => x.to_vec(),
-        None => vec![0.0; system0.order()],
-    };
+    let mut x_prev = crate::resolve_initial_state(&system0, &all_diodes0, x_initial)?;
     let (mut point_prev, _) = step_with_fallback(
         &system0,
         &statements,

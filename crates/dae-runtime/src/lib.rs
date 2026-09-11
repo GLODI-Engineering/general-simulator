@@ -41,7 +41,9 @@ pub use step_control::{AdaptiveConfig, TimeStep};
 
 use std::collections::BTreeMap;
 
-use general_mna::{BuildError, BuildOptions, EvaluationError, Expression, MnaBuilder, MnaSystem};
+use general_mna::{
+    BuildError, BuildOptions, EvaluationError, Expression, InitialStateError, MnaBuilder, MnaSystem,
+};
 use general_spice_core::ast::Statement;
 use general_spice_core::Dialect;
 use lcp_solver::LcpError;
@@ -89,6 +91,11 @@ pub enum DaeError {
     /// itself, since `DaeError` derives `PartialEq` and `io::Error` doesn't implement it.
     Io(String),
     Build(BuildError),
+    /// The netlist declares `ic=` initial conditions that could not be turned into a consistent
+    /// starting state — see [`general_mna::MnaSystem::initial_state`], which does that solve and
+    /// whose own error explains the two ways it fails (contradictory conditions, or a node with
+    /// no DC path once every `ic`-free capacitor is opened and inductor shorted).
+    InitialCondition(InitialStateError),
     Evaluate(EvaluationError),
     Linear(SingularMatrix),
     Lcp(LcpError),
@@ -385,6 +392,44 @@ enum Scheme<'a> {
 /// it — simpler, and sufficient for the well-behaved circuits this crate targets so far.
 ///
 /// No ideal switch/PWM support yet in the transient loop — see this crate's journal for why.
+/// The `x` a transient run starts from, in `system.unknowns` order.
+///
+/// An explicit `x_initial` from the caller always wins — it is the more specific instruction,
+/// and several of this crate's own tests hand-build one. Failing that, the netlist's own `ic=`
+/// values are honored via [`general_mna::MnaSystem::initial_state`], which solves the
+/// constrained operating point rather than merely assigning the declared numbers (the other
+/// unknowns are not free: KCL still has to hold, and a source still has to supply whatever the
+/// constrained state draws). Failing *that* — the overwhelmingly common case of a netlist with
+/// no `ic=` anywhere — the circuit starts from rest, exactly as before.
+///
+/// The `ic=` operating point is evaluated at `t = 0` with every diode at its own off-segment
+/// reference slope and zero Norton current, matching how the first real step's `base_values` is
+/// built in `solve_step`.
+pub(crate) fn resolve_initial_state(
+    system: &MnaSystem,
+    diodes: &BTreeMap<String, IdealDiode>,
+    x_initial: Option<&[f64]>,
+) -> Result<Vec<f64>, DaeError> {
+    if let Some(x) = x_initial {
+        return Ok(x.to_vec());
+    }
+    let mut values = BTreeMap::new();
+    for (name, diode) in diodes {
+        values.insert(format!("{name}_G"), diode.g_off);
+        values.insert(format!("{name}_Ioff"), 0.0);
+    }
+    for (name, transient_fn) in &system.transient_sources {
+        values.insert(name.clone(), transient_fn.value_at(0.0));
+    }
+    match system
+        .initial_state(&values, general_mna::DEFAULT_INITIAL_STATE_TOLERANCE)
+        .map_err(DaeError::InitialCondition)?
+    {
+        Some(x) => Ok(x),
+        None => Ok(vec![0.0; system.order()]),
+    }
+}
+
 pub fn simulate_transient(
     source: &str,
     dialect: Dialect,
@@ -398,10 +443,7 @@ pub fn simulate_transient(
         .build_statements(&statements)
         .map_err(DaeError::Build)?;
 
-    let mut x_prev = match x_initial {
-        Some(x) => x.to_vec(),
-        None => vec![0.0; system.order()],
-    };
+    let mut x_prev = resolve_initial_state(&system, diodes, x_initial)?;
     let mut x_prev_prev: Option<Vec<f64>> = None;
     let mut prev_diode_raw_ioff: BTreeMap<String, f64> = BTreeMap::new();
     let mut prev_segments: Option<Vec<Segment>> = None;
@@ -704,10 +746,7 @@ pub fn simulate_transient_with_ideal_switches(
     let statements = general_mna::parse_and_flatten(source, dialect).map_err(DaeError::Parse)?;
     let (system0, _) =
         build_with_ideal_switches(&statements, dialect, diodes, &states_at(0.0), shared_r_on)?;
-    let mut x_prev = match x_initial {
-        Some(x) => x.to_vec(),
-        None => vec![0.0; system0.order()],
-    };
+    let mut x_prev = resolve_initial_state(&system0, diodes, x_initial)?;
     let mut x_prev_prev: Option<Vec<f64>> = None;
     let mut prev_diode_raw_ioff: BTreeMap<String, f64> = BTreeMap::new();
     let mut prev_segments: Option<Vec<Segment>> = None;
