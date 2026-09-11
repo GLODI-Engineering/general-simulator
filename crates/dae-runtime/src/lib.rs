@@ -91,10 +91,13 @@ pub enum DaeError {
     /// itself, since `DaeError` derives `PartialEq` and `io::Error` doesn't implement it.
     Io(String),
     Build(BuildError),
-    /// The netlist declares `ic=` initial conditions that could not be turned into a consistent
-    /// starting state — see [`general_mna::MnaSystem::initial_state`], which does that solve and
-    /// whose own error explains the two ways it fails (contradictory conditions, or a node with
-    /// no DC path once every `ic`-free capacitor is opened and inductor shorted).
+    /// The netlist declares `ic=` initial conditions that could not be assigned — see
+    /// [`general_mna::MnaSystem::initial_state`], whose own error explains the two ways that
+    /// fails: conditions that contradict each other (a loop of `ic`-bearing capacitors whose
+    /// declared voltages do not sum to zero), and an assignment that violates one of the
+    /// circuit's own algebraic equations in which every unknown is already fixed by an `ic=`
+    /// (an `ic` on a capacitor across an ideal voltage source; series inductors declaring
+    /// different currents).
     InitialCondition(InitialStateError),
     Evaluate(EvaluationError),
     Linear(SingularMatrix),
@@ -396,15 +399,24 @@ enum Scheme<'a> {
 ///
 /// An explicit `x_initial` from the caller always wins — it is the more specific instruction,
 /// and several of this crate's own tests hand-build one. Failing that, the netlist's own `ic=`
-/// values are honored via [`general_mna::MnaSystem::initial_state`], which solves the
-/// constrained operating point rather than merely assigning the declared numbers (the other
-/// unknowns are not free: KCL still has to hold, and a source still has to supply whatever the
-/// constrained state draws). Failing *that* — the overwhelmingly common case of a netlist with
-/// no `ic=` anywhere — the circuit starts from rest, exactly as before.
+/// values are honored via [`general_mna::MnaSystem::initial_state`], which *assigns* the
+/// declared states — an `ic`-bearing inductor's own branch current, an `ic`-bearing capacitor's
+/// node-voltage difference — and leaves every other unknown at rest, without touching the
+/// circuit's equations. Failing *that* — the overwhelmingly common case of a netlist with no
+/// `ic=` anywhere — the circuit starts from rest, exactly as before.
 ///
-/// The `ic=` operating point is evaluated at `t = 0` with every diode at its own off-segment
-/// reference slope and zero Norton current, matching how the first real step's `base_values` is
-/// built in `solve_step`.
+/// A seeded vector is therefore **not** a consistent operating point: the other node voltages
+/// and every source's branch current start at zero even where the circuit's algebraic
+/// constraints say otherwise. That is fine here, and worth saying out loud rather than leaving
+/// for the next reader to rediscover: [`simulate_transient`] already takes its first step with
+/// backward Euler precisely because an arbitrary `x_initial` need not satisfy those constraints,
+/// and that first step is what re-imposes them. The one thing an inconsistent seed must not do
+/// is pass silently, and it does not — `initial_state` reports an assignment that contradicts an
+/// equation nothing is left free to satisfy, as [`DaeError::InitialCondition`].
+///
+/// `values` is built at `t = 0` with every diode at its own off-segment reference slope and zero
+/// Norton current, matching how the first real step's `base_values` is built in `solve_step`, so
+/// that the consistency check `initial_state` runs sees the same circuit the first step will.
 pub(crate) fn resolve_initial_state(
     system: &MnaSystem,
     diodes: &BTreeMap<String, IdealDiode>,

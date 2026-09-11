@@ -12,6 +12,15 @@
 - One shared ideal switch constraint worth calling out up front: every ideal switch in one run must share
   the same `r_on` (a `dae-runtime` limitation, not a netlist typo if two different values seem
   to silently collapse to one).
+- `ic=` on a `C` or `L` card, with both sign conventions spelled out (a capacitor's is first
+  node minus second; an inductor's is the current from first node to second, matching
+  `I(<name>)`) and the semantics stated plainly: it is an **assignment**, so the declared states
+  start at their declared values and every other unknown starts at rest — the operating point is
+  skipped, not solved around the declaration. Contradictions are reported; see
+  `general-mna`'s `MnaSystem::initial_state`.
+- What a device card's trailing parameters are checked against, per device letter, and the short
+  list of tokens that deliberately are not checked (a diode's model name above all) — port the
+  table and the "known limits" list from `general-mna`'s README rather than re-deriving them.
 - This chapter is the *index* into the detail chapters (`pwl-devices.md`, `gate-bindings.md`,
   `signals.md`, `block-library.md`) — keep it short, link out rather than duplicating field
   lists here.
