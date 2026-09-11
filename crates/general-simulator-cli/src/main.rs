@@ -320,6 +320,7 @@ use pwl_devices::{IdealDiode, IdealSwitch};
 /// `raw_format::write_raw` (the new `--format raw` alternative) are built from exactly this, so
 /// "same data, different serialization" (see `book/user-guide/src/reading-output.md`) is
 /// structural rather than something the two writers merely happen to agree on.
+#[derive(Clone)]
 struct Waveform {
     headers: Vec<String>,
     rows: Vec<Vec<f64>>,
@@ -363,6 +364,7 @@ fn run() -> Result<(), String> {
     let mut max_steps: Option<usize> = None;
     let mut format = "csv".to_string();
     let mut out_path: Option<String> = None;
+    let mut out_every: usize = 1;
 
     let mut i = 2;
     while i < args.len() {
@@ -398,6 +400,18 @@ fn run() -> Result<(), String> {
                     .parse()
                     .map_err(|_| "bad --max-steps".to_string())?;
                 max_steps = Some(v);
+                i += 2;
+            }
+            "--out-every" => {
+                let v: usize = args
+                    .get(i + 1)
+                    .ok_or("--out-every needs a value")?
+                    .parse()
+                    .map_err(|_| "bad --out-every".to_string())?;
+                if v == 0 {
+                    return Err("--out-every must be at least 1".to_string());
+                }
+                out_every = v;
                 i += 2;
             }
             "--format" => {
@@ -614,6 +628,7 @@ fn run() -> Result<(), String> {
                 step,
                 max_steps.unwrap_or(ADAPTIVE_STEP_HARD_CAP),
                 output_format,
+                out_every,
                 raw_out_path.as_deref(),
                 netlist_path,
                 &measurements,
@@ -625,11 +640,16 @@ fn run() -> Result<(), String> {
         ));
     };
 
+    // `--out-every` thins the *output* only, so the decimated copy is what gets serialized while
+    // `waveform` -- every resolved point -- is what the measurements below are evaluated against.
+    // Decimating a measurement's input would change its result rather than its size, which is a
+    // different feature and a worse one.
+    let out_waveform = decimate(&waveform, out_every);
     match output_format {
-        OutputFormat::Csv => print_csv(&waveform),
+        OutputFormat::Csv => print_csv(&out_waveform),
         OutputFormat::Raw => {
             let out_path = raw_out_path.expect("raw_out_path is Some when output_format is Raw");
-            write_raw_file(&out_path, &waveform, plot_name, netlist_path)?;
+            write_raw_file(&out_path, &out_waveform, plot_name, netlist_path)?;
         }
     }
 
@@ -664,6 +684,22 @@ fn default_log_path(netlist_path: &str) -> PathBuf {
 fn default_raw_path(netlist_path: &str) -> PathBuf {
     let path = Path::new(netlist_path);
     path.with_extension("raw")
+}
+
+/// Keeps every `stride`-th row, starting at the first. `stride == 1` returns the waveform
+/// unchanged, which is the default and every pre-`--out-every` caller's behavior.
+///
+/// Borrowing would be tidier than cloning, but the rows are `Vec<f64>` inside a `Waveform` the
+/// raw writer takes by reference, and a run large enough for this flag to matter is one whose
+/// decimated copy is by construction small.
+fn decimate(waveform: &Waveform, stride: usize) -> Waveform {
+    if stride <= 1 {
+        return waveform.clone();
+    }
+    Waveform {
+        headers: waveform.headers.clone(),
+        rows: waveform.rows.iter().step_by(stride).cloned().collect(),
+    }
 }
 
 fn write_raw_file(
@@ -733,6 +769,7 @@ fn run_transient_streamed(
     step: TimeStep,
     max_steps: usize,
     output_format: OutputFormat,
+    out_every: usize,
     raw_out_path: Option<&Path>,
     netlist_path: &str,
     measurements: &[measure::MeasureSpec],
@@ -787,6 +824,7 @@ fn run_transient_streamed(
         None => None,
     };
     let mut n_points: usize = 0;
+    let mut n_resolved: usize = 0;
 
     simulate_transient_with_blocks_streamed(
         netlist,
@@ -849,6 +887,21 @@ fn run_transient_streamed(
                     ts.push(t);
                     vs.push(row[*idx]);
                 }
+            }
+
+            // `--out-every N` thins what is *written*, never what is computed: every step is
+            // still taken, every measurement above still sees every point, and the solution is
+            // bit-identical to the same run without the flag. Only serialization is skipped.
+            //
+            // The counter is over resolved points rather than time, so a decimated adaptive run
+            // stays readable (uneven in time, but that is what adaptive stepping already is).
+            // Point 0 is always emitted; the final point is emitted only if its index happens to
+            // land on the stride, which keeps the rule to one sentence -- "every Nth point" --
+            // rather than a special case a reader has to remember.
+            let emit = n_resolved % out_every == 0;
+            n_resolved += 1;
+            if !emit {
+                return Ok(());
             }
 
             if let Some(w) = &mut csv_writer {
@@ -1003,7 +1056,7 @@ fn write_measurements_log(
 fn usage() -> String {
     "usage: general-simulator <netlist> [--devices <file>] [--mode dc|transient] [--tfinal T] \
      [--dt DT | --dt-max T --dt-min T --dt-init T --reltol R --abstol A] [--max-steps N] \
-     [--format csv|raw] [--out <path>]\n\
+     [--format csv|raw] [--out <path>] [--out-every N]\n\
      \n\
      --dt fixes the step size every step (deterministic, exactly reproducible). Omit it (and \
      optionally tune --dt-max/--dt-min/--dt-init/--reltol/--abstol) for adaptive step-size \
@@ -1027,6 +1080,15 @@ fn usage() -> String {
      write) -- since a binary format has nowhere sensible to go on a terminal, this always \
      writes to a file: --out <path> if given, otherwise <netlist stem>.raw next to the input \
      file.\n\
+     \n\
+     --out-every N writes only every Nth resolved point (default 1, i.e. every point). It \
+     thins the output, never the computation: every step is still taken, the solution is \
+     unchanged, and kind=measure still sees every point -- only serialization is skipped. This \
+     exists because the timestep and the useful output rate can legitimately differ by orders \
+     of magnitude: verifying zero-voltage switching needs a step below r_on*C_oss (0.4 ps at \
+     1 mOhm and 400 pF), which is 3.75 M steps across a 150 ns commutation window, while the \
+     measurement itself needs a few thousand points. Without this flag that run is affordable \
+     to compute and not to write down.\n\
      \n\
      Any kind=measure lines in the netlist write their results to <netlist stem>.log, regardless \
      of --format -- see book/user-guide/src/measurements.md."

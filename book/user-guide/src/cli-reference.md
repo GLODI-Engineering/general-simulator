@@ -3,7 +3,7 @@
 ```text
 general-simulator <netlist> [--devices <file>] [--mode dc|transient] [--tfinal T]
                    [--dt DT | --dt-max T --dt-min T --dt-init T --reltol R --abstol A]
-                   [--format csv|raw] [--out <path>]
+                   [--format csv|raw] [--out <path>] [--out-every N]
 ```
 
 `<netlist>` is the one required positional argument — the `.cir` file to run. Every flag below
@@ -19,11 +19,50 @@ is optional.
 | `--reltol`/`--abstol` | Override the adaptive controller's relative/absolute local-truncation-error tolerances. |
 | `--format csv\|raw` | Output serialization — see below. Default: `csv`. |
 | `--out <path>` | Destination file for `--format raw`. Ignored for `--format csv` (CSV always goes to stdout). |
+| `--out-every N` | Write only every Nth resolved point. Thins the output, never the computation — see below. Default: `1`. |
 
 `--dt` and any of `--dt-max`/`--dt-min`/`--dt-init`/`--reltol`/`--abstol` are mutually
 exclusive — pick fixed-step or adaptive stepping, not both. Omitting `--dt` entirely selects
 adaptive stepping, the default, the same local-truncation-error approach every real SPICE-family
 tool uses by default when only the run length is given.
+
+## `--out-every`: when the timestep and the useful output rate differ
+
+`--out-every N` writes every Nth resolved point and skips the rest. It affects **serialization
+only**:
+
+- every step is still taken, so the solution is bit-identical to the same run without the flag;
+- `kind=measure` still sees every point, so measurement results are unchanged (decimating a
+  measurement's input would change its *answer*, not just its size);
+- `--out-every 1`, the default, is byte-for-byte the behaviour from before the flag existed.
+
+Point 0 is always written. After that it is simply every Nth, so the final point appears only if
+its index lands on the stride.
+
+### Why this is needed
+
+The integration step and the rate you need to *look* at the answer can legitimately differ by
+orders of magnitude. The case this was added for: verifying zero-voltage switching requires a
+step below the hard discharge time of the switching node, `r_on * C_oss` — 0.4 ps at 1 mΩ and
+400 pF. A larger step walks clean over the discharge, and soft and hard switching become
+indistinguishable, which is a silent and very convincing failure.
+
+A 150 ns commutation window at that step is 3.75 million points. At ~55 columns that is about
+2.5 GB of CSV — for a measurement that needs a few thousand points. The run is affordable to
+compute and not to write down:
+
+```bash
+general-simulator zvs.cir --mode transient --tfinal 150e-9 --dt 4e-14 --out-every 1000
+```
+
+3750 rows, 40 ps apart — still 2500× finer than the ~46 ns transition being resolved.
+
+### What it is not
+
+Not a substitute for a coarser `--dt`, and not adaptive stepping. Adaptive stepping would
+lengthen the step exactly across the flat dead band where the discharge is about to happen,
+which is the opposite of what a case like the above needs; `--out-every` keeps the guaranteed
+uniform step and thins only the record of it.
 
 ## `--format`: CSV vs. SPICE rawfile output
 

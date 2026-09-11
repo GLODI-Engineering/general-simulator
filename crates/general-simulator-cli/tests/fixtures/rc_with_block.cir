@@ -1,0 +1,7 @@
+* Same RC as rc_diode.cir but with a signal block present, which is what selects the
+* streaming output path (see main.rs: any ideal switch or block takes run_transient_streamed).
+* The block's value is irrelevant -- it is here only to reach that code path.
+V1 a 0 5
+R1 a b 1
+C1 b 0 1
+K kind=const value=2
