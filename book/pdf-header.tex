@@ -21,6 +21,29 @@
 \sloppy
 \emergencystretch=3em
 
+% A page with two large figures (validation.md's plots) had the second figure's caption run
+% straight into the page-number footer -- traced to pandoc's own template, which sets
+% \def\fps@figure{htbp} (see the generated .tex): the `h` ("here") placement lets LaTeX force
+% a figure into the current spot even when the *remaining* space on the page (after whatever
+% text/floats already used part of it) is too small, rather than deferring it to the top of
+% the next page the way a strict top/bottom/float-page placement would. \pandocbounded (also
+% pandoc's own) only scales each image to fit a *full* page on its own -- it has no idea how
+% much of the current page is already used by preceding content. Dropping `h` from the allowed
+% placements is the standard fix: every figure must now go through the real page-fitting float
+% algorithm, so an oversized-for-the-remaining-space figure moves to the next page instead of
+% overflowing into the margin.
+% \fps@figure contains a `@`, an "other"-catcode character outside of package/class code --
+% \def\fps@figure{...} without \makeatletter silently defines the wrong token entirely instead
+% of overriding LaTeX's real internal float-placement default (confirmed the hard way: three
+% earlier attempts at this fix produced zero change in the output, this is why).
+\makeatletter
+\def\fps@figure{tbp}
+\makeatother
+% Still keep pages from stretching content to exactly fill \textheight when a float *does* get
+% deferred and leaves a page short -- cosmetic, unrelated to the overflow bug above, but a
+% reasonable default for a document mixing floats with running text either way.
+\raggedbottom
+
 % Same overflow problem for fenced code blocks (```...``` -- the ASCII crate-dependency diagram,
 % multi-line netlist/CLI examples): let long lines wrap instead of running off the page.
 \usepackage{fvextra}

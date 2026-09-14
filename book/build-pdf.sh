@@ -82,6 +82,19 @@ while IFS= read -r -d '' subdir; do
     resource_path="$resource_path:$subdir"
 done < <(find "$src_dir" -mindepth 1 -type d -print0)
 
+# A dense page (running text + a big table + prose packed right up against \textheight) left
+# essentially no gap between the last line of content and the page-number footer -- visually
+# read as the two overlapping. TeX's page-breaking always fills a page up to \textheight
+# before breaking, so the last line of ANY full page sits close to that boundary regardless of
+# how big \textheight is -- shrinking \textheight (a plain bigger `bottom` margin) does nothing
+# by itself. What actually creates the gap is `footskip` (the geometry package's own distance
+# from \textheight's bottom edge to the footer baseline) -- confirmed the hard way, an initial
+# footskip=0.5in produced no visible change (apparently close to geometry's own default) before
+# a much larger test value proved footskip was the right knob at all. `bottom` is widened too,
+# giving geometry more total room to allocate between text and footer. This is a separate fix
+# from pdf-header.tex's own float-placement fix above (that one stops a figure from being
+# forced into too-small a remaining space; this one gives every full page, figures or not, a
+# real gap above its footer).
 out_pdf="$script_dir/${book_name}.pdf"
 pandoc "$combined" \
     --from=markdown+smart \
@@ -93,6 +106,8 @@ pandoc "$combined" \
     --include-in-header="$script_dir/pdf-header.tex" \
     -V title="$title" \
     -V geometry:margin=1in \
+    -V geometry:bottom=1.4in \
+    -V geometry:footskip=0.8in \
     -V colorlinks=true \
     -V linkcolor=blue \
     -V urlcolor=blue \
