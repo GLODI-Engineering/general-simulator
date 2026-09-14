@@ -1,6 +1,6 @@
 [package]
 name = "octave-ffi"
-version = "0.2.0"
+version = "0.3.0"
 description = "Spawns and drives a persistent octave-cli subprocess to call user-supplied Octave-compatible .m functions once per resolved block-graph step -- the mere-aggregation counterpart to pyblock-ffi's embedded interpreter, kept isolated from every other crate. Never links against any Octave C/C++ library -- see the module doc comment for the licensing rationale."
 edition.workspace = true
 license.workspace = true

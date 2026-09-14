@@ -1,6 +1,6 @@
 [package]
 name = "lcp-solver"
-version = "0.2.0"
+version = "0.3.0"
 description = "Lemke's algorithm for the Linear Complementarity Problem (LCP), used by general-simulator to select which piecewise-linear device segment is active each timestep instead of Newton-Raphson + voltage limiting."
 edition.workspace = true
 license.workspace = true

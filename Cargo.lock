@@ -16,18 +16,18 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "continuous-blocks"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "cscript-ffi"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "libloading",
 ]
 
 [[package]]
 name = "dae-runtime"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "continuous-blocks",
  "cscript-ffi",
@@ -50,7 +50,7 @@ dependencies = [
 
 [[package]]
 name = "general-simulator-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "continuous-blocks",
  "dae-runtime",
@@ -76,7 +76,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "lcp-solver"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "libc"
@@ -164,7 +164,7 @@ dependencies = [
 
 [[package]]
 name = "octave-ffi"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "once_cell"
@@ -198,14 +198,14 @@ dependencies = [
 
 [[package]]
 name = "pwl-devices"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "lcp-solver",
 ]
 
 [[package]]
 name = "pyblock-ffi"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "numpy",
  "pyo3",

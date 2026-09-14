@@ -1,6 +1,6 @@
 [package]
 name = "cscript-ffi"
-version = "0.2.0"
+version = "0.3.0"
 description = "Loads and calls user-supplied, dynamically-linked C blocks (Declarations/StartFcn/OutputFcn code slots, one instance's state per block) -- the one place in this workspace where unsafe FFI into arbitrary native code is deliberately allowed, kept isolated from every other crate."
 edition.workspace = true
 license.workspace = true
