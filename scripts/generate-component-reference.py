@@ -121,14 +121,21 @@ def render(entries, doc_refs):
         for title, body in sorted(by_library[lib], key=lambda t: t[0]):
             out.append(f"### {title}")
             out.append("")
-            # body[0] is the raw `# Title` line already reflected in the heading above; the
-            # rest of body's own `## `-headings are demoted one level to nest under it.
+            # body[0] is the raw `# Title` line already reflected in the heading above. The
+            # rest of body's own `## Description`/`## Parameters`/`## Errors`/`## Netlist
+            # form`/`## Example` lines are field labels within one component entry, not real
+            # sub-navigation -- rendered as headings (even demoted to ####), ~38 components x
+            # 5-7 fields each produced a four-level-deep sidebar (part -> ## library -> ###
+            # component -> #### field) that fought the book's own TOC more than it helped a
+            # reader. Rendered as a bold paragraph label instead: same visual field boundary,
+            # no heading-level nesting, no numbered-outline explosion.
             for line in body[1:]:
-                out.append(re.sub(r"^##(?!#)", "####", line))
+                m = re.match(r"^##(?!#)\s*(.+)$", line)
+                out.append(f"**{m.group(1).strip()}**" if m else line)
             key = kind_key_for(body)
             if key and key in doc_refs:
                 out.append("")
-                out.append("#### Implementation notes")
+                out.append("**Implementation notes**")
                 out.append("")
                 out.extend(doc_refs[key])
             out.append("")

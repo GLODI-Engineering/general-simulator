@@ -12,7 +12,7 @@ One entry per netlist `kind=` component, generated directly from the doc comment
 **Purpose:** closed-loop error compensation with a filtered derivative and anti-windup.
 **Library:** Control / Continuous
 
-#### Description
+**Description**
 A parallel PID ($C(s) = K_p + \dfrac{K_i}{s} + \dfrac{K_d N s}{s + N}$, filtered-derivative
 form — see `continuous_blocks::Pid`'s own doc comment for the transfer-function
 derivation) with
@@ -35,7 +35,7 @@ oversized early on, so anti-windup never engages even though the real plant is a
 saturated far below that fixed bound, producing sustained, hard-to-diagnose
 windup-driven oscillation.
 
-#### Parameters
+**Parameters**
 - `in=<signal>` — the error signal (one input).
 - `kp=<f64>`, `ki=<f64>`, `kd=<f64>` — proportional/integral/derivative gains. No sign or
   magnitude restriction (a negative gain is a legitimate, if unusual, choice depending on
@@ -49,7 +49,7 @@ windup-driven oscillation.
     ([`PidClamp::Dynamic`]), added as two extra inputs after the error signal, in that
     order.
 
-#### Errors
+**Errors**
 - `n <= 0.0` — rejected at parse time (`invalid PID (NonPositiveFilterCoefficient)`): a
   non-positive filter coefficient puts the derivative filter's pole at the origin or in
   the right half-plane, a non-causal or outright unstable filter.
@@ -60,24 +60,24 @@ windup-driven oscillation.
   generic `missing field '<key>'`/`field '<key>' is not a number` error every `kind=`
   block produces — see [`BlockInstance`]'s own doc comment.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=pid in=<signal> kp=<f64> ki=<f64> kd=<f64> n=<f64> \
      (clamp_lo=<f64> clamp_hi=<f64> | clamp_lo_in=<signal> clamp_hi_in=<signal>)
 ```
 
-#### Example
+**Example**
 A fixed-clamp PI (no derivative action) regulating an error signal `ERR` to `[-1, 1]`:
 ```text
 PID1 kind=pid in=ERR kp=1 ki=0 kd=0 n=1 clamp_lo=-1 clamp_hi=1
 ```
 
-#### References
+**References**
 - K. J. Åström, T. Hägglund, *PID Controllers: Theory, Design, and Tuning*, 2nd ed.,
   Instrument Society of America, 1995 — filtered-derivative form and anti-windup by
   conditional integration.
 
-#### Implementation notes
+**Implementation notes**
 
 Parallel PID with a filtered derivative term, using the standard `P, I, D, N` (filter
 coefficient) parameterization common to block-diagram continuous-time controller blocks:
@@ -98,7 +98,7 @@ the anti-windup behavior, which lives at the block-graph evaluation layer, not h
 matrices.
 **Library:** Control / Continuous
 
-#### Description
+**Description**
 A compensator/filter that doesn't already have a named convenience constructor, e.g. a
 low-pass filter placed ahead of a `Pid` to damp a resonant plant:
 $\dot{x} = Ax + Bu, \quad y = Cx + Du$. Genuinely MIMO: `B`'s own column count
@@ -113,7 +113,7 @@ output's own concern, not every dynamic block's); stepped forward unconditionall
 timestep via `StateSpace::rk4_step` (RK4, not backward Euler — this block's own state is
 never part of the circuit's own descriptor-DAE solve).
 
-#### Parameters
+**Parameters**
 - `a=<matrix>` — the `n x n` dynamics matrix, e.g. `a=[[0,1],[-1,-1]]`.
 - `b=<matrix|vector>` — `n x p` (`p` inputs); a flat vector (`b=[1,0]`) is SISO shorthand
   for `p=1`, matching the pre-vector-signals convention unchanged.
@@ -126,7 +126,7 @@ never part of the circuit's own descriptor-DAE solve).
   checked at evaluation time, not parse time, since a vector signal's own arity isn't
   knowable from netlist text alone).
 
-#### Errors
+**Errors**
 - `q != 1 || p != 1` with a bare scalar `d=` — rejected at parse time: `field 'd' is a
   bare scalar, but this system has <q> output(s) and <p> input(s) -- declare
   'd=[[...],...]' (<q>x<p>) for a MIMO system, a bare scalar is only valid for a 1x1
@@ -136,13 +136,13 @@ never part of the circuit's own descriptor-DAE solve).
   currently unreachable through this parser — `e` is always `None` (ordinary,
   non-descriptor state-space) for every netlist-declared instance.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=statespace a=<matrix> b=<matrix|vector> c=<matrix|vector> [d=<matrix|scalar>] \
      (in=<signal> | inputs=<sig1,sig2,...>)
 ```
 
-#### Example
+**Example**
 A first-order low-pass ($\dot{x} = -x + u$, $y = x$, pole at $s=-1$) — verified end to
 end, `SRC=1` settling toward `SS1=1`:
 ```text
@@ -155,7 +155,7 @@ SS1 kind=statespace a=[[-1]] b=[1] c=[1] in=SRC
 **Purpose:** a single-input single-output block given as a rational $N(s)/D(s)$.
 **Library:** Control / Continuous
 
-#### Description
+**Description**
 Numerator/denominator coefficients, highest-degree first, rather than a `Pid`'s
 `Kp`/`Ki`/`Kd` convenience parameterization — e.g. a hand-derived PID-with-filtered-
 derivative compensator ($C(s) = K_p + K_i/s + K_d N s/(s+N)$, put over one denominator
@@ -165,7 +165,7 @@ own doc comment for the derivation). Compiled once via
 `TransferFunction::to_state_space` (controllable canonical form); no anti-windup, for
 the same reason [`BlockKind::StateSpace`] above has none.
 
-#### Parameters
+**Parameters**
 - `num=<vector>` — numerator coefficients, highest-degree first, e.g. `num=[1,2]` for
   $s + 2$.
 - `den=<vector>` — denominator coefficients, highest-degree first, e.g. `den=[1,3,2]`
@@ -174,7 +174,7 @@ the same reason [`BlockKind::StateSpace`] above has none.
 - `in=<signal>` — the single input (one input, always — this block is SISO by
   definition).
 
-#### Errors
+**Errors**
 - `den=[]` (empty) — rejected at parse time: `invalid transfer function
   (EmptyDenominator)`.
 - `den`'s first (highest-degree) coefficient is `0.0` — rejected: `invalid transfer
@@ -184,12 +184,12 @@ the same reason [`BlockKind::StateSpace`] above has none.
   `invalid transfer function (ImproperTransferFunction)` — an improper transfer function
   has no causal realization.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=tf num=<vector> den=<vector> in=<signal>
 ```
 
-#### Example
+**Example**
 The same first-order low-pass as `StateSpace`'s own example ($1/(s+1)$), verified to
 settle toward the same steady-state value:
 ```text
@@ -202,27 +202,27 @@ TF1 kind=tf num=[1] den=[1,1] in=SRC
 **Purpose:** a bare, standalone oscillator producing a `[0, 1)` ramp from a frequency input.
 **Library:** Control / Continuous
 
-#### Description
+**Description**
 A raw frequency-to-ramp conversion, still useful on its own outside gate-driving PWM —
 e.g. feeding a `MathFn1::Sin`/`Gain` chain to build a variable-frequency sinusoidal
 reference. Not how a gate-driving PWM modulator gets its own switching frequency, though
 — see [`BlockKind::Pwm`]/[`BlockKind::PhaseShiftPwm`] below, neither of which reads this
 block at all (each owns its own internal oscillator).
 
-#### Parameters
+**Parameters**
 - `f_min=<f64>`, `f_max=<f64>` — the frequency clamp range, Hz; the one input (`in=`) is
   internally clamped to `[f_min, f_max]` before integration.
 - `in=<signal>` — the frequency command, Hz (one input).
 
-#### Errors
+**Errors**
 - `f_min > f_max` — rejected at parse time: `invalid vco (FMinExceedsFMax)`.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=vco f_min=<f64> f_max=<f64> in=<signal>
 ```
 
-#### Example
+**Example**
 A fixed 10 Hz oscillator, verified to produce a `[0,1)` ramp (not stuck at a constant):
 ```text
 FREQ kind=const value=10
@@ -236,7 +236,7 @@ VCO1 kind=vco f_min=1 f_max=1000 in=FREQ
 **Purpose:** the discrete-domain counterpart to `PID Controller`.
 **Library:** Control / Discrete
 
-#### Description
+**Description**
 Reuses the exact same [`PidClamp`] anti-windup mechanism as [`BlockKind::Pid`], but the
 integral/derivative actions advance once per declared sample period via
 `continuous_blocks::DiscretePid::step` instead of RK4-integrating continuously. Not
@@ -246,7 +246,7 @@ mandatory-periodic-`sample_time` rule as `DiscreteStateSpace`/`DiscreteTransferF
 above — this block's own integration `period` is set *from* `sample_time`, not a
 separately-entered value.
 
-#### Parameters
+**Parameters**
 - `in=<signal>`, `kp=`/`ki=`/`kd=`/`n=`, and the fixed-vs-dynamic clamp fields
   (`clamp_lo=`/`clamp_hi=` or `clamp_lo_in=`/`clamp_hi_in=`) — identical meaning to
   [`BlockKind::Pid`]'s own Parameters (see there).
@@ -255,14 +255,14 @@ separately-entered value.
   `forward` (forward Euler); selects the discrete integration rule the integral term
   uses each sample period.
 
-#### Errors
+**Errors**
 - Same `n <= 0.0` and clamp-pairing errors as [`BlockKind::Pid`] (see there).
 - Same missing-`ts=`/`ts=variable`-rejected errors as `DiscreteStateSpace`.
 - `integration_method` present but not one of the three known names — rejected at parse
   time: `unknown integration_method '<value>' (expected 'forward', 'backward', or
   'trapezoidal')`.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=discretepid in=<signal> kp=<f64> ki=<f64> kd=<f64> n=<f64> \
      (ts=<f64> | freq=<f64> [to=<f64>]) \
@@ -270,7 +270,7 @@ NAME kind=discretepid in=<signal> kp=<f64> ki=<f64> kd=<f64> n=<f64> \
      [integration_method=<forward|backward|trapezoidal>]
 ```
 
-#### Example
+**Example**
 A discrete PI (no derivative action) sampled every 0.1 s, integrating a fixed error
 signal once per sample hit — verified end to end, `DPID1` stepping `0.5 -> 0.525 -> 0.55
 -> 0.575 -> 0.6` at each `ts=0.1` boundary (unchanged between hits, matching the
@@ -285,7 +285,7 @@ DPID1 kind=discretepid in=ERR kp=1 ki=0.5 kd=0 n=1 ts=0.1 clamp_lo=-1 clamp_hi=1
 **Purpose:** the discrete-domain counterpart to `StateSpace` — a plain linear recursion.
 **Library:** Control / Discrete
 
-#### Description
+**Description**
 $x_{i+1} = Ax_i + Bu_i$, $y_i = Cx_i + Du_i$ — no RK4, no `dt` at all: `A`/`B`/`C`/`D`
 are already discrete-domain matrices, given directly by the netlist author, not derived
 from continuous ones. `sample_time` is **required** here (unlike `cscript`'s own
@@ -294,14 +294,14 @@ sample period, there is no "continuous" fallback the way omitting it means for
 `cscript`, and a solver-chosen variable schedule doesn't compose with a fixed-period
 recursion at all. See `general-simulator`'s own `book/dev-guide/src/discrete-time-blocks.md`.
 
-#### Parameters
+**Parameters**
 - `a=`/`b=`/`c=`/`d=`/`in=`/`inputs=` — identical shape and MIMO rules to
   [`BlockKind::StateSpace`]'s own Parameters (see there); the only difference is these
   matrices are already discrete-domain.
 - `ts=<f64>` / `freq=<f64>` (with optional `to=<f64>` offset) — required; unlike
   `cscript`, `ts=variable` is not accepted here (see Errors).
 
-#### Errors
+**Errors**
 - Same MIMO scalar-`d` rejection as `StateSpace` (see there).
 - `ts=`/`freq=` missing entirely — rejected at parse time: `missing 'ts=' or 'freq='
   -- a discrete-time block's own sample period is not optional (its dynamics *are* that
@@ -310,14 +310,14 @@ recursion at all. See `general-simulator`'s own `book/dev-guide/src/discrete-tim
   discrete block's own recursion has its coefficients baked in at one fixed sample
   period, which 'the block decides its own next execution time' doesn't compose with`.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=discretestatespace a=<matrix> b=<matrix|vector> c=<matrix|vector> \
      [d=<matrix|scalar>] (ts=<f64> | freq=<f64> [to=<f64>]) \
      (in=<signal> | inputs=<sig1,sig2,...>)
 ```
 
-#### Example
+**Example**
 A discrete integrator ($x_{i+1} = x_i + 0.1 \cdot u_i$, $y=x$, `ts=0.1`) fed a constant
 `1` — verified end to end, `DS1` reaching `0.5` after 5 sample hits ($5 \times 0.1$):
 ```text
@@ -330,31 +330,31 @@ DS1 kind=discretestatespace a=[[1]] b=[0.1] c=[1] ts=0.1 in=SRC
 **Purpose:** the discrete-domain counterpart to `Transfer Function` — $Y(z)/U(z) = N(z)/D(z)$.
 **Library:** Control / Discrete
 
-#### Description
+**Description**
 Coefficients already in the $z$-domain. Realized via the exact same
 `TransferFunction::to_state_space` the continuous version uses (coefficient-to-
 companion-form conversion is domain-agnostic algebra — it doesn't know or care whether
 the variable is called $s$ or $z$), evaluated via `StateSpace::discrete_step` instead of
 `rk4_step`. Same mandatory-periodic-`sample_time` rule as [`BlockKind::DiscreteStateSpace`].
 
-#### Parameters
+**Parameters**
 - `num=`/`den=`/`in=` — identical shape and validity rules to
   [`BlockKind::TransferFunction`]'s own Parameters (see there); coefficients are already
   in the $z$-domain rather than $s$.
 - `ts=<f64>` / `freq=<f64>` (with optional `to=<f64>`) — required, same rule as
   `DiscreteStateSpace`.
 
-#### Errors
+**Errors**
 Identical to [`BlockKind::TransferFunction`]'s own (`EmptyDenominator`,
 `ZeroLeadingDenominatorCoefficient`, `ImproperTransferFunction`), plus the same
 missing-`ts=`/`ts=variable`-rejected errors as `DiscreteStateSpace`.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=discretetf num=<vector> den=<vector> (ts=<f64> | freq=<f64> [to=<f64>]) in=<signal>
 ```
 
-#### Example
+**Example**
 The exact $z$-domain realization of `DiscreteStateSpace`'s own example above ($Y(z)/U(z)
 = 0.1/(z-1)$, a discrete integrator) — verified to reach the same `DTF1=0.5` after 5
 sample hits:
@@ -370,7 +370,7 @@ DTF1 kind=discretetf num=[0.1] den=[1,-1] ts=0.1 in=SRC
 **Purpose:** one of the six Clarke/Park three-phase coordinate transforms.
 **Library:** Coordinate Transforms
 
-#### Description
+**Description**
 The standard `abc`/`alpha-beta-0`/`d-q-0` change of basis (see
 `continuous_blocks::CoordinateTransform`) used to regulate a three-phase quantity
 (grid-tied PFC, motor drive) with a `Pid` on a DC-like `d`/`q` value instead of chasing
@@ -383,26 +383,26 @@ per-transform names, e.g. `["alpha", "beta", "zero"]` for `Clarke`), the block's
 their own `output_names` entries so a downstream block can reference them directly via
 `Signal::Block(name)`.
 
-#### Parameters
+**Parameters**
 - `kind=<clarke|clarkeinv|park|parkinv|clarkepark|clarkeparkinv>` — which transform.
 - `inputs=<sig1,...>` — `3` entries for `clarke`/`clarkeinv`, `4` for the other four
   (`park`/`parkinv`/`clarkepark`/`clarkeparkinv` also take an angle input).
 - `outputs=<name1,name2,name3>` — optional; defaults to `<name>,<name>_<suffix2>,
   <name>_<suffix3>` using this transform's own conventional output names.
 
-#### Errors
+**Errors**
 - Wrong `inputs=` count for this transform — rejected at parse time: `kind='<kind>'
   needs <n> inputs (got <m>)`.
 - `outputs=` with a count other than 3 — rejected at parse time: `'outputs' needs
   exactly 3 entries (got <n>)`.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=clarke inputs=<a,b,c> [outputs=<name1,name2,name3>]
 NAME kind=park inputs=<a,b,c,theta> [outputs=<name1,name2,name3>]
 ```
 
-#### Example
+**Example**
 A balanced three-phase set through `clarke` — verified end to end: for
 $a=1,b=-0.5,c=-0.5$ (a peak on phase A), $\alpha = 1$, $\beta = 0$ exactly:
 ```text
@@ -419,7 +419,7 @@ CT1 kind=clarke inputs=A,B,C
 **Purpose:** how an ideal switch's gate state is resolved from a named block, every step.
 **Library:** Electrical Interface
 
-#### Description
+**Description**
 This is not a `kind=` block itself — it's the `gate=`/`ctrl=` field pair on a
 `kind=ideal_switch` device line. `GateBinding` has exactly one variant and exactly one
 job: reading a named block's current output and thresholding it at `>= 0.5`. No
@@ -430,11 +430,11 @@ ideal switch's gate is itself a voltage ($V_{GS}$ against $v_{th}$), not a disti
 discrete-actuation signal domain (and never `domain=current`, even though `Sig2Phys`
 itself allows that domain for `I`-source targets).
 
-#### Parameters
+**Parameters**
 - `gate=block` — the only accepted value; every gate is block-driven.
 - `ctrl=<name>` — the name of a declared `domain=voltage` [`BlockKind::Sig2Phys`] block.
 
-#### Errors
+**Errors**
 - `gate=` missing entirely on a `kind=ideal_switch` line — rejected at parse time:
   `missing field 'gate' (gate=block ctrl=<name> -- every gate is block-driven, see this
   file's own module doc comment)`.
@@ -444,13 +444,13 @@ itself allows that domain for `I`-source targets).
   a `domain=current` one) — rejected at `dae-runtime`'s validation stage (not netlist
   parse time): `DaeError::GateTargetNotSig2Voltage`.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=ideal_switch r_on=<f64> g_breakdown=<f64> v_breakdown=<f64> g_off=<f64> \
      v_th=<f64> g_on=<f64> gate=block ctrl=<sig2phys_voltage_block_name>
 ```
 
-#### Example
+**Example**
 An ideal switch permanently held on via a `Const(1)` wired through `Sig2Phys` — the
 plain `D1 in out idealswitchmodel` line gives the electrical connectivity (drain, source;
 the model name is unused for a `kind=ideal_switch`-overridden device), the same-named
@@ -474,7 +474,7 @@ On while the named block's current output is `>= 0.5`.
 **Purpose:** the only way a circuit quantity enters the signal domain.
 **Library:** Electrical Interface
 
-#### Description
+**Description**
 Zero block-graph inputs (it reads the circuit's own previous-step operating point
 directly). Its value is then an ordinary block output, read by any downstream block via
 `Signal::Block(this_block's_name)` exactly like any other source block
@@ -486,11 +486,11 @@ Named symmetrically with [`BlockKind::Sig2Phys`] (its write-direction counterpar
 `phys2sig` reads a circuit quantity into the signal domain, `sig2phys` drives a
 signal-domain value onto a circuit quantity.
 
-#### Parameters
+**Parameters**
 - `node=<name>` — reads `V(node)`. Mutually exclusive with `branch=`.
 - `branch=<name>` — reads `I(branch)`. Mutually exclusive with `node=`.
 
-#### Errors
+**Errors**
 - Both `node=` and `branch=` given — rejected at parse time: `'node' and 'branch' are
   mutually exclusive (a phys2sig reads either a node voltage or a branch current, never
   both)`.
@@ -510,13 +510,13 @@ signal-domain value onto a circuit quantity.
   (not just the wrong type) — a distinct build-time error: `line N: device '<name>'
   kind='phys2sig' branch='<branch>' names no such element`.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=phys2sig node=<node_name>
 NAME kind=phys2sig branch=<branch_name>
 ```
 
-#### Example
+**Example**
 Reading a resistor-divider node's own voltage — verified end to end, `PROBE1` tracking
 `V(out)` exactly:
 ```text
@@ -544,7 +544,7 @@ IMEAS kind=phys2sig branch=VAMM
 magnitude or an ideal switch's gate.
 **Library:** Electrical Interface
 
-#### Description
+**Description**
 Closes the write-direction gap [`BlockKind::Phys2Sig`] doesn't (a phys2sig only ever
 reads). A
 `V`/`I` element's own literal value field in the netlist names this block directly (e.g.
@@ -567,26 +567,33 @@ voltage happens to source a node, gate a switch, or drive a current source. Pure
 identity pass-through numerically (`value = input`) in every role; the `domain` field is
 what the enforcement keys on. One input.
 
-#### Parameters
+**Parameters**
 - `domain=<voltage|current>` — which physical quantity this converter drives. Required.
 - `in=<signal>` — the value to drive onto the physical side (one input).
 
-#### Errors
+**Errors**
 - `domain=` missing entirely — rejected at parse time: `line N: device '<name>' missing
   field 'domain'`.
 - `domain=` present but not `voltage`/`current` — rejected at parse time: `line N: device
   '<name>' field 'domain' must be 'voltage' or 'current' (got '<value>')`.
 - Beyond that, none specific to this `kind=` — every real enforcement (a `V`/`I`/gate
   target actually naming a `Sig2Phys` of the right domain) happens at `dae-runtime`'s
-  validation stage, not netlist parse time.
+  validation stage, not netlist parse time. `general-mna` itself only ever sees the
+  device-source half of a document (with `--devices <file>`, it doesn't see the netlist
+  at all), so it cannot detect a converter's name reused as an ordinary circuit *node* —
+  that mistake produces no parse error here. `dae-runtime` rejects it as
+  `DaeError::Sig2PhysUsedAsCircuitNode`: this block has no terminals and stamps nothing
+  into the MNA system, so a net sharing its name is merely undriven, and KCL solves it to
+  a silently wrong `0` rather than failing — a converter must always be *referenced by
+  name* (a source's value field, or a switch's `gate=`/`ctrl=`), never wired.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=sig2phys domain=voltage in=<signal>
 NAME kind=sig2phys domain=current in=<signal>
 ```
 
-#### Example
+**Example**
 A block-driven voltage source — verified end to end, `V1`'s magnitude tracking a
 `Const` through the converter exactly:
 ```text
@@ -613,7 +620,7 @@ R1 a 0 1k
 (block-local) step — an escape hatch for stateful behavior no existing block covers.
 **Library:** Extensibility
 
-#### Description
+**Description**
 A dynamically-loaded, user-supplied block: `lib` is a precompiled shared library
 (`.so`/`.dylib`/`.dll`) exporting `cscript_start`/`cscript_output`/(optionally)
 `cscript_free`/`cscript_clone`, filling `output_names.len()` outputs. Unlike every
@@ -644,7 +651,7 @@ unchanged from before this field existed: `lib` must export `cscript_start`/
 export `cscript_start`/`cscript_derivative`/`cscript_output_xc`/(optionally)
 `cscript_free`/`cscript_clone` *instead of* `cscript_output`.
 
-#### Parameters
+**Parameters**
 - `lib=<path>` — the precompiled shared library. Like every field, this is whitespace-
   tokenized; **a path containing whitespace must be `"double-quoted"`**
   (`lib="my libs/gain.so"`) — verified directly against a real space-containing
@@ -658,7 +665,7 @@ export `cscript_start`/`cscript_derivative`/`cscript_output_xc`/(optionally)
 - `xc_count=<usize>` — optional, default `0`; number of solver-integrated continuous
   states (switches the required C export set — see Description above).
 
-#### Errors
+**Errors**
 - `lib`/`in` missing, or both `in` and `inputs` given, or neither — the generic
   `missing field '<key>'` error (see [`BlockInstance`]'s own doc comment); there is no
   `inputs`-vs-`in` mutual-exclusion check specifically, `inputs=` simply takes priority
@@ -678,14 +685,14 @@ export `cscript_start`/`cscript_derivative`/`cscript_output_xc`/(optionally)
 - A `.so` missing a required export, or a signature mismatch, surfaces as a load-time or
   call-time failure from `cscript_ffi` itself — see that crate's own error type.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=cscript lib=<path> (in=<signal> | inputs=<sig1,sig2,...>) \
      [outputs=<name1,name2,...>] [ts=<f64>|freq=<f64> [to=<f64>] | ts=variable] \
      [xc_count=<usize>]
 ```
 
-#### Example
+**Example**
 A fixed-gain block computed in C (`out = 2 * in`), run every circuit step — `lib` names
 a shared library compiled from a two-function `.c` file exporting exactly
 `cscript_start`/`cscript_output`. Verified end to end (compiled, run through the real
@@ -704,7 +711,7 @@ of [`BlockKind::OctFunc`] (not a mode of it -- see that variant's own doc commen
 stateless contract this one deliberately does not share).
 **Library:** Extensibility
 
-#### Description
+**Description**
 An escape hatch to Octave-compatible `.m`-file functions with real persistent state
 across steps -- for people with legacy Octave-compatible `.m` scripts who need
 `pyblock`'s own `start`/`output`/`update`/`xc_count` contract, not `octfunc`'s stateless
@@ -752,7 +759,7 @@ Like `OctFunc`, this block shares **one** persistent `octave-cli` subprocess wit
 other Octave-hosted block kind in the same run (spawned lazily, on first use) -- never a
 second process.
 
-#### Parameters
+**Parameters**
 - `path=<dir>` — the directory containing `<function>_*.m` (see the file table above).
   `"double-quote"` a path containing whitespace, same as `CScript`'s `lib=`.
 - `function=<name>` — required, no default; the base name every `<function>_<role>.m`
@@ -765,7 +772,7 @@ second process.
   exist in `path`'s own directory.
 - `xc_count=<usize>` — optional, default `0`.
 
-#### Errors
+**Errors**
 - `path`/`function`/`in` missing, or malformed `outputs=`/`xc_count=` — same generic/
   `xc_count` errors as [`BlockKind::CScript`].
 - A required `<function>_*.m` file missing from `path`'s own directory (per the file
@@ -784,14 +791,14 @@ second process.
   `dae_runtime::DaeError::OctBlockDoesNotSupportAdaptiveStep { block_name }`. Use a fixed
   `--dt`.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=octblock path=<dir> function=<name> (in=<signal> | inputs=<sig1,sig2,...>) \
      [outputs=<name1,name2,...>] [ts=<f64>|freq=<f64> [to=<f64>] | ts=variable] \
      [xc_count=<usize>]
 ```
 
-#### Example
+**Example**
 A stateful accumulator (`out = state + in`, state advances by `in` every step) verified
 end to end against the real CLI, `SRC=3` producing `G1=3,6,9,...` across successive
 steps:
@@ -822,7 +829,7 @@ $x_c(t) = 1 - e^{-t}$) — see `doc-verify/octblock/xc_example.cir`, mirroring
 **Purpose:** call a plain, stateless, named Octave-compatible function once per step.
 **Library:** Extensibility
 
-#### Description
+**Description**
 The `.m`-file counterpart to [`BlockKind::PyFunction`] above -- same genuinely separate,
 stateless contract (no `start`, no persistent state, no `t`/`dt` boilerplate), for
 people with legacy Octave-compatible `.m` scripts instead of Python. `function` (a
@@ -844,7 +851,7 @@ permissively-licensed project never links against GPLv3-licensed Octave code -- 
 `book/dev-guide/src/octave-blocks.md` for the full licensing rationale and the measured
 costs behind this design.
 
-#### Parameters
+**Parameters**
 - `path=<path>` — the `.m` file containing `function`; its own file name (minus `.m`)
   must equal `function`. `"double-quote"` a path containing whitespace, same as
   `CScript`'s `lib=`.
@@ -856,7 +863,7 @@ costs behind this design.
 - `ts=<f64>` / `freq=<f64>` / `to=<f64>` — optional, [`SampleTimeSpec::Periodic`] only;
   `ts=variable` is rejected (see Errors), for exactly the reason `PyFunction`'s own is.
 
-#### Errors
+**Errors**
 - `ts=variable` — rejected at parse time, the same wording `PyFunction` uses (a stateless
   function call has no instance to remember a requested next-hit time against): `ts=variable
   is not available for kind=octfunc (a stateless function call has no instance to remember
@@ -868,13 +875,13 @@ costs behind this design.
   `octave_ffi::OctaveError`'s own three cases: not-found, process-exited, and Octave-side
   runtime error), not at parse time.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=octfunc path=<file.m> function=<name> (in=<signal> | inputs=<sig1,sig2,...>) \
      [outputs=<name1,name2,...>] [ts=<f64> | freq=<f64> [to=<f64>]]
 ```
 
-#### Example
+**Example**
 Verified end to end against the real CLI (no special feature flag needed -- unlike
 `kind=pyblock`/`kind=pyfunc`, this block builds and runs unconditionally), `SRC=3`
 producing `G1=4`:
@@ -897,7 +904,7 @@ separately -- see `doc-verify/octfunc/example_two_inputs.cir`.
 Python-hosted counterpart to [`BlockKind::CScript`].
 **Library:** Extensibility
 
-#### Description
+**Description**
 A dynamically-loaded, user-supplied Python block (see `pyblock_ffi`): an escape hatch
 to a full scripting language (including `numpy`/`scipy`) when the existing block
 library doesn't cover something. `path` is a `.py` file exporting `start`/`output` (or,
@@ -909,7 +916,7 @@ convention, the same solver-integrated-vs-hand-managed state split. See
 `general-simulator`'s own `book/dev-guide/src/python-blocks.md` for the full design and
 the measurements behind it.
 
-#### Parameters
+**Parameters**
 - `path=<path>` — the `.py` file exporting `start`/`output` (or the `xc` contract). Same
   whitespace-tokenization rule as `CScript`'s `lib=` — `"double-quote"` a path containing
   whitespace.
@@ -922,7 +929,7 @@ the measurements behind it.
   outright).
 - `xc_count=<usize>` — optional, default `0`.
 
-#### Errors
+**Errors**
 - **This block requires the CLI/library built with the `python` Cargo feature enabled**
   (`cargo build --features python`) — it is *not* on by default, since it needs a
   discoverable Python/`libpython` at build/link time and `kind=cscript` already covers
@@ -936,14 +943,14 @@ the measurements behind it.
   arity surfaces as a Python-traceback-bearing failure from `pyblock_ffi` itself at call
   time, not at parse time.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=pyblock path=<path> (in=<signal> | inputs=<sig1,sig2,...>) \
      [outputs=<name1,name2,...>] [ts=<f64>|freq=<f64> [to=<f64>] | ts=variable] \
      [xc_count=<usize>]
 ```
 
-#### Example
+**Example**
 A fixed-gain block computed in Python (`out = 2 * in`) — verified end to end against a
 `--features python` build of the CLI, `SRC=3` producing `G1=6`:
 ```text
@@ -967,7 +974,7 @@ $x_c(t) = 1 - e^{-t}$) — see `doc-verify/pyblock/xc_example.cir`.
 **Purpose:** call a plain, stateless, named Python function once per step.
 **Library:** Extensibility
 
-#### Description
+**Description**
 A genuinely separate contract from [`BlockKind::PyBlock`] above (not a mode of it): no
 `start`, no persistent `state`, no `t`/`dt` boilerplate, just `function` (a name inside
 `path`'s own `.py` file) called with each declared `inputs=` entry as its own
@@ -979,7 +986,7 @@ same zero-order-hold convention) — there is no `xc_count` here at all, since a
 stateless function has nothing for a continuous state to mean. See
 `pyblock_ffi::PyFunctionInstance`'s own module doc comment for the full contract.
 
-#### Parameters
+**Parameters**
 - `path=<path>` — the `.py` file containing `function`. `"double-quote"` a path
   containing whitespace, same as `CScript`'s `lib=`.
 - `function=<name>` — required, no default; the function called as `f(*inputs)`.
@@ -989,7 +996,7 @@ stateless function has nothing for a continuous state to mean. See
 - `ts=<f64>` / `freq=<f64>` / `to=<f64>` — optional, [`SampleTimeSpec::Periodic`] only;
   `ts=variable` is rejected (see Errors).
 
-#### Errors
+**Errors**
 - **Requires a `--features python` build** — see [`BlockKind::PyBlock`]'s own Errors
   section; identical `PythonSupportNotCompiledIn` failure.
 - `ts=variable` — rejected at parse time, verified directly: `ts=variable is not
@@ -1000,13 +1007,13 @@ stateless function has nothing for a continuous state to mean. See
 - A `.py` file missing `function`, raising an exception, or returning the wrong arity
   surfaces as a Python-traceback-bearing failure from `pyblock_ffi` at call time.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=pyfunc path=<path> function=<name> (in=<signal> | inputs=<sig1,sig2,...>) \
      [outputs=<name1,name2,...>] [ts=<f64> | freq=<f64> [to=<f64>]]
 ```
 
-#### Example
+**Example**
 Verified end to end against a `--features python` build, `SRC=3` producing `G1=4`:
 ```text
 SRC kind=const value=3
@@ -1027,32 +1034,32 @@ bundled into one list) is verified separately — see `doc-verify/pyfunc/example
 **Purpose:** a clocked up/down counter.
 **Library:** Logic
 
-#### Description
+**Description**
 Shares the same rising-edge-detection skeleton [`BlockKind::FlipFlop`] uses, generalized
 from a single bit to an integer count. `up_down`/`modulus`/`reset` are all optional:
 omitting `up_down` always increments; omitting `modulus` gives a free-running signed
 `i64` that wraps only at `i64`'s own bounds; omitting `reset` means no synchronous reset
 input at all.
 
-#### Parameters
+**Parameters**
 - `clk=<signal>` — the clock input, required.
 - `up_down=<signal>` — optional; if given, declares a direction input (counts down when
   its value thresholds true, up otherwise).
 - `modulus=<u32>` — optional; wraps the count into `[0, modulus)` if given.
 - `reset=<signal>` — optional; if given, declares a synchronous reset input.
 
-#### Errors
+**Errors**
 - `modulus=` present but not a non-negative integer — rejected at parse time: `field
   'modulus' is not a non-negative integer`.
 - `up_down=`/`reset=` declared (field present) but the signal itself malformed — the
   generic `missing field '<key>'`/parse-signal errors.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=counter clk=<signal> [up_down=<signal>] [modulus=<u32>] [reset=<signal>]
 ```
 
-#### Example
+**Example**
 A free-running up counter clocked by a repeating pulse train — verified end to end,
 `CNT1` increasing by exactly `1` at each detected clock rising edge:
 ```text
@@ -1065,13 +1072,13 @@ CNT1 kind=counter clk=CLK
 **Purpose:** an edge-triggered D/JK/T flip-flop.
 **Library:** Logic
 
-#### Description
+**Description**
 Unlike [`BlockKind::SrLatch`] above, the next-state rule only fires at a detected rising
 `clk` edge (`continuous_blocks::rising_edge`); the previous `clk` sample is held
 alongside the output `q` between edges, the bookkeeping a level-triggered latch doesn't
 need at all.
 
-#### Parameters
+**Parameters**
 - `kind=<dff|jkff|tff>` — which flip-flop.
 - `clk=<signal>` — the clock input, required for every kind.
 - `d=<signal>` — for `kind=dff` only: the data input.
@@ -1079,18 +1086,18 @@ need at all.
 - `j=<signal>`, `k=<signal>` — for `kind=jkff` only: both required.
 - `reset=<signal>` — optional; if given, declares a synchronous reset input.
 
-#### Errors
+**Errors**
 - The kind-specific data input (`d=`/`t=`/`j=`+`k=`) missing for its own kind — the
   generic `missing field '<key>'` error.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=dff clk=<signal> d=<signal> [reset=<signal>]
 NAME kind=tff clk=<signal> t=<signal> [reset=<signal>]
 NAME kind=jkff clk=<signal> j=<signal> k=<signal> [reset=<signal>]
 ```
 
-#### Example
+**Example**
 A D flip-flop, verified end to end: `Q1` only updates to `D`'s current value at a clock
 rising edge, not continuously:
 ```text
@@ -1104,7 +1111,7 @@ Q1 kind=dff clk=CLK d=D
 **Purpose:** a bang-bang/hysteresis-band comparator.
 **Library:** Logic
 
-#### Description
+**Description**
 Stays HIGH until the input drops below `low`, stays LOW until the input rises above
 `high` (see `continuous_blocks::Hysteresis`) — used for current-mode control when
 there's no fixed switching frequency to modulate a duty command onto (unlike `Pid`
@@ -1112,19 +1119,19 @@ feeding a [`BlockKind::Pwm`]). Its output is `1.0`/`0.0`, read directly by a
 [`GateBinding::Block`] rather than compared against a carrier. Deliberately not a
 `StateSpace`: the on/off memory is a genuine discrete latch, not a linear dynamic.
 
-#### Parameters
+**Parameters**
 - `high=<f64>`, `low=<f64>` — the two switching thresholds; must satisfy `low <= high`.
 - `in=<signal>` — the input signal (one input).
 
-#### Errors
+**Errors**
 - `low > high` — rejected at parse time: `invalid hysteresis (LowExceedsHigh)`.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=hysteresis high=<f64> low=<f64> in=<signal>
 ```
 
-#### Example
+**Example**
 A `[-1, 1]` band, verified end to end: a rising `Time`-driven ramp is LOW until crossing
 `1`, then HIGH:
 ```text
@@ -1138,7 +1145,7 @@ HYST1 kind=hysteresis high=1 low=-1 in=RAMP
 **Purpose:** a combinational digital logic gate.
 **Library:** Logic
 
-#### Description
+**Description**
 `and`/`or`/`xor`/`nand`/`nor`/`xnor` (N-input, `N >= 2`) or `not` (exactly 1 input) —
 see `continuous_blocks::LogicOp::call` for the exact reduction rule (`Xor`/`Xnor` use the
 standard N-input generalization: true iff an odd/even number of inputs are true, not
@@ -1148,22 +1155,22 @@ dedicated boolean `SignalValue` variant anywhere in this crate. Purely combinati
 no persistent state, recomputed fresh every step, the same as
 [`BlockKind::Sum`]/[`BlockKind::Gain`] already are.
 
-#### Parameters
+**Parameters**
 - `kind=<and|or|xor|nand|nor|xnor|not>` — which gate.
 - `inputs=<sig1,sig2,...>` — for every kind except `not`; at least 2 entries.
 - `in=<signal>` — for `kind=not` only; exactly 1 input.
 
-#### Errors
+**Errors**
 - `and`/`or`/`xor`/`nand`/`nor`/`xnor` with fewer than 2 `inputs=` entries — rejected at
   parse time: `kind=<name> needs at least 2 comma-separated inputs= entries (got <n>)`.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=<and|or|xor|nand|nor|xnor> inputs=<sig1,sig2,...>
 NAME kind=not in=<signal>
 ```
 
-#### Example
+**Example**
 A 2-input `and`, verified end to end (`1 and 0 = 0`, `1 and 1 = 1`):
 ```text
 A kind=const value=1
@@ -1176,7 +1183,7 @@ G1 kind=and inputs=A,B
 **Purpose:** a level-triggered set/reset latch.
 **Library:** Logic
 
-#### Description
+**Description**
 No clock — `set`/`reset` act every step, immediately. The one genuinely new state shape
 in this family (a single persisted `bool`, updated every step from whichever of
 `set`/`reset` is currently asserted — see `continuous_blocks::srlatch_next`):
@@ -1185,21 +1192,21 @@ in this family (a single persisted `bool`, updated every step from whichever of
 right default for this block's own motivating use case, a sticky fault latch — a fault
 occurring in the same step a reset is asserted should still latch, not silently clear.
 
-#### Parameters
+**Parameters**
 - `set=<signal>`, `reset=<signal>` — both required.
 - `priority=<set|reset>` — optional, defaults to `set`; which input wins when both are
   asserted simultaneously.
 
-#### Errors
+**Errors**
 - `priority=` present but not `set`/`reset` — rejected at parse time: `field 'priority'
   must be 'set' or 'reset' (got '<value>')`.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=srlatch set=<signal> reset=<signal> [priority=<set|reset>]
 ```
 
-#### Example
+**Example**
 A fault latch, verified end to end: `FAULT` pulses to `1` briefly then returns to `0`
 at `t=0.1`, but `LATCH1` stays `1` afterward (no separate reset asserted):
 ```text
@@ -1215,7 +1222,7 @@ LATCH1 kind=srlatch set=FAULT reset=CLEAR
 **Purpose:** a nonlinear permanent-magnet synchronous motor model.
 **Library:** Machines
 
-#### Description
+**Description**
 Genuinely nonlinear (bilinear speed/current coupling — see `continuous_blocks::Pmsm`),
 so like [`BlockKind::Vco`] it carries its own state and is integrated via its own
 `step()` (RK4) rather than compiled to a `StateSpace`. Three inputs, in order: `vd`,
@@ -1229,7 +1236,7 @@ directly). Starts at rest (`id = iq = omega_m = theta_e = 0`) — no initial-con
 override, matching every other dynamic block in this graph. Surface-mount motors have
 `l_d == l_q` (no reluctance torque term); interior-PM motors have `l_d != l_q`.
 
-#### Parameters
+**Parameters**
 - `r_s=<f64>` — stator resistance, Ω; must be `>= 0`.
 - `l_d=<f64>`, `l_q=<f64>` — d/q-axis inductance, H; both must be `> 0`.
 - `lambda_pm=<f64>` — permanent-magnet flux linkage, Wb.
@@ -1240,20 +1247,20 @@ override, matching every other dynamic block in this graph. Surface-mount motors
 - `outputs=<id,iq,omega_m,theta_e>` — optional; defaults to `<name>,<name>_iq,
   <name>_omega_m,<name>_theta_e`.
 
-#### Errors
+**Errors**
 - `r_s < 0` — `invalid pmsm (NegativeResistance)`.
 - `l_d <= 0` or `l_q <= 0` — `invalid pmsm (NonPositiveInductance)`.
 - `pole_pairs <= 0` — `invalid pmsm (NonPositivePolePairs)`.
 - `inertia <= 0` — `invalid pmsm (NonPositiveInertia)`.
 - `friction < 0` — `invalid pmsm (NegativeFriction)`.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=pmsm r_s=<f64> l_d=<f64> l_q=<f64> lambda_pm=<f64> pole_pairs=<f64> \
      inertia=<f64> friction=<f64> inputs=<vd,vq,t_load> [outputs=<id,iq,omega_m,theta_e>]
 ```
 
-#### Example
+**Example**
 A small surface-mount motor at rest with zero applied voltage/load — verified to run
 without error and stay at rest (`id = iq = omega_m = 0`, no torque applied):
 ```text
@@ -1271,7 +1278,7 @@ M1 kind=pmsm r_s=0.5 l_d=1e-3 l_q=1e-3 lambda_pm=0.05 pole_pairs=4 inertia=1e-5 
 **Purpose:** fixed-frequency, duty-driven, active-high complementary PWM.
 **Library:** Power Electronics
 
-#### Description
+**Description**
 One input, `duty` (`[0,1]`, clamped, read fresh every step from anywhere in the graph —
 a `Pid`, a filtered `TransferFunction`, a plain `Const`...), fixed carrier frequency
 `freq_hz`. Two outputs, following the [`BlockKind::CScript`] `output_names` convention:
@@ -1282,7 +1289,7 @@ exact rising-edge-only-delay semantics and why `red=fed=0.0` recovers the ideal,
 gap-free, overlap-free pair exactly. Stateless: a pure function of `(t, duty)` every
 step, no internal oscillator.
 
-#### Parameters
+**Parameters**
 - `freq=<f64>` — fixed carrier frequency, Hz.
 - `in=<signal>` — the duty command, `[0,1]` (clamped internally; no error for a value
   outside that range).
@@ -1291,18 +1298,18 @@ step, no internal oscillator.
 - `outputs=<main,complement>` — optional; defaults to `<name>,<name>_comp`. Exactly 2
   entries if given.
 
-#### Errors
+**Errors**
 - `outputs=` with a count other than 2 — rejected at parse time: `'outputs' needs
   exactly 2 entries (main, complement; got <n>)`.
 - `red=`/`fed=` present but not a number — the generic `field '<key>' is not a number`
   error.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=pwm freq=<f64> in=<signal> [red=<f64>] [fed=<f64>] [outputs=<main,complement>]
 ```
 
-#### Example
+**Example**
 A 10 kHz, 30% duty modulator with no dead time — verified end to end: `PWM1` high
 (`>= 0.99`) for the first ~30% of each 100 µs period and its complement exactly
 inverted, `PWM1 + PWM1_comp == 1` at every sampled instant:
@@ -1317,7 +1324,7 @@ PWM1 kind=pwm freq=10000 in=DUTY
 internal oscillator.
 **Library:** Power Electronics
 
-#### Description
+**Description**
 This is *not* a variant of [`BlockKind::Vco`] — it owns its own frequency-integration
 state directly (`osc` reuses [`Vco`]'s own clamp-and-integrate math purely as an
 implementation detail, the same formula, not a shared block reference), so two instances
@@ -1330,7 +1337,7 @@ matters for a variable-frequency converter, since the same absolute dead time ea
 larger fraction of the period at higher switching frequency, a real effect on e.g. a
 resonant converter's own ZVS margin, not just bookkeeping.
 
-#### Parameters
+**Parameters**
 - `f_min=<f64>`, `f_max=<f64>` — the internal oscillator's frequency clamp range, Hz.
 - `inputs=<freq,phase,duty>` — exactly 3, in this order: `freq` (Hz, clamped internally
   to `[f_min, f_max]`), `phase` (`[0,1)`, a phase-shift command as a fraction of one
@@ -1340,20 +1347,20 @@ resonant converter's own ZVS margin, not just bookkeeping.
   phase fraction using the current resolved frequency.
 - `outputs=<main,complement>` — optional; defaults to `<name>,<name>_comp`.
 
-#### Errors
+**Errors**
 - `inputs=` with a count other than 3 — rejected at parse time: `kind='pspwm' needs 3
   inputs (freq,phase,duty; got <n>)`.
 - `f_min > f_max` — rejected at parse time: `invalid pspwm oscillator
   (FMinExceedsFMax)`.
 - `outputs=` with a count other than 2 — same error as [`BlockKind::Pwm`]'s own.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=pspwm f_min=<f64> f_max=<f64> inputs=<freq_signal,phase_signal,duty_signal> \
      [red=<f64>] [fed=<f64>] [outputs=<main,complement>]
 ```
 
-#### Example
+**Example**
 A 10 kHz, zero-phase-shift, 40% duty modulator — verified end to end: both outputs
 `[0,1]`-valued, `PSPWM1 + PSPWM1_comp == 1` at every sampled instant:
 ```text
@@ -1371,19 +1378,19 @@ PSPWM1 kind=pspwm f_min=1000 f_max=50000 inputs=FREQ,PHASE,DUTY
 time.
 **Library:** Sources
 
-#### Description
+**Description**
 A fixed value, independent of time: a scalar (`value=5`) or a fixed vector
 (`value=[1,2,3]`, a Python-list literal). No inputs, no state, nothing to evaluate per
 step. The vector form exists specifically to feed the vector-aware math blocks — a
 per-element offset into a vector `Sum`, or a matrix `Gain`'s input.
 
-#### Parameters
+**Parameters**
 - `value=<f64>` — a plain number (the scalar form).
 - `value=[x1,x2,...]` — a Python-style list literal (the vector form). Entries must be
   finite: `nan`/`inf` are rejected at parse time, since a NaN would otherwise silently
   propagate into downstream sorts/comparisons and panic the process.
 
-#### Errors
+**Errors**
 - `value=abc` (scalar not a number) — rejected at parse time:
   `field 'value' is not a number`.
 - `value=[1,x,3]` (vector entry not a number) — rejected at parse time:
@@ -1393,12 +1400,12 @@ per-element offset into a vector `Sum`, or a matrix `Gain`'s input.
 - A missing `value=` is the generic `missing field 'value'` error every `kind=` block
   shares — see [`BlockInstance`]'s own doc comment.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=const value=<f64> | value=[x1,x2,...]
 ```
 
-#### Example
+**Example**
 A scalar setpoint and a constant vector offset, unchanged at every step:
 ```text
 SETPOINT kind=const value=5
@@ -1411,7 +1418,7 @@ OFFSETS kind=const value=[1,2,3]
 reference schedules and step tests.
 **Library:** Sources
 
-#### Description
+**Description**
 A piecewise-**constant** function of time: the value is the last breakpoint's value at or
 before `t` (the first point's value before it, the last point's value forever after). Two
 points make a step test; more points make an arbitrary staircase schedule. With
@@ -1425,7 +1432,7 @@ semantics): this block is named `pwc` at the CLI level specifically to avoid the
 ambiguity a shared `pwl` name would create — `pwc` holds between breakpoints, `pwl`
 interpolates.
 
-#### Parameters
+**Parameters**
 - `points=[[t1,v1],[t2,v2],...]` — `(time, value)` breakpoints as a Python list of
   2-element lists. Sorted ascending by `t` at parse time, so declaration order doesn't
   matter.
@@ -1433,7 +1440,7 @@ interpolates.
   breakpoint span as above. Matched exactly: any other spelling (including `True`) means
   no repeat.
 
-#### Errors
+**Errors**
 - A `points=` entry that is not a 2-element `[x,y]` list — rejected at parse time:
   `field 'points': each entry must be a 2-element '[x,y]' list (got '[1.0]')`.
 - `points=abc` (not a Python list at all) — rejected at parse time:
@@ -1442,12 +1449,12 @@ interpolates.
 - A missing `points=` is the generic `missing field 'points'` error — see
   [`BlockInstance`]'s own doc comment.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=pwc points=[[t1,v1],[t2,v2],...] [repeat=true]
 ```
 
-#### Example
+**Example**
 A step test at `t = 0.001`, and a periodic square wave (period 0.001):
 ```text
 STEP kind=pwc points=[[0,0],[0.001,1]]
@@ -1460,7 +1467,7 @@ SQUARE kind=pwc points=[[0,0],[0.0005,1],[0.001,0]] repeat=true
 semantics in the signal domain.
 **Library:** Sources
 
-#### Description
+**Description**
 A piecewise-**linear** function of time: linear interpolation between breakpoints, held
 at the first/last point's value before/after the breakpoint range — exactly
 [`TransientFunction::Pwl`]'s own electrical-domain behavior, so the same breakpoint list
@@ -1472,7 +1479,7 @@ piecewise-linear waveform (a triangle/sawtooth reference, a repeating ramp) is o
 available here in the signal domain. Not the same interpolation as [`BlockKind::Pwc`]
 (piecewise-*constant*): `pwl` interpolates, `pwc` holds.
 
-#### Parameters
+**Parameters**
 - `points=[[t1,v1],[t2,v2],...]` — `(time, value)` breakpoints as a Python list of
   2-element lists. Sorted ascending by `t` at parse time, so declaration order doesn't
   matter.
@@ -1480,7 +1487,7 @@ available here in the signal domain. Not the same interpolation as [`BlockKind::
   breakpoint span as above. Matched exactly: any other spelling (including `True`) means
   no repeat.
 
-#### Errors
+**Errors**
 - A `points=` entry that is not a 2-element `[x,y]` list — rejected at parse time:
   `field 'points': each entry must be a 2-element '[x,y]' list (got '[1.0]')`.
 - `points=` not a Python list at all — rejected at parse time with the same
@@ -1489,12 +1496,12 @@ available here in the signal domain. Not the same interpolation as [`BlockKind::
 - A missing `points=` is the generic `missing field 'points'` error — see
   [`BlockInstance`]'s own doc comment.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=pwl points=[[t1,v1],[t2,v2],...] [repeat=true]
 ```
 
-#### Example
+**Example**
 A ramp to 1, and a periodic triangle (period 0.001):
 ```text
 RAMP kind=pwl points=[[0,0],[0.001,1]]
@@ -1506,26 +1513,26 @@ TRI kind=pwl points=[[0,0],[0.0005,1],[0.001,0]] repeat=true
 **Purpose:** the current simulated time as a signal — the block-diagram "clock" source.
 **Library:** Sources
 
-#### Description
+**Description**
 Outputs the current step's own simulated time in seconds. Takes no fields and no inputs.
 Its job is building genuine time-varying signals out of the stateless math blocks: there
 is otherwise no way for a block to see `t` directly (`pwc`/`pwl`/`waveform`'s own use of
 time is internal to those blocks alone). The standard `sin(2*pi*f*t)` recipe is
 `time -> gain(k=2*pi*f) -> sin` — see the Example.
 
-#### Parameters
+**Parameters**
 None — `kind=time` takes no fields at all.
 
-#### Errors
+**Errors**
 None — there is nothing component-specific to get wrong beyond the generic
 `unknown device kind` error for a misspelled kind.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=time
 ```
 
-#### Example
+**Example**
 A 1 kHz sine wave built entirely from ordinary blocks (`6283.185307179586` is
 `2*pi*1000`):
 ```text
@@ -1540,7 +1547,7 @@ S kind=sin in=G
 zero-input signal references.
 **Library:** Sources
 
-#### Description
+**Description**
 One of [`TransientFunction`]'s four non-`Pwl` variants, reused directly rather than
 reimplemented: `kind=sinwave`/`pulsewave`/`expwave`/`sffmwave` take the same field
 names, order and defaults as SPICE's `SIN()`/`PULSE()`/`EXP()`/`SFFM()` sources, so a
@@ -1552,7 +1559,7 @@ exponential, single-frequency FM). The fifth form, `PWL`, is its own block kind 
 ([`BlockKind::Pwl`]) — the only member of the family with the `repeat` option
 [`TransientFunction`] doesn't have.
 
-#### Parameters
+**Parameters**
 - `sinwave`: `va=<f64>` `freq=<f64>` required (amplitude; frequency in Hz). Optional:
   `v0=<f64>` (0), `td=<f64>` (0), `theta=<f64>` (0, exponential damping), `phase=<f64>`
   (0, degrees).
@@ -1567,13 +1574,13 @@ exponential, single-frequency FM). The fifth form, `PWL`, is its own block kind 
 - An *optional* field that is present but doesn't parse as a number **silently falls back
   to its default** — `td=abc` behaves exactly like an omitted `td`, with no error.
 
-#### Errors
+**Errors**
 - A required field missing (`sinwave` without `va`) — the generic `missing field 'va'`
   error (see [`BlockInstance`]'s own doc comment).
 - A required field not a number (`va=abc`) — rejected at parse time:
   `field 'va' is not a number`.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=sinwave    va=<f64> freq=<f64> [v0=<f64>] [td=<f64>] [theta=<f64>] [phase=<f64>]
 NAME kind=pulsewave  v1=<f64> v2=<f64> [td=<f64>] [tr=<f64>] [tf=<f64>] [pw=<f64>] [per=<f64>]
@@ -1581,7 +1588,7 @@ NAME kind=expwave    v1=<f64> v2=<f64> [td1=<f64>] [tau1=<f64>] [td2=<f64>] [tau
 NAME kind=sffmwave   va=<f64> fc=<f64> fs=<f64> [v0=<f64>] [mdi=<f64>]
 ```
 
-#### Example
+**Example**
 A 1 kHz sinusoid, a delayed 1 kHz square wave, an exponential rise/fall, and an
 unmodulated FM carrier, all as signal-domain references:
 ```text
@@ -1598,7 +1605,7 @@ FMREF kind=sffmwave v0=0 va=1 fc=1000 mdi=0 fs=100
 **Purpose:** scales its single input — a plain factor, or a full matrix-vector product.
 **Library:** Sources / Math operations
 
-#### Description
+**Description**
 `k` as a plain number (`Scalar`): `Scalar -> Scalar` (`k*x`), or `Vector(N) ->
 Vector(N)` (every element scaled by `k`, broadcast). `k` as a matrix (`[[...],[...]]`,
 an `M x N` matrix, row-major `matrix[row][col]`): requires a `Vector` input of length
@@ -1607,13 +1614,13 @@ block that changes a signal's length. A flat list (`k=[1,2,3]`) is not a valid `
 shape at all (unlike `Const`, `Gain`'s own value is never itself a vector) and is
 rejected at parse time.
 
-#### Parameters
+**Parameters**
 - `in=<signal>` — the single input.
 - `k=<f64>` — a plain scale factor.
 - `k=[[r1...],[r2...],...]` — an `M x N` matrix (Python-style nested list, row-major);
   the input must be a `Vector` of length `N`, the output is `Vector(M)`.
 
-#### Errors
+**Errors**
 - `k=[1,2,3]` (flat list) — rejected at parse time: `field 'k' must be a scalar (e.g.
   '2.0') or a matrix (e.g. '[[1,0],[0,1]]') -- got a flat list '[1,2,3]', which is not a
   valid Gain shape`.
@@ -1625,12 +1632,12 @@ rejected at parse time.
 - A missing `in=`/`k=` is the generic `missing field '<key>'` error — see
   [`BlockInstance`]'s own doc comment.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=gain in=<signal> k=<f64> | k=[[r1...],[r2...],...]
 ```
 
-#### Example
+**Example**
 A scalar gain and a 2x3 matrix gain fed by a length-3 vector:
 ```text
 IN kind=const value=2
@@ -1644,16 +1651,16 @@ M kind=gain in=V k=[[1,0,0],[0,1,0]]
 **Purpose:** multiplies all its inputs together.
 **Library:** Sources / Math operations
 
-#### Description
+**Description**
 The product $x_1 \cdot x_2 \cdot \dots$ of its inputs. Input-shape rule shared with
 `Sum`: all-`Scalar` inputs give a `Scalar`; otherwise every input must be a `Vector` of
 one common length `N`, multiplied elementwise to a `Vector(N)` — a mix of `Scalar` and
 `Vector` inputs is rejected rather than guessed at (see the Sum entry).
 
-#### Parameters
+**Parameters**
 - `inputs=<sig1,sig2,...>` — comma-separated input signals, one per factor.
 
-#### Errors
+**Errors**
 - Mixed `Scalar`/`Vector` inputs — rejected at evaluation time:
   `VectorSignalNotSupported { block: "<name>" }`.
 - `Vector` inputs of differing lengths — rejected at evaluation time:
@@ -1661,12 +1668,12 @@ one common length `N`, multiplied elementwise to a `Vector(N)` — a mix of `Sca
 - A missing `inputs=` is the generic `missing field 'inputs'` error — see
   [`BlockInstance`]'s own doc comment.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=product inputs=<sig1,sig2,...>
 ```
 
-#### Example
+**Example**
 ```text
 A kind=const value=2
 B kind=const value=3
@@ -1679,20 +1686,20 @@ P kind=product inputs=A,B,C
 **Purpose:** clamps its single input to a symmetric ±limit.
 **Library:** Sources / Math operations
 
-#### Description
+**Description**
 Clamps its input to `[-limit, limit]` (elementwise for a `Vector` input) — the
 block-diagram saturation/limiter. See `continuous_blocks::math_ops::saturation`'s own
 doc comment for why this is a plain direct evaluation rather than a PWL device: the
 active segment depends only on this block's own input, so there is no
 simultaneous-resolution problem the way there is for a diode's terminal voltage.
 
-#### Parameters
+**Parameters**
 - `in=<signal>` — the single input.
 - `limit=<f64>` — the symmetric bound. Must be non-negative — but this is **not** checked
   at parse time; a negative `limit` panics the process at the first evaluation (see
   Errors).
 
-#### Errors
+**Errors**
 - `limit=-1` — not a clean error: parse time never validates `limit`, so the evaluation
   code's own assert fires and the whole process panics with
   `limit must be nonnegative`. Keep `limit >= 0`.
@@ -1700,19 +1707,19 @@ simultaneous-resolution problem the way there is for a diode's terminal voltage.
   `missing field '<key>'`/`field '<key>' is not a number` error — see
   [`BlockInstance`]'s own doc comment.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=saturation in=<signal> limit=<f64>
 ```
 
-#### Example
+**Example**
 The time ramp (0..2 s) clamped to ±1 — passes through while `|x| <= 1`, holds 1 beyond:
 ```text
 X kind=time
 LIM kind=saturation in=X limit=1
 ```
 
-#### Implementation notes
+**Implementation notes**
 
 Clamps `u` to `[-limit, limit]`. Piecewise, like a PWL device, but evaluated directly here
 rather than through the LCP machinery: a saturation block's active segment depends only on
@@ -1725,7 +1732,7 @@ depends on the very unknowns the LCP is solving for).
 **Purpose:** weighted sum of its inputs, one sign per input — e.g. an error junction.
 **Library:** Sources / Math operations
 
-#### Description
+**Description**
 Computes $s_1 x_1 + s_2 x_2 + \dots$ with one sign per input (`+1.0`/`-1.0` for an
 error junction; any number is allowed, so a weighted average is the same block with
 fractional signs). Input-shape rule (shared with `Product`): all-`Scalar` inputs give a
@@ -1734,12 +1741,12 @@ elementwise to a `Vector(N)` — a mix of `Scalar` and `Vector` inputs is reject
 than guessed at (an N-input reduction has no unambiguous placement for a lone scalar
 once more than one vector is already present).
 
-#### Parameters
+**Parameters**
 - `inputs=<sig1,sig2,...>` — comma-separated input signals, one per term.
 - `signs=<s1,s2,...>` — one sign (any number) per input, comma-separated, exactly as many
   entries as `inputs` has.
 
-#### Errors
+**Errors**
 - `inputs` and `signs` counts differ — rejected at parse time:
   `'inputs' has 2 entries but 'signs' has 1 (need one sign per input)`.
 - A `signs` entry that is not a number — rejected at parse time:
@@ -1751,12 +1758,12 @@ once more than one vector is already present).
 - A missing `inputs=`/`signs=` is the generic `missing field '<key>'` error — see
   [`BlockInstance`]'s own doc comment.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=sum inputs=<sig1,sig2,...> signs=<s1,s2,...>
 ```
 
-#### Example
+**Example**
 An error junction (`A - B`) and an elementwise vector sum:
 ```text
 A kind=const value=3
@@ -1772,20 +1779,20 @@ VSUM kind=sum inputs=OA,OB signs=1,1
 **Purpose:** linear interpolation through a fixed `(x, y)` table.
 **Library:** Sources / Math operations
 
-#### Description
+**Description**
 A `table(x, a, b, c, d, ...)`-style lookup: linear interpolation through the fixed
 `(x, y)` breakpoints (elementwise for a `Vector` input), clamped — not extrapolated —
 outside the range, holding the nearest endpoint's `y`. Implemented by
 `continuous_blocks::waveform_arithmetic::table`.
 
-#### Parameters
+**Parameters**
 - `in=<signal>` — the single input (`x`).
 - `points=[[x1,y1],[x2,y2],...]` — the lookup table as a Python list of 2-element lists.
   Sorted ascending by `x` at parse time, so declaration order doesn't matter. Must have
   at least one point — but that is **not** checked at parse time; an empty list panics
   the process at the first evaluation (see Errors).
 
-#### Errors
+**Errors**
 - A `points=` entry that is not a 2-element `[x,y]` list — rejected at parse time:
   `field 'points': each entry must be a 2-element '[x,y]' list (got '[1.0]')`.
 - `points=[]` — not a clean error: parse time never rejects an empty list, so the
@@ -1794,12 +1801,12 @@ outside the range, holding the nearest endpoint's `y`. Implemented by
 - A missing `in=`/`points=` is the generic `missing field '<key>'` error — see
   [`BlockInstance`]'s own doc comment.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=table in=<signal> points=[[x1,y1],[x2,y2],...]
 ```
 
-#### Example
+**Example**
 A trapezoid profile (ramp up, flat, ramp down, held at 0) driven by the time ramp:
 ```text
 X kind=time
@@ -1812,7 +1819,7 @@ T kind=table in=X points=[[0,0],[1,10],[2,10],[3,0]]
 `min`/`max`, `anglewrap` — as a stateless block.
 **Library:** Sources / Math operations
 
-#### Description
+**Description**
 One entry for the whole binary family: every member is a pure two-argument function
 selected by its own `kind=` name, taking `in1=`/`in2=` in that order. Input-shape rule:
 two `Scalar`s give a `Scalar`; otherwise every `Vector` operand must share one length
@@ -1837,10 +1844,10 @@ angle-tracking half of a synchronous-reference-frame PLL (see
 `clarke_park`). It lives here rather than with the Clarke/Park transforms because it is
 single-output: an ordinary two-argument function like every other member.
 
-#### Parameters
+**Parameters**
 - `in1=<signal>` `in2=<signal>` — the two arguments, in formula order above.
 
-#### Errors
+**Errors**
 - A misspelled/unknown name — the same `unknown device kind '<name>'` error as the
   unary entry.
 - `Vector` operands of differing lengths — rejected at evaluation time:
@@ -1848,12 +1855,12 @@ single-output: an ordinary two-argument function like every other member.
 - A missing `in1=`/`in2=` is the generic `missing field '<key>'` error — see
   [`BlockInstance`]'s own doc comment.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=<fn> in1=<signal> in2=<signal>
 ```
 
-#### Example
+**Example**
 The textbook 3-4-5 triangle, and the same pair's `anglewrap` result (`atan2(4,3)` ~
 0.9273 rad):
 ```text
@@ -1869,7 +1876,7 @@ AW kind=anglewrap in1=X in2=Y
 functions.
 **Library:** Sources / Math operations
 
-#### Description
+**Description**
 One entry for the two three-argument functions — genuinely different semantics, but one
 shared input/error contract (documented at the type's own granularity). Both take
 `in1=`/`in2=`/`in3=` in the order below, and both use the binary entry's `Scalar`/
@@ -1883,23 +1890,23 @@ shared input/error contract (documented at the type's own granularity). Both tak
 `limit`'s bounds are not fixed at ±`limit` the way `kind=saturation`'s are — they are two
 ordinary inputs, so they can themselves come from elsewhere in the graph.
 
-#### Parameters
+**Parameters**
 - `in1=<signal>` `in2=<signal>` `in3=<signal>` — the three arguments, in formula order
   above.
 
-#### Errors
+**Errors**
 - A misspelled/unknown name — the same `unknown device kind '<name>'` error as the
   unary entry.
 - A missing `in1=`/`in2=`/`in3=` is the generic `missing field '<key>'` error — see
   [`BlockInstance`]'s own doc comment.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=if     in1=<signal> in2=<signal> in3=<signal>
 NAME kind=limit  in1=<signal> in2=<signal> in3=<signal>
 ```
 
-#### Example
+**Example**
 A select picking between two references, and a clamp of 5 to the span [0, 2]:
 ```text
 CND kind=const value=1
@@ -1912,7 +1919,7 @@ HI kind=const value=2
 L kind=limit in1=V in2=LO in3=HI
 ```
 
-#### Implementation notes
+**Implementation notes**
 
 Clamps `u` to `[-limit, limit]`. Piecewise, like a PWL device, but evaluated directly here
 rather than through the LCP machinery: a saturation block's active segment depends only on
@@ -1926,7 +1933,7 @@ depends on the very unknowns the LCP is solving for).
 rounding, sign, step — as a stateless block.
 **Library:** Sources / Math operations
 
-#### Description
+**Description**
 One entry for the whole unary family: every member is a pure `Scalar -> Scalar` function
 (elementwise `Vector -> Vector` for a `Vector` input), selected by its own `kind=` name,
 so they all share one input/error contract. Each name maps onto the same-named `f64`
@@ -1966,21 +1973,21 @@ doc comment.
 | `u` | $1$ if $x > 0$ else $0$ | unit step |
 | `uramp` | $x$ if $x > 0$ else $0$ | ramp that starts at the origin (Relu) |
 
-#### Parameters
+**Parameters**
 - `in=<signal>` — the single argument.
 
-#### Errors
+**Errors**
 - A misspelled/unknown name (`kind=cosx`) — rejected at parse time:
   `unknown device kind 'cosx'`.
 - A missing `in=` is the generic `missing field 'in'` error — see [`BlockInstance`]'s own
   doc comment.
 
-#### Netlist form
+**Netlist form**
 ```text
 NAME kind=<fn> in=<signal>
 ```
 
-#### Example
+**Example**
 `sin(2*pi*1000*t)` built from ordinary blocks, plus `cos`/`exp` and the elementwise
 vector form:
 ```text
