@@ -29,7 +29,7 @@ Line by line:
   that model actually is: a piecewise-linear ideal diode with reverse-breakdown conductance
   `g_breakdown` (0 here — no reverse breakdown modeled), the breakdown voltage `v_breakdown`,
   off-state conductance `g_off`, forward threshold `v_th`, and on-state conductance `g_on`. This
-  is what replaces SPICE's own `.model` card and its exponential `I = I_S(e^{V/V_T}-1)` — see the
+  is what replaces SPICE's own `.model` card and its exponential $I = I_S(e^{V/V_T}-1)$ — see the
   Introduction for why.
 - `R1 b c 100` / `C1 c 0 1e-3` — an ordinary resistor and capacitor, exactly as any SPICE tool
   reads them.

@@ -53,9 +53,9 @@ the same column's CSV value either way.
 
 ## Plotting it
 
-The worked examples in the sibling `internal-archive` repo's `experiments/` folders each
+The worked examples in an internal validation-experiment archive's experiment folders each
 include a `plot_*.py` script reading this CSV shape directly with Python's own `csv` module or
-`pandas.read_csv` (e.g. `experiments/elspice-pwl-pfc-three-phase-vsc/code/plot_stage1.py`) — a
+`pandas.read_csv` (e.g. the plotting script from an internal three-phase PFC experiment) — a
 concrete starting point rather than repeating a general Python/matplotlib tutorial here. A
 `--format raw` file plots the same way through any SPICE-rawfile-aware tool instead (`spicelib`'s
 own `RawRead.get_wave(name)`, or PySpice's `Spice.Xyce.RawFile.RawFile`, are the two this feature
@@ -65,5 +65,5 @@ was cross-validated against — see `tests/raw-output-python/`).
 - `crates/general-simulator-cli/src/main.rs`'s CSV-writing code and its comments on the
   `block_names`/extra-output-column logic.
 - `crates/general-simulator-cli/src/raw_format.rs`'s module doc comment.
-- Any `internal-archive` experiment's `plot_*.py` as a concrete worked example of
-  parsing the CSV (e.g. `experiments/elspice-pwl-pfc-three-phase-vsc/code/plot_stage1.py`).
+- Any internal validation experiment's `plot_*.py` as a concrete worked example of
+  parsing the CSV (e.g. the plotting script from an internal three-phase PFC experiment).

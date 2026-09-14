@@ -42,8 +42,8 @@ internal derivative-filter recursion, the Forward Euler/Backward Euler formulas 
 document's own automated conversion **swapped between the two headings** — individually well-
 formed, wrong association. Caught by cross-checking against the same page's own "only Backward
 Euler/Trapezoidal have direct feedthrough" note (inconsistent with the swapped assignment), then
-confirmed directly against the source PDF. See `internal-archive`'s own
-`gotchas/docling-reading-order-swaps-adjacent-subsections.md` for the full account. The formulas
+confirmed directly against the source PDF. See an internal gotcha note on PDF-to-Markdown
+ingestion swapping the reading order of adjacent subsections for the full account. The formulas
 below are the corrected, PDF-verified versions — and the correction is independently
 cross-checked twice more below (the derivative filter's own "always Forward Euler" requirement,
 and the `q(z)` formulas in the PID's own combined transfer function, both only make sense with
@@ -60,7 +60,7 @@ new shape.
 
 ## Category 2 — Discrete Transfer Function (`kind=discretetf`)
 
-`Y(z)/U(z) = (n_n z^n + ... + n_0) / (d_n z^n + ... + d_0)`, coefficients highest-degree first —
+$Y(z)/U(z) = (n_n z^n + \cdots + n_0) / (d_n z^n + \cdots + d_0)$, coefficients highest-degree first —
 same `num=`/`den=` fields as `kind=tf`, realized via the existing
 `TransferFunction::to_state_space()` (unchanged), evaluated via `discrete_step` the same way
 Category 1 is. Genuinely SISO, same as the continuous version (no matrix generalization for a

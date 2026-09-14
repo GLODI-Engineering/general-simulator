@@ -11,8 +11,8 @@ which needs "voltage limiting" to converge on exponential diode/transistor curve
 limiting works, but is inconsistent, path-dependent (hysteretic under backtracking), and
 incompatible with most modern nonlinear-solver enhancements — a known wart even by its own
 maintainers' account (see Sandia's own PCNR paper, Aadithya/Keiter/Mei 2020, which proposes a
-partial fix). Full background and the source documents are in the companion
-`internal-archive` repo, `explanations/xyce/`.
+partial fix). Full background and the source documents are kept in an internal reference
+archive maintained alongside this project.
 
 This project sidesteps the problem instead of patching it: every active device is modeled as
 piecewise-linear (a diode's three conduction segments, an ideal switch's controlled/natural
@@ -60,10 +60,10 @@ including bugs caught and fixed along the way):
   compilation into the same descriptor-DAE shape circuits use, standalone and verified.
 - `crates/general-simulator-cli` (binary `general-simulator`) — netlist-in/CSV-waveform-out runner.
 
-Open: validation against the Xyce/ngspice baselines already captured in the sibling
-`internal-archive` repo's `experiments/` folder, full converter benchmarks, and the
-smaller scope notes recorded in each milestone's own journal entry (per-instance ideal-switch `Ron`,
-non-diode-only transient variants, etc.).
+Open: validation against the Xyce/ngspice baselines already captured in an internal
+validation-experiment archive maintained alongside this project, full converter benchmarks, and
+the smaller scope notes recorded in each milestone's own journal entry (per-instance ideal-switch
+`Ron`, non-diode-only transient variants, etc.).
 
 ## Development
 

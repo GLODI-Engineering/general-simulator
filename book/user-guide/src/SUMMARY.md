@@ -43,5 +43,6 @@
 
 # Reference
 
+- [Validation against ngspice and Xyce](validation.md)
 - [Troubleshooting and gotchas](gotchas.md)
 - [FAQ](faq.md)

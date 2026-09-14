@@ -34,8 +34,8 @@ this project's own permissively-licensed binaries would risk pulling them under 
 crate never links against any Octave C/C++ library, and has no Octave crate/library as a
 build-time dependency at all** — the only integration is spawning the separately installed
 `octave-cli` *binary* as a subprocess. This is "mere aggregation" under GPL, not linking — the
-same reasoning that lets tools shell out to `ffmpeg`/`gs` without inheriting their license (this
-workspace's own `internal-archive/gotchas/ngspice-xspice-codemodel-needs-mfbinit-env.md`
+same reasoning that lets tools shell out to `ffmpeg`/`gs` without inheriting their license (an
+internal gotcha note on the ngspice XSPICE codemodel needing `MFBINIT` set in its environment
 records an analogous already-used external-tool pattern, for a different reason).
 
 This decides the crate's own shape as much as the protocol does: `octave-ffi`, unlike

@@ -107,8 +107,8 @@ The Δt-weighted (trapezoidal, exact-quadrature for `rms`) mean / root-mean-squa
 integral of `out` over the window — never a plain `sum(values)/count`, which would silently
 misweight a variable-timestep trace's own unequal step sizes. Same fields/errors as `max`.
 
-**Worked example** (`ramp.cir`, `RAMP(t)=2t` over `[0,10]`, hand-derived): `avg=10`,
-`rms=sqrt(400/3)≈11.547`, `integ=100` — the CLI returns `10.00999999999983`,
+**Worked example** (`ramp.cir`, $\mathrm{RAMP}(t)=2t$ over $[0,10]$, hand-derived): `avg=10`,
+rms $= \sqrt{400/3} \approx 11.547$, `integ=100` — the CLI returns `10.00999999999983`,
 `11.55278321444644`, `99.99989999999661` respectively (the ~0.01 offset from the exact values is
 the trace's own first-row-is-`t=dt`-not-`t=0` behavior, see [Reading the
 output](reading-output.md)).

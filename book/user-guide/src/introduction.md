@@ -12,9 +12,9 @@ within any *fixed* combination of active segments the whole circuit is exactly l
 segment each device is in, once per timestep, is resolved by solving a Linear Complementarity
 Problem (LCP) via Lemke's algorithm, the same rigorous mode-selection approach commercial
 power-electronics simulators use, instead of continuous Newton iteration on an exponential diode
-curve. The companion **Developer Guide**'s "Why not Newton-Raphson" chapter has the full
-argument, including where SPICE's own voltage limiting breaks down; this guide doesn't
-re-derive it.
+curve. The companion Developer Guide's ["Why not
+Newton-Raphson"](../dev-guide/architecture-overview.md) chapter has the full argument, including
+where SPICE's own voltage limiting breaks down; this guide doesn't re-derive it.
 
 ## Who this guide is for
 

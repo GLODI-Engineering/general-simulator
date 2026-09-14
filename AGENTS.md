@@ -57,8 +57,8 @@ Numerical agreement alone is not proof. For any new device model, LCP formulatio
 continuous block: derive the expected result independently (by hand, or from an
 independently-worked KCL/KVL/transfer-function derivation) and test that, not just internal
 self-consistency. Compare end-to-end transient results against the existing, previously
-validated Xyce runs already captured in the `internal-archive` sibling repo's
-`experiments/converters-benchmark-*` and `experiments/dab-*` folders wherever a matching
+validated Xyce runs already captured in an internal validation-experiment archive's
+converter-benchmark and dual-active-bridge (DAB) experiment folders wherever a matching
 topology exists — those are real baselines, not something to re-invent.
 
 ## Documentation
@@ -70,6 +70,21 @@ doc comment, is mandatory practice, not optional polish** — the skill's own "T
 and Errors against a real run" section covers exactly how (`doc-verify/<kind>/test_<kind>.py`,
 committed alongside the code it verifies, not scratch). A doc comment whose claims were never
 run is not a finished entry.
+
+### Math notation — golden rule, never break it
+
+**Every mathematical expression in any doc comment, book chapter, or markdown file in this repo
+is real LaTeX, using mdbook-katex's delimiters (`$...$` inline, `$$...$$` display) — never
+plain-text/ASCII notation (`A x + K dx/dt = B u`, `V(b) = 4.26`, `x^2`) written as bare prose,
+and never a formula placed inside a ```` ```text ```` code fence as a substitute for real math
+markup.** This applies even when the *source material* you're adapting from (a Rust doc
+comment, `docs/architecture.md`, a journal entry) itself uses plain-text notation — convert it
+to real LaTeX in whatever you write, don't carry the plain-text style forward. Don't use the
+`\LaTeX` text-mode macro inside math mode — it breaks the PDF build (`f89cfc3` fixed this exact
+bug once already; use plain text like "real math notation" outside `$...$` instead of the
+macro). After writing or editing anything with math in it, rebuild the relevant book
+(`mdbook build book/user-guide/` / `book/dev-guide/`) to confirm KaTeX actually renders it, and
+grep back through what you wrote for any bare expression you missed before calling it done.
 
 ## Journal and gotchas
 

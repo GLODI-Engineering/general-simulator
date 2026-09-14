@@ -9,14 +9,13 @@ J(x_k) Δx = -g(x_k)
 x_{k+1} = x_k + Δx
 ```
 
-Device equations like a diode's `I = I_S(e^{V/V_T} - 1)` make this converge poorly unless the
+Device equations like a diode's $I = I_S(e^{V/V_T} - 1)$ make this converge poorly unless the
 per-iteration change in `V` is clamped — "voltage limiting." Limiting works but breaks the
 clean `g(x) = 0` abstraction: `g` and its Jacobian become functions of iteration history, not
 just `x`, which makes the technique inconsistent between devices sharing a node and
 incompatible with most modern nonlinear-solver enhancements. This is documented in detail,
-against the primary Xyce source, in the sibling `internal-archive` repo:
-`explanations/xyce/newton-raphson-formulation.md` and
-`explanations/xyce/voltage-limiting-current-status.md`.
+against the primary Xyce source, in an internal write-up analyzing Xyce's Newton-Raphson
+formulation and its voltage-limiting behavior.
 
 This project's premise: if every device is piecewise-linear, the circuit is exactly linear
 *within* any fixed combination of active segments. So replace "iterate Newton on continuous
@@ -108,9 +107,8 @@ not an approximation. It also applies **two-sided conditional-integration anti-w
 against a caller-supplied output range: if a tentative controller step would push the output
 further past either saturation rail while the current error still drives it that way, the
 controller's state is frozen rather than advanced. This directly fixes a documented real
-failure mode: a Xyce/ngspice closed-loop boost-PI experiment in the sibling
-`internal-archive` repo (`experiments/converters-benchmark-boost-pid`,
-`gotchas/xyce-boost-pi-nonlinear-failure-integrator-windup.md`) used one-sided anti-windup and,
+failure mode: an internal Xyce/ngspice closed-loop boost-converter PI benchmark used
+one-sided anti-windup and,
 per that experiment's own conclusion, never actually achieved working regulation — the
 integrator wound down past recovery during startup overshoot, PWM floored at zero, and the
 converter stopped switching for the rest of the run, with the misleadingly-plausible final
@@ -187,7 +185,7 @@ whether a gate's block chain happens to read the circuit's own state back via
 telling in advance) — `elspice-pwl-cli`'s ordinary `--mode transient` resolves both the
 historically "open-loop" and "closed-loop" cases through this one function. See that crate's
 own module doc comment for the full device-file grammar and an LLC-converter example, and
-`internal-archive/experiments/elspice-pwl-llc-closed-loop-vs-xyce-ngspice/` for the
+an internal closed-loop LLC-converter benchmark comparing against Xyce and ngspice for the
 worked comparison this was built for.
 
 `crates/elspice-pwl-cli` (binary `elspice-pwl`) is a thin netlist-in/CSV-waveform-out runner
