@@ -1,6 +1,6 @@
 # Agent guidelines
 
-`elspice-pwl` is an educational Rust simulator for piecewise-linear (PWL) circuits and
+`general-simulator` is an educational Rust simulator for piecewise-linear (PWL) circuits and
 mixed circuit/block-diagram systems, designed to avoid Newton-Raphson + voltage limiting
 entirely by resolving which device segment is active, per timestep, as a Linear
 Complementarity Problem (LCP). See [`README.md`](README.md) and
@@ -15,13 +15,13 @@ Complementarity Problem (LCP). See [`README.md`](README.md) and
 
 ## Project boundaries
 
-- `spice-core` (from the sibling `spice-lsp` repo) and `elspice-mna` (sibling repo) are
+- `general-spice-core` (from the sibling `spice-lsp` repo) and `general-mna` (sibling repo) are
   read-only path dependencies. Do not edit those repositories unless the user explicitly
   expands the task to them. If a change there turns out to be genuinely necessary (see
-  `docs/architecture.md`'s note on the `elspice-mna` extension-point question), propose it
+  `docs/architecture.md`'s note on the `general-mna` extension-point question), propose it
   explicitly and get confirmation before editing that repo.
-- Keep netlist parsing in `spice-core`. Keep linear-device MNA stamping and Schur-complement
-  reduction in `elspice-mna`. This repo's job is exactly two things: (1) LCP-based mode
+- Keep netlist parsing in `general-spice-core`. Keep linear-device MNA stamping and Schur-complement
+  reduction in `general-mna`. This repo's job is exactly two things: (1) LCP-based mode
   selection for piecewise-linear devices, and (2) compiling continuous blocks
   (transfer-function/state-space/PID/...) into descriptor-DAE fragments. Do not duplicate
   work the sibling repos already do correctly.

@@ -1,14 +1,14 @@
 [book]
-title = "elspice-pwl User Guide"
+title = "general-simulator User Guide"
 description = "Educational piecewise-linear circuit and block-diagram simulator: netlist grammar, block library, and worked examples."
-authors = ["elspice-pwl contributors"]
+authors = ["general-simulator contributors"]
 language = "en"
 src = "src"
 
 [output.html]
-git-repository-url = "https://github.com/REPLACE_ME/elspice-pwl"
-edit-url-template = "https://github.com/REPLACE_ME/elspice-pwl/edit/main/book/user-guide/{path}"
-site-url = "/elspice-pwl/user-guide/"
+git-repository-url = "https://github.com/GLODI-Engineering/general-simulator"
+edit-url-template = "https://github.com/GLODI-Engineering/general-simulator/edit/main/book/user-guide/{path}"
+site-url = "/general-simulator/user-guide/"
 default-theme = "light"
 preferred-dark-theme = "navy"
 

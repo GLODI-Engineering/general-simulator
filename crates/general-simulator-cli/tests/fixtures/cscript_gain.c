@@ -1,5 +1,5 @@
 /* Test fixture: a stateless C block scaling its single input by 2, for
- * elspice-pwl-cli's kind=cscript regression test. No cscript_free/cscript_clone needed --
+ * general-simulator-cli's kind=cscript regression test. No cscript_free/cscript_clone needed --
  * confirms both stay genuinely optional at the CLI level too, not just inside cscript-ffi's
  * own unit tests. */
 

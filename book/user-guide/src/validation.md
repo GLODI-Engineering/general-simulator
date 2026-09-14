@@ -39,7 +39,7 @@ renderings, never illustrations.
 **What was compared**: the time-weighted (trapezoidal) average of `V(vout)` over the last 0.2 ms
 of a 2 ms transient run, computed identically from all three simulators' native output formats.
 
-**Result** (from the `elspice-pwl-buck-vs-xyce-ngspice` experiment):
+**Result** (from an internal buck-vs-Xyce/ngspice validation experiment):
 
 | Simulator | Method / device models | avg `V(vout)`, t = [1.8 ms, 2 ms] |
 |---|---|---|
@@ -82,7 +82,7 @@ reaches steady state within the simulated window, confirmed by visual inspection
 traces — this is reported as a same-shape transient comparison, not a settled-value one); the
 average `V(vout)` over the last 0.1 ms for the LLC case.
 
-**Result** (from the `elspice-pwl-boost-llc-vs-xyce-ngspice` experiment):
+**Result** (from an internal boost/LLC-vs-Xyce/ngspice validation experiment):
 
 Boost, open-loop:
 
@@ -130,7 +130,7 @@ to a reference, including a reference step partway through the run.
 setpoints, across a 2.8 million fixed-step run for `general-simulator` and an adaptive-step run
 for ngspice.
 
-**Result** (from the `elspice-pwl-llc-closed-loop-vs-xyce-ngspice` experiment):
+**Result** (from an internal closed-loop LLC-vs-Xyce/ngspice validation experiment):
 
 | Simulator | avg `V(vout)` @ [12,14) ms (ref = 20 V) | avg `V(vout)` @ [26,28) ms (ref = 17 V) |
 |---|---|---|

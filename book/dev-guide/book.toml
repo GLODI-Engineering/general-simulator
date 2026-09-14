@@ -1,14 +1,14 @@
 [book]
-title = "elspice-pwl Developer Guide"
-description = "Internals, math, and design rationale for elspice-pwl: the LCP/DAE formulation, integration schemes, block-graph causality, and switch modeling — for contributors and the curious."
-authors = ["elspice-pwl contributors"]
+title = "general-simulator Developer Guide"
+description = "Internals, math, and design rationale for general-simulator: the LCP/DAE formulation, integration schemes, block-graph causality, and switch modeling — for contributors and the curious."
+authors = ["general-simulator contributors"]
 language = "en"
 src = "src"
 
 [output.html]
-git-repository-url = "https://github.com/REPLACE_ME/elspice-pwl"
-edit-url-template = "https://github.com/REPLACE_ME/elspice-pwl/edit/main/book/dev-guide/{path}"
-site-url = "/elspice-pwl/dev-guide/"
+git-repository-url = "https://github.com/GLODI-Engineering/general-simulator"
+edit-url-template = "https://github.com/GLODI-Engineering/general-simulator/edit/main/book/dev-guide/{path}"
+site-url = "/general-simulator/dev-guide/"
 default-theme = "light"
 preferred-dark-theme = "navy"
 

@@ -45,7 +45,7 @@ concretely in Milestone 4 (see the repository's plan), not assumed here.
 
 ## One descriptor system for circuit and continuous blocks alike
 
-`elspice-mna` already produces circuits as the descriptor DAE
+`general-mna` already produces circuits as the descriptor DAE
 
 ```text
 A x(t) + K dx(t)/dt = B u(t)
@@ -57,15 +57,15 @@ saturation) is *also* naturally expressible in this exact shape:
 
 - A state-space block `dx/dt = Ax + Bu, y = Cx + Du` is a descriptor system with `K = I`.
 - A standard "Descriptor State-Space" block, `E dx/dt = Ax + Bu`, is textually identical
-  to `elspice-mna`'s convention with `K = E` — no translation needed at all.
+  to `general-mna`'s convention with `K = E` — no translation needed at all.
 - A transfer function `N(s)/D(s)` is realized once, via controllable canonical form, into
   `(A, B, C, D)`, then handled exactly like the state-space case.
 - Saturation/limiter blocks are piecewise, not smooth — modeled with the same
   segment-plus-guard machinery as PWL devices (`crates/pwl-devices`), not a second mechanism.
 
 So a block-diagram element is just **extra unknowns and extra rows** appended to the circuit's
-descriptor system, the same way `elspice-mna` already treats an independent source as an extra
-unknown/branch (see `elspice-mna`'s own `docs/architecture.md`, "Unknown ordering"). There is
+descriptor system, the same way `general-mna` already treats an independent source as an extra
+unknown/branch (see `general-mna`'s own `docs/architecture.md`, "Unknown ordering"). There is
 exactly one global linear(-in-mode) descriptor system assembled per timestep: circuit devices
 in their currently-resolved PWL segment, plus every continuous block. LCP mode selection only
 ever has to reason about the discrete PWL part; continuous blocks are always linear and never
@@ -93,7 +93,7 @@ trapezoidal otherwise. Verified by convergence order (halving `dt`, not comparin
 error magnitudes): backward Euler roughly halves error, trapezoidal roughly quarters it.
 
 `simulate_transient_with_ideal_switches` extends this to ideal switches with a caller-supplied time-varying
-gate signal (PWM), rebuilding the symbolic `elspice-mna` system every step (a gate transition
+gate signal (PWM), rebuilding the symbolic `general-mna` system every step (a gate transition
 is a structural stamp change, not just a numeric one) and forcing backward Euler on any step
 whose gate states differ from the previous step's, on top of the existing diode-segment-change
 fallback.
@@ -113,7 +113,7 @@ per that experiment's own conclusion, never actually achieved working regulation
 integrator wound down past recovery during startup overshoot, PWM floored at zero, and the
 converter stopped switching for the rest of the run, with the misleadingly-plausible final
 voltage reading being nothing more than the output capacitor discharging through the load.
-`elspice-pwl`'s two-sided version, at correctly-scaled gains, achieves real sustained
+`general-simulator`'s two-sided version, at correctly-scaled gains, achieves real sustained
 regulation on the identical circuit spec — see `crates/dae-runtime/tests/closed_loop_boost_anti_windup.rs`.
 
 `simulate_closed_loop` bakes in one fixed topology (a single `Pid` feeding a duty-modulated PWM
@@ -182,18 +182,18 @@ isn't checked.
 real circuit simulator has no such mode either (a transient analysis is a transient analysis;
 whether a gate's block chain happens to read the circuit's own state back via
 `Signal::Measure` is a property of how the netlist is wired, not something the tool needs
-telling in advance) — `elspice-pwl-cli`'s ordinary `--mode transient` resolves both the
+telling in advance) — `general-simulator-cli`'s ordinary `--mode transient` resolves both the
 historically "open-loop" and "closed-loop" cases through this one function. See that crate's
 own module doc comment for the full device-file grammar and an LLC-converter example, and
 an internal closed-loop LLC-converter benchmark comparing against Xyce and ngspice for the
 worked comparison this was built for.
 
-`crates/elspice-pwl-cli` (binary `elspice-pwl`) is a thin netlist-in/CSV-waveform-out runner
+`crates/general-simulator-cli` (binary `general-simulator`) is a thin netlist-in/CSV-waveform-out runner
 over `dae-runtime`'s public API, with a small hand-rolled device-params/block-graph format (no
 serde/TOML dependency for something this simple). **The netlist is the one file**: PWL device
 parameters and any controller block graph are written directly inside it, as ordinary SPICE
-comment lines (`*`-prefixed — `spice-core` enforces real SPICE grammar with no syntax for
-`kind=ideal_switch`/`kind=tf`/etc., so these can't be bare netlist lines) that only `elspice-pwl-cli`
+comment lines (`*`-prefixed — `general-spice-core` enforces real SPICE grammar with no syntax for
+`kind=ideal_switch`/`kind=tf`/etc., so these can't be bare netlist lines) that only `general-simulator-cli`
 additionally reads as device/block declarations; any other tool sees just comments. `--devices
 <file>` remains available for sharing one controller file across several netlists, but is the
 exception, not the default — splitting the controller into a second file by convention alone,
@@ -223,7 +223,7 @@ scattered through each milestone's own entry).
   history-free error estimate, and grow/shrink `dt` from there. `simulate_transient` and
   `simulate_transient_with_blocks` both support it (the latter's adaptive loop must redo block
   evaluation and gate resolution on every retry, not just re-solve, since its `system` is
-  itself a function of `dt` through the block graph); `elspice-pwl-cli` exposes it as
+  itself a function of `dt` through the block graph); `general-simulator-cli` exposes it as
   `--dt-max`/`--dt-min`/`--dt-init`/`--reltol`/`--abstol`, defaulted from `--tfinal` alone when
   `--dt` isn't given — adaptive is the default, not fixed, matching what a real `.tran` line
   does when only the run length is meaningfully specified. See `crates/dae-runtime/src/
@@ -245,7 +245,7 @@ matches an independently written direct piecewise formula at every segment and b
 first proof the whole approach reproduces a real circuit's answer with no Newton-Raphson
 anywhere.
 
-`crates/dae-runtime` (Milestone 3) closes the loop for diodes: `elspice-mna` was extended
+`crates/dae-runtime` (Milestone 3) closes the loop for diodes: `general-mna` was extended
 (sibling repo, commit `9d190db`) to stamp `'D'` elements as a fixed symbolic conductance plus a
 Norton current source, and `dae-runtime` folds any netlist's linear part plus any number of
 diodes into one LCP via a generic Thevenin-style reduction (fix every diode's conductance at
@@ -257,15 +257,15 @@ hand-typed `(M, q)` — see `crates/dae-runtime/tests/two_diode_via_netlist.rs`.
 
 `pwl_devices::IdealSwitch` (Milestone 4; renamed from `Mosfet` — see `docs/journal/` — because
 "MOSFET" is reserved for a future, not-yet-implemented BSIM-style device model) needed **no
-further `elspice-mna` changes**: a gated-on ideal switch is a plain bidirectional resistor
-(reuses `elspice-mna`'s existing switch mechanism), a gated-off ideal switch falls back to its
+further `general-mna` changes**: a gated-on ideal switch is a plain bidirectional resistor
+(reuses `general-mna`'s existing switch mechanism), a gated-off ideal switch falls back to its
 intrinsic body diode (reuses the `'D'` stamp and LCP fold unchanged, via
 `IdealSwitch::body_diode: IdealDiode`). Gate state is exogenous — decided by the caller per
 timestep, not resolved by the LCP — so `dae-runtime::solve_dc_with_ideal_switches` just routes
 each instance to whichever mechanism its current gate state calls for. Getting the body
 diode's polarity right reuses `IdealDiode` completely unchanged via a node-order convention
 (`(source, drain)`, not the datasheet `(drain, source)`) — see `IdealSwitch`'s doc comment.
-Ideal switches must use device letter `'D'` in netlist text (not `'M'`, which `spice-core`
+Ideal switches must use device letter `'D'` in netlist text (not `'M'`, which `general-spice-core`
 correctly enforces real 4-node SPICE grammar for).
 
 `crates/continuous-blocks` (Milestone 5) implements the transfer-function/state-space/PID/
@@ -285,8 +285,8 @@ verified against an algebraic circuit's exact DC answer at every step, a plain R
 an RC-through-a-diode circuit against a hand-derived closed-form solution combining both
 mechanisms, and directly by convergence order (backward Euler ~halves error as `dt` halves,
 trapezoidal ~quarters it). `simulate_transient_with_ideal_switches`, `simulate_closed_loop`, and
-`elspice-pwl-cli` (all described in "Timestep loop" above) closed every gap this paragraph
+`general-simulator-cli` (all described in "Timestep loop" above) closed every gap this paragraph
 used to note as still open — see the journal for the full account, including the two-sided
 anti-windup fix and the cross-simulator validation against Xyce/ngspice on buck, boost
 (open- and closed-loop), and LLC — rather than repeating it here.
-behind each of those scope choices. No `elspice-pwl-cli` yet.
+behind each of those scope choices. No `general-simulator-cli` yet.

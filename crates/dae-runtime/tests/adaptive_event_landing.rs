@@ -159,8 +159,8 @@ fn adaptive_step_lands_exactly_on_pwm_edges_no_missed_edges() {
         "ground-truth run's own MOD edge count should be exactly 2 per period"
     );
 
-    // The same dt_max levels (as a fraction of the switching period) that the sibling
-    // `elspice-pwl-ps-pwm-leg-modulator` experiment measured as 30/100, 45/100, and 57/100
+    // The same dt_max levels (as a fraction of the switching period) that an internal
+    // phase-shift-PWM modulator experiment measured as 30/100, 45/100, and 57/100
     // missed edges under the *old*, unclamped adaptive controller.
     for dt_max_frac in [0.48, 0.9, 3.0] {
         let dt_max = dt_max_frac * PERIOD;

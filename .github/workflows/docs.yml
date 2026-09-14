@@ -64,6 +64,7 @@ jobs:
           rm -rf public
           mkdir -p public
           cp book/index.html public/index.html
+          cp -r book/images public/images
           cp -r book/user-guide/book public/user-guide
           cp -r book/dev-guide/book public/dev-guide
           cp -r target/doc public/api

@@ -1,8 +1,8 @@
 //! `BlockKind::Sig2Phys` (`domain=voltage`/`domain=current`) — the enforced Signal-to-PS boundary
 //! for a block driving an independent source's own magnitude, closing the write-direction gap
 //! `BlockKind::Phys2Sig` alone leaves open (a block could previously only ever observe a circuit,
-//! never load or drive it — see `elspice-pwl-buck-dc-motor-cascade`'s own documented
-//! limitation). Verifies both the enforcement (a `V`/`I` source's bare-symbol literal must name
+//! never load or drive it — see an internal buck-converter/DC-motor-cascade experiment's own
+//! documented limitation). Verifies both the enforcement (a `V`/`I` source's bare-symbol literal must name
 //! a `Sig2Phys` converter of the matching domain, not any other block, `V` needs
 //! `domain=voltage`/`I` needs `domain=current`) and the actual numeric substitution, against
 //! exact hand-derived values: first

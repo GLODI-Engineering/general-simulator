@@ -1,6 +1,6 @@
 # Agent work journal
 
-Chronological continuity log for `elspice-pwl`. Read the newest month's top entry before
+Chronological continuity log for `general-simulator`. Read the newest month's top entry before
 continuing prior work.
 
 Entries live in `YYYY-MM.md`, newest first. Each entry records what was asked, what was found,

@@ -1,5 +1,5 @@
 /* Test fixture: a stateful counter (increments by 1 every actual cscript_output call,
- * ignoring its input entirely) for elspice-pwl-cli's kind=cscript sample-time regression
+ * ignoring its input entirely) for general-simulator-cli's kind=cscript sample-time regression
  * test -- the counter's own value directly reveals how many times it actually ran, so the
  * test can check the zero-order-hold sampling behavior without needing to inspect internal
  * dt/timing state. Exports cscript_clone so this fixture also covers the adaptive-step path. */
