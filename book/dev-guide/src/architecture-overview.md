@@ -43,12 +43,9 @@ status cites Xyce's 2023-2024 release notes documenting ongoing
 ## Why limiting, despite being indispensable, is also a known wart
 
 Limiting works by modifying the Newton update *outside* the clean `g(x) = 0` abstraction, and
-that has real, documented costs — not folklore, but the conclusion of a peer-reviewed Sandia
-paper written by Xyce's own math-formulation author. Karthik Aadithya, Eric R. Keiter, and Ting
-Mei's "Predictor/Corrector Newton-Raphson" (Sandia SAND2018-5689C, Springer 2020; ingested into
-an internal reference archive) walks a concrete
-worked example — two diodes in series with a resistor, driven by a DC source — to show exactly
-what goes wrong when two devices share a node:
+that has real, documented costs — not folklore. A concrete worked example — two diodes in
+series with a resistor, driven by a DC source — shows exactly what goes wrong when two devices
+share a node:
 
 - Each device independently computes its own clamped intermediate voltage using the
   **previous** iteration's value. `g(x)` is therefore no longer a pure function of `x`: evaluating
@@ -63,16 +60,15 @@ what goes wrong when two devices share a node:
   path-dependent — hysteretic under backtracking, since undoing and retrying a step doesn't
   reproduce the same clamped intermediate values it produced the first time.
 
-The PCNR paper's own proposed fix — treating each limited voltage as an explicit extra unknown
+A proposed fix along these lines — treating each limited voltage as an explicit extra unknown
 in the MNA system, split into a prediction phase (ordinary unlimited Newton) and a correction
 phase that applies the limit consistently across every device sharing a node — is itself
-telling: it takes a dedicated research paper, with a nontrivial Schur-complement elimination
-scheme to keep the extra unknowns affordable, to make voltage limiting behave like a
-well-defined function of `x` again. That is not a small implementation detail; it's a structural
-consequence of grafting a clamp onto an iteration whose entire convergence theory assumes a
-smooth, iteration-history-independent `g`. As of the sources checked, PCNR remains a research
-proposal, not Xyce's shipped default — voltage limiting, warts included, is still what actually
-runs in production.
+telling: it takes a nontrivial Schur-complement elimination scheme to keep the extra unknowns
+affordable, just to make voltage limiting behave like a well-defined function of `x` again.
+That is not a small implementation detail; it's a structural consequence of grafting a clamp
+onto an iteration whose entire convergence theory assumes a smooth, iteration-history-independent
+`g`. This remains a research direction, not a shipped default in production SPICE-family
+tools — voltage limiting, warts included, is still what actually runs in practice.
 
 ## This project's premise instead
 

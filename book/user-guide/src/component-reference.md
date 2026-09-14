@@ -72,11 +72,6 @@ A fixed-clamp PI (no derivative action) regulating an error signal `ERR` to `[-1
 PID1 kind=pid in=ERR kp=1 ki=0 kd=0 n=1 clamp_lo=-1 clamp_hi=1
 ```
 
-**References**
-- K. J. Åström, T. Hägglund, *PID Controllers: Theory, Design, and Tuning*, 2nd ed.,
-  Instrument Society of America, 1995 — filtered-derivative form and anti-windup by
-  conditional integration.
-
 **Implementation notes**
 
 Parallel PID with a filtered derivative term, using the standard `P, I, D, N` (filter
@@ -1727,6 +1722,12 @@ its own input, never on other unknowns it doesn't already know, so there is no
 simultaneous-resolution problem the way there is for a diode's terminal voltage (which
 depends on the very unknowns the LCP is solving for).
 
+The fixed, symmetric special case of [`crate::waveform_arithmetic::limit`] (`saturation(u,
+limit) == limit(u, -limit, limit)` for every `u`/nonnegative `limit`) — kept as its own
+block purely for netlist ergonomics (`limit=<f64>` is a plain literal; `kind=limit`'s three
+inputs are all wired signals, so expressing a fixed bound through it needs two extra
+`kind=const` blocks), not because the clamp itself needs a second implementation.
+
 ### Sum
 
 **Purpose:** weighted sum of its inputs, one sign per input — e.g. an error junction.
@@ -1926,6 +1927,12 @@ rather than through the LCP machinery: a saturation block's active segment depen
 its own input, never on other unknowns it doesn't already know, so there is no
 simultaneous-resolution problem the way there is for a diode's terminal voltage (which
 depends on the very unknowns the LCP is solving for).
+
+The fixed, symmetric special case of [`crate::waveform_arithmetic::limit`] (`saturation(u,
+limit) == limit(u, -limit, limit)` for every `u`/nonnegative `limit`) — kept as its own
+block purely for netlist ergonomics (`limit=<f64>` is a plain literal; `kind=limit`'s three
+inputs are all wired signals, so expressing a fixed bound through it needs two extra
+`kind=const` blocks), not because the clamp itself needs a second implementation.
 
 ### Waveform Arithmetic Functions (unary)
 
