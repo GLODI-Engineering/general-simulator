@@ -14,8 +14,15 @@
 #
 # Requires: pandoc, and a LaTeX engine (xelatex recommended -- handles Unicode in the source
 # prose better than pdflatex; this repo's own docs use real em/en dashes and non-ASCII
-# characters throughout). On Debian/Ubuntu: `sudo apt-get install -y pandoc texlive-xetex
-# texlive-latex-extra`.
+# characters throughout). Rendered with the DejaVu family (set via -V mainfont/sansfont/
+# monofont below) instead of xelatex's Latin Modern default, because Latin Modern is missing
+# glyphs this repo's docs actually use -- box-drawing characters in ASCII diagrams (crate-tour.md)
+# and Unicode math symbols in prose (>=, ~=, =>) -- which silently render as blank boxes
+# otherwise (xelatex only warns, it doesn't fail the build). On Debian/Ubuntu:
+# `sudo apt-get install -y pandoc texlive-xetex texlive-latex-extra fonts-dejavu`.
+# pdf-header.tex (below, via --include-in-header) needs the `seqsplit` and `fvextra` packages
+# to let long unbroken inline code (file paths, function names) and long code-block lines wrap
+# instead of overflowing the page margin -- both ship in texlive-latex-extra, no extra install.
 set -euo pipefail
 
 if [ $# -ne 1 ] || { [ "$1" != "user-guide" ] && [ "$1" != "dev-guide" ]; }; then
@@ -62,18 +69,36 @@ while IFS= read -r line; do
     fi
 done < "$summary"
 
+# Chapters reference images relative to their OWN directory (a top-level chapter uses
+# `images/foo.png`, an `examples/*.md` chapter uses `../images/foo.png`) -- but $combined lives
+# in a scratch dir, so pandoc can't resolve either as a literal relative path from there.
+# --resource-path is pandoc's search-path option for exactly this: each entry is tried in turn
+# as a base to resolve a relative image path against, so listing both $src_dir (resolves
+# `images/foo.png`) and every subdirectory (resolves `../images/foo.png`, since
+# `$src_dir/examples/../images/foo.png` = `$src_dir/images/foo.png`) covers every chapter depth
+# actually used without hand-listing directories.
+resource_path="$src_dir"
+while IFS= read -r -d '' subdir; do
+    resource_path="$resource_path:$subdir"
+done < <(find "$src_dir" -mindepth 1 -type d -print0)
+
 out_pdf="$script_dir/${book_name}.pdf"
 pandoc "$combined" \
     --from=markdown+smart \
     --pdf-engine=xelatex \
+    --resource-path="$resource_path" \
     --toc \
     --toc-depth=2 \
     --number-sections \
+    --include-in-header="$script_dir/pdf-header.tex" \
     -V title="$title" \
     -V geometry:margin=1in \
     -V colorlinks=true \
     -V linkcolor=blue \
     -V urlcolor=blue \
+    -V mainfont="DejaVu Serif" \
+    -V sansfont="DejaVu Sans" \
+    -V monofont="DejaVu Sans Mono" \
     -o "$out_pdf"
 
 echo "wrote $out_pdf"

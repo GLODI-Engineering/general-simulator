@@ -1,0 +1,27 @@
+% Included by build-pdf.sh via --include-in-header. Fixes long inline code spans (function
+% names, file paths like `crates/dae-runtime/src/block_graph.rs:2416`, CLI flags) overflowing
+% the page margin and rendering as invisible/clipped text -- plain `\texttt{}` has no
+% hyphenation points, so xelatex can't break a long unbroken identifier at all and just lets it
+% run off the page.
+%
+% Tried first: the `seqsplit` package (inserts break points throughout `\texttt{}` so long
+% spans CAN wrap). Abandoned -- it's a "fragile command" that crashes whenever a heading
+% containing inline code gets processed in hyperref's PDF-bookmark / TOC moving-argument
+% context (two different crash signatures hit during testing, `\pdfstringdefDisableCommands`
+% didn't fully resolve it either). Not worth chasing further for a book with ~50 chapters where
+% any of them could trigger it.
+%
+% What's used instead: shrink inline code to \small. This doesn't let a single pathologically
+% long identifier wrap mid-token, but it directly shrinks the width of every `\texttt{}` span,
+% which resolves the common case (a moderately long function name/path overflowing a line it's
+% embedded in) -- and it's a completely standard, robust LaTeX construct with no
+% moving-argument fragility.
+\let\oldtexttt\texttt
+\renewcommand{\texttt}[1]{\small\oldtexttt{#1}}
+\sloppy
+\emergencystretch=3em
+
+% Same overflow problem for fenced code blocks (```...``` -- the ASCII crate-dependency diagram,
+% multi-line netlist/CLI examples): let long lines wrap instead of running off the page.
+\usepackage{fvextra}
+\fvset{breaklines=true,breakanywhere=true}
