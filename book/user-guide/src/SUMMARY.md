@@ -24,6 +24,8 @@
 - [Coordinate transforms (Clarke/Park) and PLL](coordinate-transforms.md)
 - [The PMSM block](pmsm.md)
 - [The CScript escape hatch](cscript.md)
+- [The Python escape hatch](python-blocks.md)
+- [The Octave escape hatch](octave-blocks.md)
 
 # CLI reference
 
