@@ -10,9 +10,9 @@ two block kinds pull in optional ones only if you enable them:
 - `kind=pyblock`/`kind=pyfunc` (embedded Python via PyO3) needs the `python` Cargo feature:
   `cargo build --release --features python -p general-simulator-cli`. Without it, the plain
   build below still works — those two block kinds just aren't available.
-- `kind=octfunc`/`kind=octblock` (GNU Octave, via subprocess — never linked, deliberately, since
-  Octave is GPLv3 and this project is AGPL-3.0) needs `octave-cli` on `PATH` at *run* time, not build
-  time — no Cargo feature gates it.
+- `kind=octfunc`/`kind=octblock` (GNU Octave, via subprocess — never linked, keeping the
+  runtime Octave dependency fully decoupled) needs `octave-cli` on `PATH` at *run* time, not
+  build time — no Cargo feature gates it.
 
 ## Building
 
