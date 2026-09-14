@@ -35,10 +35,11 @@ jobs:
           cargo install mdbook --locked
           cargo install mdbook-katex --locked
 
-      - name: Install Pandoc and LaTeX (for PDFs)
+      - name: Install Pandoc, LaTeX (for PDFs), and DejaVu fonts
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends pandoc texlive-xetex texlive-latex-extra
+          sudo apt-get install -y --no-install-recommends \
+            pandoc texlive-xetex texlive-latex-extra fonts-dejavu
 
       - name: Build user guide (HTML)
         run: mdbook build book/user-guide
@@ -50,6 +51,9 @@ jobs:
         run: |
           book/build-pdf.sh user-guide
           book/build-pdf.sh dev-guide
+
+      - name: Generate llms.txt / llms-full.txt
+        run: python3 scripts/generate-llms-txt.py
 
       - name: Build API reference (cargo doc)
         run: cargo doc --workspace --no-deps
@@ -65,6 +69,9 @@ jobs:
           cp -r target/doc public/api
           cp book/user-guide.pdf public/user-guide.pdf
           cp book/dev-guide.pdf public/dev-guide.pdf
+          # llms.txt convention (https://llmstxt.org) expects these at the site root.
+          cp book/llms.txt public/llms.txt
+          cp book/llms-full.txt public/llms-full.txt
           # cargo doc has no index.html at the workspace root by default; redirect to a crate.
           if [ ! -f public/api/index.html ]; then
             printf '<meta http-equiv="refresh" content="0; url=dae_runtime/index.html">' \
