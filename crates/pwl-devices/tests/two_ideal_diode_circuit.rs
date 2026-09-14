@@ -1,8 +1,8 @@
 //! First end-to-end proof that PWL devices + `lcp-solver` reproduce a hand-derived circuit
 //! solution with no Newton-Raphson anywhere. Topology mirrors the illustrative circuit from
 //! the Sandia PCNR paper (Aadithya, Keiter, Mei 2020 — the same paper Xyce's own authors wrote
-//! about the problems with SPICE-style voltage limiting; see
-//! `internal-archive/explanations/xyce/voltage-limiting-current-status.md`), with its
+//! about the problems with SPICE-style voltage limiting; see an internal write-up on Xyce's
+//! voltage-limiting status), with its
 //! exponential diodes replaced by our PWL diodes:
 //!
 //! ```text

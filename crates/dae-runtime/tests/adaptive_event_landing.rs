@@ -1,5 +1,5 @@
-//! Regression test for the previously-demonstrated bug (see
-//! `internal-archive/experiments/elspice-pwl-ps-pwm-leg-modulator/`): under
+//! Regression test for the previously-demonstrated bug (see an internal phase-shift-PWM
+//! modulator experiment): under
 //! `TimeStep::Adaptive`, once `dt_max` approaches or exceeds a `PhaseShiftPwm` modulator's own
 //! switching period, real gate edges were **silently missed** (not just jittered) — the adaptive
 //! controller had zero awareness of any block's "when do I next change" information, only ever

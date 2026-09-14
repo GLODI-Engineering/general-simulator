@@ -30,7 +30,7 @@ fn run(args: &[&str]) -> std::process::Output {
 /// nothing else in the real circuit -- purely so `--mode transient` selects the block-graph-
 /// enabled solver path (gated on at least one declared ideal switch; none of these netlists have a
 /// real one). See `general-simulator-cli`'s own `cscript.rs` test for the general convention, and
-/// `regulators.cir` (`internal-archive` repo) for this exact isolated-dummy variant.
+/// `regulators.cir` (an internal experiment) for this exact isolated-dummy variant.
 const DUMMY_IDEAL_SWITCH: &str = "DDUMMY dummy_a dummy_b idealswitchmodel\n\
      DOFFVAL kind=const value=0\n\
      DOFFGATE kind=sig2phys domain=voltage in=DOFFVAL\n\

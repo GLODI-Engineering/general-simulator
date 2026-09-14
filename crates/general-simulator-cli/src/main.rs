@@ -120,8 +120,8 @@
 //!   text, exactly where a signal stops being "a number a controller computed" and starts being
 //!   a physical voltage, whether that voltage sources a node or gates a switch. This closes
 //!   a real, previously-open gap: without it, a block could only ever *observe* the circuit
-//!   (via `kind=phys2sig`), never load or drive it — see `elspice-pwl-buck-dc-motor-cascade` in the
-//!   sibling `internal-archive` repo for the concrete limitation this fixes.
+//!   (via `kind=phys2sig`), never load or drive it — see an internal buck-converter/DC-motor-cascade
+//!   experiment for the concrete limitation this fixes.
 //!   Those two are the *only* ways to consume a converter, and both are by **name**: a
 //!   `kind=sig2phys` block has no terminals and stamps nothing, so it can never be *wired* into
 //!   the netlist. Using its name as a node on an element line (`R1 VDRV 0 1k`) used to build and
@@ -293,9 +293,8 @@
 //! operating point has no notion of the time-stepped state a `Pid`/`Vco`/`Pwm`/`PhaseShiftPwm`
 //! block carries, so any netlist with an ideal switch needs `--mode transient`.
 //!
-//! See `internal-archive/experiments/elspice-pwl-llc-closed-loop-vs-xyce-ngspice/`
-//! and `experiments/elspice-pwl-buck-underdamped-resonance-filter/` for full worked examples
-//! this syntax was built for.
+//! See internal closed-loop LLC-vs-Xyce/ngspice and buck underdamped-resonance-filter
+//! experiments for full worked examples this syntax was built for.
 
 mod measure;
 mod raw_format;
@@ -737,8 +736,8 @@ fn write_raw_file(
 /// way `run_transient_with_ideal_switches` — this function's predecessor, removed — used to).
 /// This is the fix for a real incident: a single run of a large, numerically stiff circuit drove
 /// this project's own development machine to ~11GB RSS / 24GB swap before being killed, entirely
-/// because of that old function's full-`Vec` buffering (see `internal-archive`'s
-/// `elspice-pwl-tida-pi-pr-modulator-comparison` experiment for the incident write-up).
+/// because of that old function's full-`Vec` buffering (see an internal PI/PR
+/// modulator-comparison experiment for the incident write-up).
 ///
 /// The one thing that still needs *some* history kept in memory is `kind=measure` — a
 /// measurement needs the whole time series of whichever signal(s) it names, not just the latest

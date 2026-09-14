@@ -3,8 +3,8 @@
 //! loaded, stateful escape hatch for block behavior no existing `continuous-blocks` block
 //! covers, the same role a code-generation/scripting slot plays in other block-diagram
 //! simulation tools' own extensibility mechanisms, or an `ngspice` XSPICE codemodel `.cm`
-//! plugin (see this workspace's own `internal-archive/gotchas/
-//! ngspice-xspice-codemodel-needs-mfbinit-env.md` for that already-used pattern).
+//! plugin (see an internal gotcha note on ngspice XSPICE codemodels needing `MFBINIT` set in
+//! the environment, for that already-used pattern).
 //!
 //! **This crate is the one place in this workspace where calling into arbitrary native code is
 //! deliberately allowed.** Loading a shared library and calling into it is unsafe by

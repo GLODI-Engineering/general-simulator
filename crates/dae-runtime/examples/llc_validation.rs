@@ -1,17 +1,16 @@
 //! Open-loop LLC resonant converter (400V bus, half-bridge, series resonant tank, coupled-
-//! inductor transformer, full-wave rectified output) -- the same specification as
-//! `internal-archive`'s `experiments/converters-benchmark-open-loop-topologies`
-//! (`code/llc/`), used as a cross-simulator validation and timing comparison against ngspice
-//! and Xyce on the hardest topology in that experiment (two switches, a resonant tank near
-//! the switching frequency, and a coupled-inductor transformer via `general-mna`'s `K` stamp
-//! -- not just a single ideal switch and diode like the buck/boost cases). An example, not a `#[test]`
+//! inductor transformer, full-wave rectified output) -- the same specification as an internal
+//! open-loop-topologies benchmark (`code/llc/`), used as a cross-simulator validation and
+//! timing comparison against ngspice and Xyce on the hardest topology in that benchmark (two
+//! switches, a resonant tank near the switching frequency, and a coupled-inductor transformer
+//! via `general-mna`'s `K` stamp -- not just a single ideal switch and diode like the
+//! buck/boost cases). An example, not a `#[test]`
 //! fixture: unlike buck/boost, there is no simple hand-derivable closed-form target for an
 //! LLC resonant converter's steady-state output, so this is exploratory validation against
 //! the other simulators' numbers, not a pass/fail assertion.
 //!
-//! Result recorded when this was last run (see
-//! `internal-archive/experiments/elspice-pwl-boost-llc-vs-xyce-ngspice/README.md`
-//! for the full writeup): avg `Vout` (last 90% of the run) = 33.70V, a ~6.3% spread against
+//! Result recorded when this was last run (see an internal boost/LLC-vs-Xyce/ngspice
+//! validation experiment's own writeup for the full account): avg `Vout` (last 90% of the run) = 33.70V, a ~6.3% spread against
 //! ngspice/Xyce's own (tightly mutually agreeing, <0.03% apart) ~31.69V, down from ~8.7% before
 //! the fix below. The fix resolves the dead-time spike itself; the remaining spread is a
 //! separate, pre-existing parameter-fitting gap (see this file's PWL device comments below and
@@ -142,8 +141,8 @@ fn main() {
         / tail.len() as f64;
     println!("avg Vout (last 90%): {avg_vout:.4}");
 
-    // CSV export (t, V(vout), V(vx)) for the cross-simulator waveform plot -- see
-    // internal-archive's experiments/elspice-pwl-boost-llc-vs-xyce-ngspice/README.md.
+    // CSV export (t, V(vout), V(vx)) for the cross-simulator waveform plot -- see the internal
+    // boost/LLC-vs-Xyce/ngspice validation experiment's own writeup.
     // Same `t,unknown1,unknown2,...` column convention as general-simulator-cli's own CSV output.
     let out_path = "llc_elspice_pwl_out.csv";
     let mut f = std::fs::File::create(out_path).unwrap();

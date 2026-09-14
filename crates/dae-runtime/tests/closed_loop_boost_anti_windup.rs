@@ -1,6 +1,6 @@
 //! A closed-loop boost converter (Vin=12V, Vref=24V, L=100uH, C=100uF, R=50 ohm, 100kHz) —
-//! the *same specification* as `internal-archive`'s
-//! `experiments/converters-benchmark-boost-pid`, whose own conclusion states the documented
+//! the *same specification* as an internal closed-loop boost-PI benchmark,
+//! whose own conclusion states the documented
 //! Xyce/ngspice attempt at this circuit never actually achieved working regulation: one-sided
 //! anti-windup let the integrator wind down past recovery during the startup overshoot, PWM
 //! duty floored at zero, and the converter stopped switching for the rest of the run — the

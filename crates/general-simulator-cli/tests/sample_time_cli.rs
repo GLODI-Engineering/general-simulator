@@ -138,8 +138,8 @@ fn ts_offset_delays_the_first_hit_without_changing_the_period() {
 fn ts_offset_omitted_reproduces_the_pre_existing_immediate_first_hit_behavior() {
     // No `to=` at all -- must behave exactly like it always did: due on the very first
     // evaluate_blocks call, not delayed by a full period. This is the mandatory backward-
-    // compatibility case: every `ts=`-only netlist in this workspace (and the sibling
-    // internal-archive repo) depends on this not changing.
+    // compatibility case: every `ts=`-only netlist in this workspace (and an internal sibling
+    // archive of validation netlists) depends on this not changing.
     let lib = compile_c_fixture("call_counter");
     let devices = format!(
         "SRC kind=const value=0\n\

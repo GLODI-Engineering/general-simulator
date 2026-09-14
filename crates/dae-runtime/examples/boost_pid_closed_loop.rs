@@ -2,8 +2,8 @@
 //! `crates/dae-runtime/tests/closed_loop_boost_anti_windup.rs` (see that file's doc comment
 //! for the full context: two-sided anti-windup vs. the documented Xyce/ngspice windup-collapse
 //! failure), run as an example instead of a test so its full transient trace can be exported
-//! for plotting. See
-//! `internal-archive/experiments/elspice-pwl-boost-llc-vs-xyce-ngspice/README.md`.
+//! for plotting. See the internal boost/LLC-vs-Xyce/ngspice validation experiment's own
+//! writeup.
 
 use std::collections::BTreeMap;
 use std::io::Write;

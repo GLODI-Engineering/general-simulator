@@ -1,7 +1,7 @@
 //! Wires a `continuous_blocks::StateSpace` controller (typically a compiled [`Pid`
 //! ](continuous_blocks::Pid)) into a closed loop around a circuit's ideal switch(s), replacing
-//! Xyce/SPICE's `tanh`-smoothed comparator workaround
-//! (`internal-archive`'s `gotchas/xyce-pid-timestep-collapse-needs-smooth-comparator.md`)
+//! Xyce/SPICE's `tanh`-smoothed comparator workaround (documented in an internal gotcha note
+//! on Xyce PID-timestep collapse needing a smoothed comparator)
 //! with an ordinary PWM comparator — no smoothing hack needed, since gate switching is just
 //! another LCP-resolved mode here, not a Newton-Raphson convergence hazard. See
 //! `docs/architecture.md`.
@@ -53,11 +53,10 @@ pub fn sawtooth_carrier(t: f64, freq_hz: f64) -> f64 {
 /// `lo` or `hi` while the current error is still driving it that direction, the controller's
 /// internal state is *not* advanced that step (frozen at its previous value) rather than
 /// integrating further into a saturation it may struggle to recover from. This directly
-/// addresses a documented real failure mode this project validated against: a Xyce/ngspice
-/// closed-loop boost-PI experiment
-/// (`internal-archive`'s `experiments/converters-benchmark-boost-pid/`,
-/// `gotchas/xyce-boost-pi-nonlinear-failure-integrator-windup.md`) used *one-sided*
-/// anti-windup and, per that experiment's own conclusion, never actually achieved working
+/// addresses a documented real failure mode this project validated against: an internal
+/// Xyce/ngspice closed-loop boost-PI benchmark (its own gotcha note on nonlinear
+/// integrator-windup failure) used *one-sided*
+/// anti-windup and, per that benchmark's own conclusion, never actually achieved working
 /// closed-loop regulation — the integrator wound down past the point of recovery during
 /// startup overshoot, the PWM output floored at zero, and the converter stopped switching for
 /// the rest of the run, with the misleadingly-plausible final voltage reading being nothing
