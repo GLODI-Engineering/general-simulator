@@ -64,9 +64,15 @@ pub fn complementary_pwm_with_deadtime(
 /// its own input, never on other unknowns it doesn't already know, so there is no
 /// simultaneous-resolution problem the way there is for a diode's terminal voltage (which
 /// depends on the very unknowns the LCP is solving for).
+///
+/// The fixed, symmetric special case of [`crate::waveform_arithmetic::limit`] (`saturation(u,
+/// limit) == limit(u, -limit, limit)` for every `u`/nonnegative `limit`) — kept as its own
+/// block purely for netlist ergonomics (`limit=<f64>` is a plain literal; `kind=limit`'s three
+/// inputs are all wired signals, so expressing a fixed bound through it needs two extra
+/// `kind=const` blocks), not because the clamp itself needs a second implementation.
 pub fn saturation(u: f64, limit: f64) -> f64 {
     assert!(limit >= 0.0, "limit must be nonnegative");
-    u.clamp(-limit, limit)
+    crate::waveform_arithmetic::limit(u, -limit, limit)
 }
 
 #[cfg(test)]

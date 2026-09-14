@@ -404,9 +404,11 @@ mod tests {
 
     #[test]
     fn limit_clamps_to_the_span_of_its_two_bounds_either_order() {
-        assert_eq!(limit(5.0, 0.0, 2.0), 2.0);
+        // Hand-derived: limit(x, lo, hi) = min(max(x, lo), hi) for lo <= hi.
+        assert_eq!(limit(5.0, 0.0, 3.0), 3.0); // clamp(5, 0, 3) == 3 (above hi)
+        assert_eq!(limit(-2.0, 0.0, 3.0), 0.0); // clamp(-2, 0, 3) == 0 (below lo)
+        assert_eq!(limit(1.0, 0.0, 3.0), 1.0); // clamp(1, 0, 3) == 1 (inside range)
         assert_eq!(limit(5.0, 2.0, 0.0), 2.0); // bounds given reversed
-        assert_eq!(limit(1.0, 0.0, 2.0), 1.0);
     }
 
     #[test]

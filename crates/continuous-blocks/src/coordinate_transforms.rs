@@ -55,28 +55,26 @@ pub fn park_inv(d: f64, q: f64, zero: f64, theta: f64) -> [f64; 3] {
     [alpha, beta, zero]
 }
 
-/// `(a, b, c, theta) -> (d, q, zero)` directly, equivalent to `park(clarke(a, b, c), theta)`
-/// (see `clarke_park_matches_clarke_then_park`) without the `alpha`/`beta` intermediate.
+/// `(a, b, c, theta) -> (d, q, zero)` — a convenience composition of [`clarke`] then [`park`],
+/// skipping the `alpha`/`beta` intermediate for the common case of going straight from a
+/// three-phase signal to its rotating-frame `d`/`q` value. Kept as its own function purely for
+/// netlist/call-site ergonomics (one call instead of wiring `Clarke` into `Park`) — calls
+/// through to `clarke`/`park` directly rather than re-deriving the trig, since a family exactly
+/// like this one (a combined transform hand-expanded separately from its two-step composition)
+/// is documented to have shipped with `d`/`q` swapped once already in the upstream library this
+/// crate's formulas were adapted from; there is exactly one real implementation of each
+/// direction now, not two that could silently drift apart.
 pub fn clarke_park(a: f64, b: f64, c: f64, theta: f64) -> [f64; 3] {
-    let d = TWO_THIRDS
-        * (a * theta.cos()
-            + b * (theta - 2.0 * PI / 3.0).cos()
-            + c * (theta + 2.0 * PI / 3.0).cos());
-    let q = -TWO_THIRDS
-        * (a * theta.sin()
-            + b * (theta - 2.0 * PI / 3.0).sin()
-            + c * (theta + 2.0 * PI / 3.0).sin());
-    let zero = (a + b + c) / 3.0;
-    [d, q, zero]
+    let [alpha, beta, zero] = clarke(a, b, c);
+    park(alpha, beta, zero, theta)
 }
 
-/// `(d, q, zero, theta) -> (a, b, c)` directly, equivalent to
-/// `clarke_inv(park_inv(d, q, zero, theta), theta)`. Exact inverse of [`clarke_park`].
+/// `(d, q, zero, theta) -> (a, b, c)` — the same convenience-composition treatment as
+/// [`clarke_park`], calling through to [`park_inv`] then [`clarke_inv`]. Exact inverse of
+/// [`clarke_park`].
 pub fn clarke_park_inv(d: f64, q: f64, zero: f64, theta: f64) -> [f64; 3] {
-    let a = d * theta.cos() - q * theta.sin() + zero;
-    let b = d * (theta - 2.0 * PI / 3.0).cos() - q * (theta - 2.0 * PI / 3.0).sin() + zero;
-    let c = d * (theta + 2.0 * PI / 3.0).cos() - q * (theta + 2.0 * PI / 3.0).sin() + zero;
-    [a, b, c]
+    let [alpha, beta, zero] = park_inv(d, q, zero, theta);
+    clarke_inv(alpha, beta, zero)
 }
 
 /// `(alpha, beta) -> theta`, wrapped to `[0, 2*pi)` — the angle-tracking half of a
