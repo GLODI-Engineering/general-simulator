@@ -82,6 +82,20 @@ while IFS= read -r -d '' subdir; do
     resource_path="$resource_path:$subdir"
 done < <(find "$src_dir" -mindepth 1 -type d -print0)
 
+# Logo on its own page right after the title page, before the table of contents --
+# --include-before-body inserts raw LaTeX there. Uses an absolute path (computed here, not
+# left to LaTeX's own file search) since xelatex's working directory when pandoc invokes it
+# isn't guaranteed to be $script_dir.
+titlepage="$work_dir/titlepage.tex"
+cat > "$titlepage" <<EOF
+\begin{titlepage}
+\centering
+\vspace*{\fill}
+\includegraphics[width=0.7\textwidth]{$script_dir/images/general-simulator-logo.png}
+\vspace*{\fill}
+\end{titlepage}
+EOF
+
 # A dense page (running text + a big table + prose packed right up against \textheight) left
 # essentially no gap between the last line of content and the page-number footer -- visually
 # read as the two overlapping. TeX's page-breaking always fills a page up to \textheight
@@ -104,6 +118,7 @@ pandoc "$combined" \
     --toc-depth=2 \
     --number-sections \
     --include-in-header="$script_dir/pdf-header.tex" \
+    --include-before-body="$titlepage" \
     -V title="$title" \
     -V geometry:margin=1in \
     -V geometry:bottom=1.4in \

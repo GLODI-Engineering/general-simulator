@@ -1,3 +1,10 @@
+% Needed for the title-page logo (--include-before-body, see build-pdf.sh). pandoc's own
+% template only auto-loads graphicx when it detects an image in the actual chapter content --
+% true for user-guide (real plots) but not dev-guide (no in-chapter images), so the
+% hand-injected titlepage's \includegraphics call failed there ("Undefined control sequence")
+% without this. Harmless to load twice if pandoc's own template also loads it (user-guide).
+\usepackage{graphicx}
+
 % Included by build-pdf.sh via --include-in-header. Fixes long inline code spans (function
 % names, file paths like `crates/dae-runtime/src/block_graph.rs:2416`, CLI flags) overflowing
 % the page margin and rendering as invisible/clipped text -- plain `\texttt{}` has no
