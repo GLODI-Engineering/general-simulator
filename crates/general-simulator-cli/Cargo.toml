@@ -1,9 +1,10 @@
 [package]
 name = "general-simulator-cli"
-version = "0.3.0"
+version = "0.3.1"
 description = "Thin runner for general-simulator: netlist + a small PWL-device params file in, a waveform CSV out."
 edition.workspace = true
 license.workspace = true
+readme = "README.md"
 publish.workspace = true
 repository.workspace = true
 homepage.workspace = true

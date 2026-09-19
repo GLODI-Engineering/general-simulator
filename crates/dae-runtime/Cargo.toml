@@ -1,9 +1,10 @@
 [package]
 name = "dae-runtime"
-version = "0.3.0"
+version = "0.3.1"
 description = "Assembles a circuit's linear MNA system (via general-mna) with PWL device segments (via pwl-devices) into one LCP, solves it (via lcp-solver), and reports the resolved DC operating point -- no Newton-Raphson."
 edition.workspace = true
 license.workspace = true
+readme = "README.md"
 publish.workspace = true
 repository.workspace = true
 homepage.workspace = true

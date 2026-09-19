@@ -1,9 +1,10 @@
 [package]
 name = "pwl-devices"
-version = "0.3.0"
+version = "0.3.1"
 description = "Piecewise-linear device companion models (ideal diode, ideal switch) in Chua-Lin canonical form, for LCP-based mode selection instead of Newton-Raphson + voltage limiting."
 edition.workspace = true
 license.workspace = true
+readme = "README.md"
 publish.workspace = true
 repository.workspace = true
 homepage.workspace = true
