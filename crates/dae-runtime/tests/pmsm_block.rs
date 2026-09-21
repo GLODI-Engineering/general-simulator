@@ -29,16 +29,19 @@ fn pmsm_block_matches_hand_derived_rl_circuit_when_decoupled() {
             name: "VD".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(vd)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "VQ".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(0.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "TLOAD".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(0.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "M1".to_string(),
@@ -56,6 +59,7 @@ fn pmsm_block_matches_hand_derived_rl_circuit_when_decoupled() {
                 Signal::Block("VQ".to_string()),
                 Signal::Block("TLOAD".to_string()),
             ],
+            ic: None,
         },
     ];
 

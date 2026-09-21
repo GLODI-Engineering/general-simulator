@@ -1,0 +1,5 @@
+* y0= starts the filter already settled. H(z) = (0.5z+0.25)/(z^2-0.5z) has H(1) = 1.5, so
+* y0=3 with the matching input u = 2 is a fixed point of the difference equation: exactly 3 at
+* every sample.
+SRC kind=const value=2
+DTF1 kind=discretetf num=[0.5,0.25] den=[1,-0.5,0] ts=0.1 in=SRC y0=3

@@ -1,0 +1,3 @@
+* With modulus=10 the count lives in 0..9 -- 10 is rejected.
+Z kind=const value=0
+CNT1 kind=counter clk=Z modulus=10 ic=10

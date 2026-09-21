@@ -47,5 +47,25 @@ def test_unpaired_dynamic_clamp_fields_are_rejected():
     assert "clamp_lo_in" in stderr and "clamp_hi_in" in stderr
 
 
+def test_ic_preloads_the_integrator():
+    """## Parameters / Example: ic=0.6 at zero error holds the output at 0.6."""
+    _, stdout, _ = _lib.run_transient(HERE / "ic_example.cir", tfinal=1, dt=0.1)
+    rows = _lib.parse_csv(stdout)
+    for row in rows:
+        assert abs(row["PID1"] - 0.6) < 1e-9, f"t={row['t']}: got {row['PID1']}"
+
+
+def test_ic_without_an_integrator_is_rejected():
+    """## Errors: ic= with ki=0."""
+    code, _, stderr = _lib.run_transient(
+        HERE / "error_ic_without_integrator.cir", tfinal=1, dt=0.1, expect_success=False
+    )
+    assert code != 0
+    assert (
+        "this PID has ki=0 -- there is no integrator to hold it"
+        in stderr
+    ), stderr
+
+
 if __name__ == "__main__":
     _lib.run_all(sys.modules[__name__])

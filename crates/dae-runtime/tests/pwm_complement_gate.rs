@@ -38,6 +38,7 @@ fn pwm_blocks(freq_hz: f64, red: f64, fed: f64) -> Vec<BlockInstance> {
             name: "DUTY".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(0.3)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "MOD".to_string(),
@@ -48,6 +49,7 @@ fn pwm_blocks(freq_hz: f64, red: f64, fed: f64) -> Vec<BlockInstance> {
                 output_names: vec!["MOD".to_string(), "MOD_COMP".to_string()],
             },
             inputs: vec![Signal::Block("DUTY".to_string())],
+            ic: None,
         },
         BlockInstance {
             name: "MOD_MAIN_GATE".to_string(),
@@ -57,6 +59,7 @@ fn pwm_blocks(freq_hz: f64, red: f64, fed: f64) -> Vec<BlockInstance> {
             // The primary output is always bound to the block's own name ("MOD"), not
             // output_names[0] -- see evaluate_blocks' own `outputs.insert(block.name...)`.
             inputs: vec![Signal::Block("MOD".to_string())],
+            ic: None,
         },
         BlockInstance {
             name: "MOD_COMP_GATE".to_string(),
@@ -64,6 +67,7 @@ fn pwm_blocks(freq_hz: f64, red: f64, fed: f64) -> Vec<BlockInstance> {
                 domain: PhysicalDomain::Voltage,
             },
             inputs: vec![Signal::Block("MOD_COMP".to_string())],
+            ic: None,
         },
     ]
 }

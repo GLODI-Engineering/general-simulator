@@ -1,0 +1,5 @@
+* The phase is measured in cycles, 0 <= ic < 1 -- 1 itself is out of range.
+FREQ kind=const value=1
+PHASE kind=const value=0
+DUTY kind=const value=0.5
+PSPWM1 kind=pspwm f_min=0.1 f_max=10 inputs=FREQ,PHASE,DUTY ic=1

@@ -279,6 +279,15 @@ pub enum DaeError {
     /// the later one win, so a `Signal::Block(name)` reference would silently resolve to the
     /// wrong block instead of failing loudly.
     DuplicateBlockName(String),
+    /// A hand-built [`block_graph::BlockInstance`] carries an `ic` whose length is not its
+    /// block's own state count. Unreachable from a netlist — `general-mna` checks the same thing
+    /// at parse time, with a line number — so this only guards callers that construct blocks
+    /// directly.
+    BlockInitialConditionLength {
+        block: String,
+        expected: usize,
+        got: usize,
+    },
     /// A [`block_graph::BlockKind`] that requires a `SignalValue::Scalar` input (or a specific
     /// operand shape, e.g. `Sum`/`Product`'s "all-scalar or all-vector, never mixed" rule, or a
     /// matrix `Gain`'s own required vector length) received a `SignalValue::Vector` it can't

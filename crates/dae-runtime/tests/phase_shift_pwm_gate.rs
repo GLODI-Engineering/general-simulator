@@ -39,16 +39,19 @@ fn phase_shift_pwm_gate_matches_hand_computed_switching_instants() {
             name: "FREQ".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(100_000.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "PHASE".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(0.25)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "DUTY".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(0.5)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "MOD".to_string(),
@@ -63,6 +66,7 @@ fn phase_shift_pwm_gate_matches_hand_computed_switching_instants() {
                 Signal::Block("PHASE".to_string()),
                 Signal::Block("DUTY".to_string()),
             ],
+            ic: None,
         },
         BlockInstance {
             name: "MOD_MAIN_GATE".to_string(),
@@ -72,6 +76,7 @@ fn phase_shift_pwm_gate_matches_hand_computed_switching_instants() {
             // The primary output is always bound to the block's own name ("MOD"), not
             // output_names[0] -- see evaluate_blocks' own `outputs.insert(block.name...)`.
             inputs: vec![Signal::Block("MOD".to_string())],
+            ic: None,
         },
     ];
 

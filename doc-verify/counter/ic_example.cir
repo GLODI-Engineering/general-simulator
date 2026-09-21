@@ -1,0 +1,3 @@
+* ic= is the initial count. The clock never rises, so the count holds its declared 7.
+Z kind=const value=0
+CNT1 kind=counter clk=Z modulus=10 ic=7

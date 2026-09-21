@@ -10,6 +10,8 @@ editing that doc comment.
   ($\dot{x}=-x+u$), `SRC=1` settling toward `SS1=1`.
 - `error_scalar_d_mimo.cir` — a bare scalar `d=0` on a genuinely MIMO (2-input, 1-output)
   system, rejected at parse time (the `## Errors` claim).
+- `ic_example.cir` — `ic=[1,0]` on an undriven oscillator: the output is $\cos t$.
+- `error_ic_wrong_length.cir` — `ic=` with the wrong number of entries, rejected at parse time.
 
 ## Running
 

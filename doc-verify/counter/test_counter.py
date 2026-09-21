@@ -30,5 +30,37 @@ def test_bad_modulus_is_rejected():
     assert "not a non-negative integer" in stderr
 
 
+def test_ic_is_the_initial_count():
+    """## Parameters / Example: ic=7 holds 7 with no clock edge."""
+    _, stdout, _ = _lib.run_transient(HERE / "ic_example.cir", tfinal=0.5, dt=0.1)
+    rows = _lib.parse_csv(stdout)
+    for row in rows:
+        assert row["CNT1"] == 7.0, row
+
+
+def test_a_non_integer_ic_is_rejected():
+    """## Errors: ic= must be an integer."""
+    code, _, stderr = _lib.run_transient(
+        HERE / "error_ic_not_an_integer.cir", tfinal=1, dt=0.1, expect_success=False
+    )
+    assert code != 0
+    assert (
+        "field 'ic' is not an integer"
+        in stderr
+    ), stderr
+
+
+def test_an_ic_outside_the_modulus_is_rejected():
+    """## Errors: with modulus=, 0 <= ic < modulus."""
+    code, _, stderr = _lib.run_transient(
+        HERE / "error_ic_outside_modulus.cir", tfinal=1, dt=0.1, expect_success=False
+    )
+    assert code != 0
+    assert (
+        "must satisfy 0 <= ic < modulus (10) (got 10)"
+        in stderr
+    ), stderr
+
+
 if __name__ == "__main__":
     _lib.run_all(sys.modules[__name__])

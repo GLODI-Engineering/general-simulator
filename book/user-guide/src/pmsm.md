@@ -35,9 +35,11 @@ it for you rather than leaving the caller to do it. `outputs=` defaults to
 `<name>,<name>_iq,<name>_omega_m,<name>_theta_e` if left unset, matching the
 `kind=clarke`-style convention (see [Coordinate transforms](coordinate-transforms.md)).
 
-The motor starts at rest — `id = iq = omega_m = theta_e = 0` — with no initial-condition
-override available (unlike the `ic=` mechanism on a `C`/`L` electrical element; see
-[Grammar overview](netlist-grammar.md)), matching every other dynamic block in the graph.
+The motor starts at rest — $i_d = i_q = \omega_m = \theta_e = 0$ — unless `ic=[id,iq,omega_m,theta_e]`
+says otherwise, the same `ic=` spelling every other stateful block and the `C`/`L` electrical
+elements use (see [Dynamic blocks](dynamic-blocks.md#ic-starting-a-block-somewhere-other-than-rest)).
+Starting a drive already spinning, `ic=[0,0,100,0]`, skips the mechanical run-up that otherwise
+dominates the run time of anything studying the electrical behaviour at speed.
 
 ## Surface-mount vs. interior-PM
 

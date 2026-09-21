@@ -1,0 +1,5 @@
+* ic= is the state vector of the controllable canonical realization. 1/(s+1) has one
+* state, x = y, so with u = 1 and x(0) = 0.5 the output is y(t) = 1 - 0.5*exp(-t): 0.5476 after
+* the first 0.1 s step, where a start from rest gives 0.0952.
+SRC kind=const value=1
+TF1 kind=tf num=[1] den=[1,1] in=SRC ic=[0.5]

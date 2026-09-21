@@ -1,0 +1,3 @@
+* ic= must have exactly one entry per state (deg(den) of them) -- two given, one state.
+SRC kind=const value=1
+TF1 kind=tf num=[1] den=[1,1] in=SRC ic=[1,2]

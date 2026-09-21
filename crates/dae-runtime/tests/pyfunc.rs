@@ -52,6 +52,7 @@ fn pyfunc_matches_the_hand_written_truth_table_for_a_fixed_phase() {
             name: "PHASE".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(90.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "AQCTLA".to_string(),
@@ -62,6 +63,7 @@ fn pyfunc_matches_the_hand_written_truth_table_for_a_fixed_phase() {
                 sample_time: None,
             },
             inputs: vec![Signal::Block("PHASE".to_string())],
+            ic: None,
         },
     ];
     let trace = run(&blocks, 1e-4, 1e-4);
@@ -85,6 +87,7 @@ fn pyfunc_respects_sample_time_zero_order_hold() {
             name: "PHASE".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(90.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "AQCTLA".to_string(),
@@ -98,6 +101,7 @@ fn pyfunc_respects_sample_time_zero_order_hold() {
                 }),
             },
             inputs: vec![Signal::Block("PHASE".to_string())],
+            ic: None,
         },
     ];
     let dt = 1e-4;

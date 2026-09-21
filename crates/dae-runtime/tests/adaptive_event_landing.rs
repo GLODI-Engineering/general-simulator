@@ -48,16 +48,19 @@ fn blocks() -> Vec<BlockInstance> {
             name: "FREQ".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(FSW)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "PHASE".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(0.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "DUTY".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(DUTY)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "MOD".to_string(),
@@ -72,6 +75,7 @@ fn blocks() -> Vec<BlockInstance> {
                 Signal::Block("PHASE".to_string()),
                 Signal::Block("DUTY".to_string()),
             ],
+            ic: None,
         },
         BlockInstance {
             name: "MOD_MAIN_GATE".to_string(),
@@ -79,6 +83,7 @@ fn blocks() -> Vec<BlockInstance> {
                 domain: PhysicalDomain::Voltage,
             },
             inputs: vec![Signal::Block("MOD".to_string())],
+            ic: None,
         },
     ]
 }

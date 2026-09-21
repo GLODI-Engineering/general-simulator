@@ -1,0 +1,4 @@
+* A gain has no state: an ic= on it is rejected rather than silently dropped (the generic
+* rule documented once on BlockInstance, verified here on one representative stateless kind).
+SRC kind=const value=1
+G1 kind=gain in=SRC k=2 ic=1

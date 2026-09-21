@@ -16,6 +16,8 @@ real run" section for why this is mandatory, not optional.
 - `error_unpaired_dynamic_clamp.cir` — `clamp_lo_in` given without `clamp_hi_in` (the `Errors`
   section's clamp-pairing claim). Expected to fail with the `'clamp_lo_in'/'clamp_hi_in' must
   both be given together...` message.
+- `ic_example.cir` — `ic=0.6` with zero error: the output holds $0.6$.
+- `error_ic_without_integrator.cir` — `ic=` with `ki=0`, rejected at parse time.
 
 ## Running
 

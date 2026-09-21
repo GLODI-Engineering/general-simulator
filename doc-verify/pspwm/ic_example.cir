@@ -1,0 +1,7 @@
+* ic= is the carrier's initial phase in cycles. At 1 Hz and 50 % duty the main output is high
+* while the phase is below 0.5. Started at 0.75 the phase reads 0.85, 0.95, 0.05, 0.15, 0.25 over
+* the first five 0.1 s steps, so the output is 0, 0, 1, 1, 1 -- from rest it is 1, 1, 1, 1, 0.
+FREQ kind=const value=1
+PHASE kind=const value=0
+DUTY kind=const value=0.5
+PSPWM1 kind=pspwm f_min=0.1 f_max=10 inputs=FREQ,PHASE,DUTY ic=0.75

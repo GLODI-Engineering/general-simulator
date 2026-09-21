@@ -56,6 +56,7 @@ fn pyblock_pi_controller_matches_a_hand_computed_recursion() {
             name: "ERR".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(1.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "PID".to_string(),
@@ -66,6 +67,7 @@ fn pyblock_pi_controller_matches_a_hand_computed_recursion() {
                 xc_count: 0,
             },
             inputs: vec![Signal::Block("ERR".to_string())],
+            ic: None,
         },
     ];
 
@@ -95,11 +97,13 @@ fn pyblock_inputs_keep_their_own_scalar_or_vector_shape() {
             name: "VEC".to_string(),
             kind: BlockKind::Const(ConstValue::Vector(vec![1.0, 2.0, 3.0])),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "SCAL".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(10.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "OUT".to_string(),
@@ -113,6 +117,7 @@ fn pyblock_inputs_keep_their_own_scalar_or_vector_shape() {
                 Signal::Block("VEC".to_string()),
                 Signal::Block("SCAL".to_string()),
             ],
+            ic: None,
         },
     ];
     let trace = run(&blocks, 1e-4, 1e-4);
@@ -133,6 +138,7 @@ fn pyblock_xc_matches_the_closed_form_step_response() {
             name: "U".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(10.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "X".to_string(),
@@ -143,6 +149,7 @@ fn pyblock_xc_matches_the_closed_form_step_response() {
                 xc_count: 1,
             },
             inputs: vec![Signal::Block("U".to_string())],
+            ic: None,
         },
     ];
 

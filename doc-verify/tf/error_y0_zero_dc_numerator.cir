@@ -1,0 +1,3 @@
+* s/(s+1) blocks DC entirely: its settled output is always 0, so no state holds y0=1.
+SRC kind=const value=1
+TF1 kind=tf num=[1,0] den=[1,1] in=SRC y0=1

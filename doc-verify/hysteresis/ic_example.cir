@@ -1,0 +1,4 @@
+* ic=0|1 is the initial output. The input sits inside the band (low < 0.5 < high), so nothing switches the comparator: it
+* holds its declared 1 for the whole run, where a start from rest reads 0.
+IN kind=const value=0.5
+H1 kind=hysteresis high=1 low=0 in=IN ic=1

@@ -8,6 +8,8 @@ editing that doc comment.
 
 - `example.cir` — the doc comment's own `## Example`: a `kind=dff` only updates `Q1` to `D`'s
   value at `CLK`'s rising edge (`t=5e-3`), staying `0` before it.
+- `ic_example.cir` — `ic=1` with nothing driving a change: the output holds $1$.
+- `error_ic_not_a_logic_level.cir` — `ic=` that is neither `0` nor `1`, rejected at parse time.
 
 ## Running
 

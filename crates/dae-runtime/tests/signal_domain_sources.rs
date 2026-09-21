@@ -31,6 +31,7 @@ fn run_source(kind: BlockKind, t_final: f64, dt: f64) -> Vec<(f64, f64)> {
             name: "CMD".to_string(),
             kind,
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "CMD_V".to_string(),
@@ -38,6 +39,7 @@ fn run_source(kind: BlockKind, t_final: f64, dt: f64) -> Vec<(f64, f64)> {
                 domain: PhysicalDomain::Voltage,
             },
             inputs: vec![Signal::Block("CMD".to_string())],
+            ic: None,
         },
     ];
 

@@ -27,5 +27,26 @@ def test_scalar_d_on_a_mimo_system_is_rejected():
     assert "bare scalar" in stderr and "MIMO" in stderr
 
 
+def test_ic_is_the_state_vector():
+    """## Parameters / Example: ic=[1,0] on x'' = -x gives y = cos(t)."""
+    _, stdout, _ = _lib.run_transient(HERE / "ic_example.cir", tfinal=1, dt=0.1)
+    rows = _lib.parse_csv(stdout)
+    import math
+    for row in rows:
+        assert abs(row["SS1"] - math.cos(row["t"])) < 1e-6, f"t={row['t']}: got {row['SS1']}"
+
+
+def test_ic_of_the_wrong_length_is_rejected():
+    """## Errors: an ic= whose length is not the state count."""
+    code, _, stderr = _lib.run_transient(
+        HERE / "error_ic_wrong_length.cir", tfinal=1, dt=0.1, expect_success=False
+    )
+    assert code != 0
+    assert (
+        "field 'ic' has 1 value(s), but this block has 2 state(s)"
+        in stderr
+    ), stderr
+
+
 if __name__ == "__main__":
     _lib.run_all(sys.modules[__name__])

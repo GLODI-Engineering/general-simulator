@@ -30,6 +30,7 @@ fn phys2sig_voltage_and_current_match_hand_derived_rc_charging_curve() {
             name: "VOUT_PROBE".to_string(),
             kind: BlockKind::Phys2Sig(Phys2SigTarget::Voltage("vout".to_string())),
             inputs: vec![],
+            ic: None,
         },
         // general-mna only gives V/L/E/H elements their own branch-current MNA unknown (a
         // plain resistor's current is derivable but not separately stored) -- read V1's own
@@ -38,6 +39,7 @@ fn phys2sig_voltage_and_current_match_hand_derived_rc_charging_curve() {
             name: "I_V1_PROBE".to_string(),
             kind: BlockKind::Phys2Sig(Phys2SigTarget::Current("V1".to_string())),
             inputs: vec![],
+            ic: None,
         },
     ];
 

@@ -1,0 +1,4 @@
+* ic=0|1 is the initial output. Neither set nor reset is asserted, so nothing changes the latch: it
+* holds its declared 1 for the whole run, where a start from rest reads 0.
+Z kind=const value=0
+Q1 kind=srlatch set=Z reset=Z ic=1

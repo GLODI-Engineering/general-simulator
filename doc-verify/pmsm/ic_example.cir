@@ -1,0 +1,5 @@
+* ic=[id,iq,omega_m,theta_e]. No magnet flux, no currents, no voltages, no friction, no load:
+* nothing produces torque, so the rotor coasts at its declared 100 rad/s and the electrical angle
+* advances as theta_e = 0.5 + pole_pairs * omega_m * t = 0.5 + 400 t.
+Z kind=const value=0
+M1 kind=pmsm r_s=0.5 l_d=1e-3 l_q=1e-3 lambda_pm=0 pole_pairs=4 inertia=1e-5 friction=0 inputs=Z,Z,Z outputs=ID,IQ,WM,TH ic=[0,0,100,0.5]

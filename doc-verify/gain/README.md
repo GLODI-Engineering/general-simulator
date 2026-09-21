@@ -23,6 +23,7 @@ real run" section for why this is mandatory, not optional.
 
 A missing `in=`/`k=` entirely is the generic `missing field '<key>'` error shared by every
 `kind=` block (documented once on `BlockInstance`), so it has no dedicated fixture here.
+- `error_ic_on_stateless_block.cir` — `ic=` on a stateless kind (the generic rule, documented on `BlockInstance`), rejected at parse time.
 
 ## Running
 

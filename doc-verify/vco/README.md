@@ -8,6 +8,8 @@ doc comment.
 
 - `example.cir` — the doc comment's own `## Example`: a fixed 10 Hz oscillator, checked to
   advance its `[0,1)` ramp by exactly `dt * freq` each step, not stay constant.
+- `ic_example.cir` — `ic=0.25` at 1 Hz: the phase reads $0.25 + t \pmod 1$.
+- `error_ic_out_of_range.cir` — `ic=` outside $[0, 1)$, rejected at parse time.
 
 ## Running
 

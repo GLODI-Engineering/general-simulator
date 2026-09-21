@@ -1,0 +1,3 @@
+* (z-1)/(z-0.5) has a zero at z = 1 (DC): its settled output is always 0.
+SRC kind=const value=0
+DTF1 kind=discretetf num=[1,-1] den=[1,-0.5] ts=0.1 in=SRC y0=1

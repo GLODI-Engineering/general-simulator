@@ -1,0 +1,4 @@
+* ic= is the initial phase in cycles. A 1 Hz oscillator started a quarter-cycle in reads
+* 0.25 + t (mod 1): 0.35 after the first 0.1 s step rather than 0.1.
+FREQ kind=const value=1
+VCO1 kind=vco f_min=0.1 f_max=10 in=FREQ ic=0.25

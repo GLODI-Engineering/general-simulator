@@ -1,0 +1,3 @@
+* ic= must have exactly one entry per state -- one given, two states.
+SRC kind=const value=0
+SS1 kind=statespace a=[[0,1],[-1,0]] b=[0,0] c=[1,0] in=SRC ic=[1]

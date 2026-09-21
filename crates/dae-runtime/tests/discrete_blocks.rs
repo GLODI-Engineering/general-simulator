@@ -65,6 +65,7 @@ fn discretestatespace_only_advances_on_its_own_sample_period_holding_between_hit
             name: "U".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(1.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "SS".to_string(),
@@ -83,6 +84,7 @@ fn discretestatespace_only_advances_on_its_own_sample_period_holding_between_hit
                 },
             },
             inputs: vec![Signal::Block("U".to_string())],
+            ic: None,
         },
     ];
     let trace = run(&blocks, 0.25, 0.01);
@@ -103,6 +105,7 @@ fn discretetf_matches_the_equivalent_discretestatespace_realization() {
             name: "U".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(1.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "TF".to_string(),
@@ -114,6 +117,7 @@ fn discretetf_matches_the_equivalent_discretestatespace_realization() {
                 },
             },
             inputs: vec![Signal::Block("U".to_string())],
+            ic: None,
         },
     ];
     let trace = run(&blocks, 0.25, 0.01);
@@ -133,6 +137,7 @@ fn discretepid_only_advances_on_its_own_sample_period() {
             name: "ERR".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(2.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "CTRL".to_string(),
@@ -152,6 +157,7 @@ fn discretepid_only_advances_on_its_own_sample_period() {
                 },
             },
             inputs: vec![Signal::Block("ERR".to_string())],
+            ic: None,
         },
     ];
     let trace = run(&blocks, 0.35, 0.01);
@@ -171,6 +177,7 @@ fn discretepid_anti_windup_rejects_a_step_that_would_saturate_further() {
             name: "ERR".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(2.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "CTRL".to_string(),
@@ -190,6 +197,7 @@ fn discretepid_anti_windup_rejects_a_step_that_would_saturate_further() {
                 },
             },
             inputs: vec![Signal::Block("ERR".to_string())],
+            ic: None,
         },
     ];
     let trace = run(&blocks, 0.25, 0.01);

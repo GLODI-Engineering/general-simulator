@@ -42,6 +42,6 @@ pub use logic::{FlipFlopKind, LatchPriority, LogicOp};
 pub use pid::{Pid, PidError};
 pub use pmsm::{Pmsm, PmsmError};
 pub use state_space::{StateSpace, StateSpaceError};
-pub use transfer_function::{TransferFunction, TransferFunctionError};
+pub use transfer_function::{SettledStateError, TransferFunction, TransferFunctionError};
 pub use vco::{Vco, VcoError};
 pub use waveform_arithmetic::{MathFn1, MathFn2, MathFn3};
