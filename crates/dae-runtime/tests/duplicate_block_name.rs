@@ -50,11 +50,13 @@ fn two_blocks_sharing_a_name_are_rejected() {
             name: "A".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(1.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "A".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(2.0)),
             inputs: vec![],
+            ic: None,
         },
     ];
 
@@ -71,11 +73,13 @@ fn a_pwm_complement_alias_colliding_with_another_blocks_name_is_rejected() {
             name: "DUTY".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(0.5)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "TAKEN".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(3.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "MOD".to_string(),
@@ -86,6 +90,7 @@ fn a_pwm_complement_alias_colliding_with_another_blocks_name_is_rejected() {
                 output_names: vec!["MOD".to_string(), "TAKEN".to_string()],
             },
             inputs: vec![Signal::Block("DUTY".to_string())],
+            ic: None,
         },
     ];
 

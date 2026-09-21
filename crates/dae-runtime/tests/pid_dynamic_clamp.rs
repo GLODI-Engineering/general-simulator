@@ -45,16 +45,19 @@ fn dynamic_clamp_matches_fixed_clamp_at_the_same_constant_bound() {
                 name: "ERR".to_string(),
                 kind: BlockKind::Const(ConstValue::Scalar(100.0)),
                 inputs: vec![],
+                ic: None,
             },
             BlockInstance {
                 name: "LO".to_string(),
                 kind: BlockKind::Const(ConstValue::Scalar(-5.0)),
                 inputs: vec![],
+                ic: None,
             },
             BlockInstance {
                 name: "HI".to_string(),
                 kind: BlockKind::Const(ConstValue::Scalar(5.0)),
                 inputs: vec![],
+                ic: None,
             },
             BlockInstance {
                 name: "PID1".to_string(),
@@ -63,6 +66,7 @@ fn dynamic_clamp_matches_fixed_clamp_at_the_same_constant_bound() {
                     clamp,
                 },
                 inputs,
+                ic: None,
             },
         ]
     };
@@ -122,11 +126,13 @@ fn dynamic_clamp_respects_a_bound_that_shrinks_mid_run() {
             name: "ERR".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(100.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "LO".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(-1000.0)),
             inputs: vec![],
+            ic: None,
         },
         // HI starts wide open (1000) so the PID's output is free to run up near it, then drops
         // to 5.0 at t=1ms -- the output must snap down to (or below) 5.0 immediately after,
@@ -138,6 +144,7 @@ fn dynamic_clamp_respects_a_bound_that_shrinks_mid_run() {
                 repeat: false,
             },
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "PID1".to_string(),
@@ -150,6 +157,7 @@ fn dynamic_clamp_respects_a_bound_that_shrinks_mid_run() {
                 dae_runtime::Signal::Block("LO".to_string()),
                 dae_runtime::Signal::Block("HI".to_string()),
             ],
+            ic: None,
         },
     ];
 

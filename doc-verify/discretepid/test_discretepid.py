@@ -31,5 +31,25 @@ def test_unknown_integration_method_is_rejected():
     assert "unknown integration_method" in stderr
 
 
+def test_ic_preloads_the_integrator():
+    """## Parameters / Example: ic=0.6 at zero error holds the output at 0.6."""
+    _, stdout, _ = _lib.run_transient(HERE / "ic_example.cir", tfinal=0.5, dt=0.1)
+    rows = _lib.parse_csv(stdout)
+    for row in rows:
+        assert abs(row["DPID1"] - 0.6) < 1e-12, f"t={row['t']}: got {row['DPID1']}"
+
+
+def test_ic_without_an_integrator_is_rejected():
+    """## Errors: ic= with ki=0."""
+    code, _, stderr = _lib.run_transient(
+        HERE / "error_ic_without_integrator.cir", tfinal=1, dt=0.1, expect_success=False
+    )
+    assert code != 0
+    assert (
+        "this PID has ki=0 -- there is no integrator to hold it"
+        in stderr
+    ), stderr
+
+
 if __name__ == "__main__":
     _lib.run_all(sys.modules[__name__])

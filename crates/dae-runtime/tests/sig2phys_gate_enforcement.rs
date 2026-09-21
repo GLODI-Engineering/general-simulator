@@ -35,6 +35,7 @@ fn naming_a_raw_block_directly_is_rejected_before_any_step_runs() {
         name: "DUTY".to_string(),
         kind: BlockKind::Const(ConstValue::Scalar(0.3)),
         inputs: vec![],
+        ic: None,
     }];
     let mut gates = BTreeMap::new();
     gates.insert(
@@ -84,6 +85,7 @@ fn naming_a_domain_current_sig2phys_block_is_also_rejected() {
             name: "DUTY".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(0.3)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "DUTY_GATE".to_string(),
@@ -91,6 +93,7 @@ fn naming_a_domain_current_sig2phys_block_is_also_rejected() {
                 domain: PhysicalDomain::Current,
             },
             inputs: vec![Signal::Block("DUTY".to_string())],
+            ic: None,
         },
     ];
     let mut gates = BTreeMap::new();
@@ -138,6 +141,7 @@ fn wrapping_the_same_block_in_a_domain_voltage_sig2phys_makes_it_work() {
             name: "DUTY".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(0.3)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "DUTY_GATE".to_string(),
@@ -145,6 +149,7 @@ fn wrapping_the_same_block_in_a_domain_voltage_sig2phys_makes_it_work() {
                 domain: PhysicalDomain::Voltage,
             },
             inputs: vec![Signal::Block("DUTY".to_string())],
+            ic: None,
         },
     ];
     let mut gates = BTreeMap::new();

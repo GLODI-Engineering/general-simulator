@@ -48,6 +48,10 @@ windup-driven oscillation.
   - `clamp_lo_in=<signal> clamp_hi_in=<signal>` — read fresh from the graph every step
     ([`PidClamp::Dynamic`]), added as two extra inputs after the error signal, in that
     order.
+- `ic=<f64>` — optional (default: start from rest); pre-loads the integrator so the
+  controller output starts at this value with zero error — a bumpless start at a known
+  operating point. Resolved through `continuous_blocks::TransferFunction::settled_state`
+  on this PID's own transfer function.
 
 **Errors**
 - `n <= 0.0` — rejected at parse time (`invalid PID (NonPositiveFilterCoefficient)`): a
@@ -59,11 +63,13 @@ windup-driven oscillation.
 - A missing or non-numeric field (`kp`/`ki`/`kd`/`n`/`clamp_lo`/`clamp_hi`) is the same
   generic `missing field '<key>'`/`field '<key>' is not a number` error every `kind=`
   block produces — see [`BlockInstance`]'s own doc comment.
+- `ic=` with `ki=0` — rejected at parse time: `field 'ic' pre-loads the integrator, but
+  this PID has ki=0 -- there is no integrator to hold it`.
 
 **Netlist form**
 ```text
 NAME kind=pid in=<signal> kp=<f64> ki=<f64> kd=<f64> n=<f64> \
-     (clamp_lo=<f64> clamp_hi=<f64> | clamp_lo_in=<signal> clamp_hi_in=<signal>)
+     (clamp_lo=<f64> clamp_hi=<f64> | clamp_lo_in=<signal> clamp_hi_in=<signal>) [ic=<f64>]
 ```
 
 **Example**
@@ -120,6 +126,8 @@ never part of the circuit's own descriptor-DAE solve).
   each independently scalar or vector; the *flattened* total length must equal `p`,
   checked at evaluation time, not parse time, since a vector signal's own arity isn't
   knowable from netlist text alone).
+- `ic=[x1,...,xn]` — optional (default: every state zero); the initial state vector
+  $x(0)$, one entry per state. A bare number (`ic=2`) is accepted for a one-state system.
 
 **Errors**
 - `q != 1 || p != 1` with a bare scalar `d=` — rejected at parse time: `field 'd' is a
@@ -130,11 +138,13 @@ never part of the circuit's own descriptor-DAE solve).
   `StateSpaceError::NonInvertibleDescriptorMatrix` (a singular descriptor matrix) is
   currently unreachable through this parser — `e` is always `None` (ordinary,
   non-descriptor state-space) for every netlist-declared instance.
+- `ic=` with a number of entries other than the block's own state count — rejected at
+  parse time: `field 'ic' has <m> value(s), but this block has <n> state(s)`.
 
 **Netlist form**
 ```text
 NAME kind=statespace a=<matrix> b=<matrix|vector> c=<matrix|vector> [d=<matrix|scalar>] \
-     (in=<signal> | inputs=<sig1,sig2,...>)
+     (in=<signal> | inputs=<sig1,sig2,...>) [ic=<vector>]
 ```
 
 **Example**
@@ -168,6 +178,16 @@ the same reason [`BlockKind::StateSpace`] above has none.
   (a proper transfer function — every realizable continuous-time physical system is).
 - `in=<signal>` — the single input (one input, always — this block is SISO by
   definition).
+- `ic=[x1,...,xn]` — optional (default: every state zero); the initial state of the
+  controllable canonical realization (see
+  `continuous_blocks::TransferFunction::to_state_space`), $n = \deg(\text{den})$ entries.
+  With the denominator made monic, $x_1$ is the state whose $k$-th derivative is
+  $x_{k+1}$, and the output is $y = \sum_i b_i x_{i+1} + d\,u$.
+- `y0=<f64>` — optional, mutually exclusive with `ic=`; starts the filter already settled
+  at output $y_0$: $x = (y_0 / N(0), 0, \dots, 0)$ with $N(0)$ the normalized numerator's
+  constant term (see `continuous_blocks::TransferFunction::settled_state`). Fed the
+  matching constant input $u = y_0 / G(0)$ the output stays at $y_0$ exactly; a pole at
+  the origin is fine (the matching input is then $0$).
 
 **Errors**
 - `den=[]` (empty) — rejected at parse time: `invalid transfer function
@@ -178,10 +198,17 @@ the same reason [`BlockKind::StateSpace`] above has none.
 - `deg(num) > deg(den)` (more numerator coefficients than denominator ones) — rejected:
   `invalid transfer function (ImproperTransferFunction)` — an improper transfer function
   has no causal realization.
+- `ic=` with a number of entries other than the block's own state count — rejected at
+  parse time: `field 'ic' has <m> value(s), but this block has <n> state(s)`.
+- `ic=` and `y0=` both given — rejected at parse time: `'ic' (the state vector) and 'y0'
+  (the settled output) both set an initial condition -- give one or the other`.
+- `y0=` on a transfer function whose numerator is zero at DC — rejected at parse time:
+  `field 'y0': this transfer function's numerator is zero at DC, so its settled output is
+  always 0 and no state holds the requested one`.
 
 **Netlist form**
 ```text
-NAME kind=tf num=<vector> den=<vector> in=<signal>
+NAME kind=tf num=<vector> den=<vector> in=<signal> [ic=<vector> | y0=<f64>]
 ```
 
 **Example**
@@ -208,13 +235,17 @@ block at all (each owns its own internal oscillator).
 - `f_min=<f64>`, `f_max=<f64>` — the frequency clamp range, Hz; the one input (`in=`) is
   internally clamped to `[f_min, f_max]` before integration.
 - `in=<signal>` — the frequency command, Hz (one input).
+- `ic=<f64>` — optional (default `0`); the initial phase, in cycles,
+  $0 \le \text{ic} < 1$.
 
 **Errors**
 - `f_min > f_max` — rejected at parse time: `invalid vco (FMinExceedsFMax)`.
+- `ic=` outside $0 \le \text{ic} < 1$ — rejected at parse time: `field 'ic' is the initial
+  phase in cycles and must satisfy 0 <= ic < 1 (got <value>)`.
 
 **Netlist form**
 ```text
-NAME kind=vco f_min=<f64> f_max=<f64> in=<signal>
+NAME kind=vco f_min=<f64> f_max=<f64> in=<signal> [ic=<f64>]
 ```
 
 **Example**
@@ -249,6 +280,9 @@ separately-entered value.
 - `integration_method=<forward|backward|trapezoidal>` — optional, defaults to
   `forward` (forward Euler); selects the discrete integration rule the integral term
   uses each sample period.
+- `ic=<f64>` — optional (default: start from rest); pre-loads the integrator so the
+  controller output starts at this value with zero error (the integrator's accumulated
+  value is set to $\text{ic}/k_i$).
 
 **Errors**
 - Same `n <= 0.0` and clamp-pairing errors as [`BlockKind::Pid`] (see there).
@@ -256,13 +290,15 @@ separately-entered value.
 - `integration_method` present but not one of the three known names — rejected at parse
   time: `unknown integration_method '<value>' (expected 'forward', 'backward', or
   'trapezoidal')`.
+- `ic=` with `ki=0` — rejected at parse time: `field 'ic' pre-loads the integrator, but
+  this PID has ki=0 -- there is no integrator to hold it`.
 
 **Netlist form**
 ```text
 NAME kind=discretepid in=<signal> kp=<f64> ki=<f64> kd=<f64> n=<f64> \
      (ts=<f64> | freq=<f64> [to=<f64>]) \
      (clamp_lo=<f64> clamp_hi=<f64> | clamp_lo_in=<signal> clamp_hi_in=<signal>) \
-     [integration_method=<forward|backward|trapezoidal>]
+     [integration_method=<forward|backward|trapezoidal>] [ic=<f64>]
 ```
 
 **Example**
@@ -295,6 +331,9 @@ recursion at all. See `general-simulator`'s own `book/dev-guide/src/discrete-tim
   matrices are already discrete-domain.
 - `ts=<f64>` / `freq=<f64>` (with optional `to=<f64>` offset) — required; unlike
   `cscript`, `ts=variable` is not accepted here (see Errors).
+- `ic=[x1,...,xn]` — optional (default: every state zero); the initial state vector
+  $x_0$, one entry per state (a bare number for a one-state system). With a nonzero
+  sample `offset`, the output held before the first sample hit is $C\,x_0$.
 
 **Errors**
 - Same MIMO scalar-`d` rejection as `StateSpace` (see there).
@@ -304,12 +343,14 @@ recursion at all. See `general-simulator`'s own `book/dev-guide/src/discrete-tim
 - `ts=variable` — rejected at parse time: `ts=variable is not available here -- a
   discrete block's own recursion has its coefficients baked in at one fixed sample
   period, which 'the block decides its own next execution time' doesn't compose with`.
+- `ic=` with a number of entries other than the block's own state count — rejected at
+  parse time: `field 'ic' has <m> value(s), but this block has <n> state(s)`.
 
 **Netlist form**
 ```text
 NAME kind=discretestatespace a=<matrix> b=<matrix|vector> c=<matrix|vector> \
      [d=<matrix|scalar>] (ts=<f64> | freq=<f64> [to=<f64>]) \
-     (in=<signal> | inputs=<sig1,sig2,...>)
+     (in=<signal> | inputs=<sig1,sig2,...>) [ic=<vector>]
 ```
 
 **Example**
@@ -338,15 +379,29 @@ the variable is called $s$ or $z$), evaluated via `StateSpace::discrete_step` in
   in the $z$-domain rather than $s$.
 - `ts=<f64>` / `freq=<f64>` (with optional `to=<f64>`) — required, same rule as
   `DiscreteStateSpace`.
+- `ic=[x1,...,xn]` — optional (default: every state zero); the initial state of the same
+  controllable canonical realization as [`BlockKind::TransferFunction`]'s own `ic=`,
+  stepped as a difference equation.
+- `y0=<f64>` — optional, mutually exclusive with `ic=`; starts the filter already settled
+  at output $y_0$ — every canonical state equal to $y_0 / N(1)$, with $N(1)$ the
+  normalized numerator evaluated at $z = 1$ (see
+  `continuous_blocks::TransferFunction::settled_state_discrete`). Fed the matching
+  constant input $u = y_0 / H(1)$ the output stays at $y_0$ exactly.
 
 **Errors**
 Identical to [`BlockKind::TransferFunction`]'s own (`EmptyDenominator`,
 `ZeroLeadingDenominatorCoefficient`, `ImproperTransferFunction`), plus the same
 missing-`ts=`/`ts=variable`-rejected errors as `DiscreteStateSpace`.
+- `ic=` and `y0=` both given — rejected at parse time: `'ic' (the state vector) and 'y0'
+  (the settled output) both set an initial condition -- give one or the other`.
+- `y0=` on a transfer function whose numerator is zero at DC — rejected at parse time:
+  `field 'y0': this transfer function's numerator is zero at DC, so its settled output is
+  always 0 and no state holds the requested one`.
 
 **Netlist form**
 ```text
-NAME kind=discretetf num=<vector> den=<vector> (ts=<f64> | freq=<f64> [to=<f64>]) in=<signal>
+NAME kind=discretetf num=<vector> den=<vector> (ts=<f64> | freq=<f64> [to=<f64>]) in=<signal> \
+     [ic=<vector> | y0=<f64>]
 ```
 
 **Example**
@@ -1042,16 +1097,22 @@ input at all.
   its value thresholds true, up otherwise).
 - `modulus=<u32>` — optional; wraps the count into `[0, modulus)` if given.
 - `reset=<signal>` — optional; if given, declares a synchronous reset input.
+- `ic=<integer>` — optional (default `0`); the initial count. With `modulus=`, must
+  satisfy $0 \le \text{ic} < \text{modulus}$.
 
 **Errors**
 - `modulus=` present but not a non-negative integer — rejected at parse time: `field
   'modulus' is not a non-negative integer`.
 - `up_down=`/`reset=` declared (field present) but the signal itself malformed — the
   generic `missing field '<key>'`/parse-signal errors.
+- `ic=` not an integer — rejected at parse time: `field 'ic' is not an integer`.
+- `ic=` outside the modulus — rejected at parse time: `field 'ic' must satisfy 0 <= ic <
+  modulus (<m>) (got <value>)`.
 
 **Netlist form**
 ```text
-NAME kind=counter clk=<signal> [up_down=<signal>] [modulus=<u32>] [reset=<signal>]
+NAME kind=counter clk=<signal> [up_down=<signal>] [modulus=<u32>] [reset=<signal>] \
+     [ic=<integer>]
 ```
 
 **Example**
@@ -1080,16 +1141,20 @@ need at all.
 - `t=<signal>` — for `kind=tff` only: the toggle-enable input.
 - `j=<signal>`, `k=<signal>` — for `kind=jkff` only: both required.
 - `reset=<signal>` — optional; if given, declares a synchronous reset input.
+- `ic=0|1` — optional (default `0`); the output the block starts the run holding, until
+  its own inputs first change it.
 
 **Errors**
 - The kind-specific data input (`d=`/`t=`/`j=`+`k=`) missing for its own kind — the
   generic `missing field '<key>'` error.
+- `ic=` that is neither `0` nor `1` — rejected at parse time: `field 'ic' is the initial
+  logic output and must be 0 or 1 (got '<value>')`.
 
 **Netlist form**
 ```text
-NAME kind=dff clk=<signal> d=<signal> [reset=<signal>]
-NAME kind=tff clk=<signal> t=<signal> [reset=<signal>]
-NAME kind=jkff clk=<signal> j=<signal> k=<signal> [reset=<signal>]
+NAME kind=dff clk=<signal> d=<signal> [reset=<signal>] [ic=0|1]
+NAME kind=tff clk=<signal> t=<signal> [reset=<signal>] [ic=0|1]
+NAME kind=jkff clk=<signal> j=<signal> k=<signal> [reset=<signal>] [ic=0|1]
 ```
 
 **Example**
@@ -1117,13 +1182,17 @@ feeding a [`BlockKind::Pwm`]). Its output is `1.0`/`0.0`, read directly by a
 **Parameters**
 - `high=<f64>`, `low=<f64>` — the two switching thresholds; must satisfy `low <= high`.
 - `in=<signal>` — the input signal (one input).
+- `ic=0|1` — optional (default `0`); the output the block starts the run holding, until
+  its own inputs first change it.
 
 **Errors**
 - `low > high` — rejected at parse time: `invalid hysteresis (LowExceedsHigh)`.
+- `ic=` that is neither `0` nor `1` — rejected at parse time: `field 'ic' is the initial
+  logic output and must be 0 or 1 (got '<value>')`.
 
 **Netlist form**
 ```text
-NAME kind=hysteresis high=<f64> low=<f64> in=<signal>
+NAME kind=hysteresis high=<f64> low=<f64> in=<signal> [ic=0|1]
 ```
 
 **Example**
@@ -1191,14 +1260,18 @@ occurring in the same step a reset is asserted should still latch, not silently 
 - `set=<signal>`, `reset=<signal>` — both required.
 - `priority=<set|reset>` — optional, defaults to `set`; which input wins when both are
   asserted simultaneously.
+- `ic=0|1` — optional (default `0`); the output the block starts the run holding, until
+  its own inputs first change it.
 
 **Errors**
 - `priority=` present but not `set`/`reset` — rejected at parse time: `field 'priority'
   must be 'set' or 'reset' (got '<value>')`.
+- `ic=` that is neither `0` nor `1` — rejected at parse time: `field 'ic' is the initial
+  logic output and must be 0 or 1 (got '<value>')`.
 
 **Netlist form**
 ```text
-NAME kind=srlatch set=<signal> reset=<signal> [priority=<set|reset>]
+NAME kind=srlatch set=<signal> reset=<signal> [priority=<set|reset>] [ic=0|1]
 ```
 
 **Example**
@@ -1241,6 +1314,8 @@ override, matching every other dynamic block in this graph. Surface-mount motors
 - `inputs=<vd,vq,t_load>` — exactly 3, in this order.
 - `outputs=<id,iq,omega_m,theta_e>` — optional; defaults to `<name>,<name>_iq,
   <name>_omega_m,<name>_theta_e`.
+- `ic=[id,iq,omega_m,theta_e]` — optional (default: all zero); the four machine states at
+  $t = 0$: $d$/$q$ currents (A), mechanical speed (rad/s), electrical angle (rad).
 
 **Errors**
 - `r_s < 0` — `invalid pmsm (NegativeResistance)`.
@@ -1248,11 +1323,14 @@ override, matching every other dynamic block in this graph. Surface-mount motors
 - `pole_pairs <= 0` — `invalid pmsm (NonPositivePolePairs)`.
 - `inertia <= 0` — `invalid pmsm (NonPositiveInertia)`.
 - `friction < 0` — `invalid pmsm (NegativeFriction)`.
+- `ic=` with other than four entries — rejected at parse time: `field 'ic' has <m>
+  value(s), but this block has 4 state(s)`.
 
 **Netlist form**
 ```text
 NAME kind=pmsm r_s=<f64> l_d=<f64> l_q=<f64> lambda_pm=<f64> pole_pairs=<f64> \
-     inertia=<f64> friction=<f64> inputs=<vd,vq,t_load> [outputs=<id,iq,omega_m,theta_e>]
+     inertia=<f64> friction=<f64> inputs=<vd,vq,t_load> [outputs=<id,iq,omega_m,theta_e>] \
+     [ic=<vector>]
 ```
 
 **Example**
@@ -1341,6 +1419,9 @@ resonant converter's own ZVS margin, not just bookkeeping.
 - `red=<f64>`, `fed=<f64>` — optional, default `0.0`; seconds, converted internally to a
   phase fraction using the current resolved frequency.
 - `outputs=<main,complement>` — optional; defaults to `<name>,<name>_comp`.
+- `ic=<f64>` — optional (default `0`); the carrier's own initial phase, in cycles,
+  $0 \le \text{ic} < 1$ — applied before, and independent of, the `phase` input's own
+  offset.
 
 **Errors**
 - `inputs=` with a count other than 3 — rejected at parse time: `kind='pspwm' needs 3
@@ -1348,11 +1429,13 @@ resonant converter's own ZVS margin, not just bookkeeping.
 - `f_min > f_max` — rejected at parse time: `invalid pspwm oscillator
   (FMinExceedsFMax)`.
 - `outputs=` with a count other than 2 — same error as [`BlockKind::Pwm`]'s own.
+- `ic=` outside $0 \le \text{ic} < 1$ — rejected at parse time: `field 'ic' is the initial
+  phase in cycles and must satisfy 0 <= ic < 1 (got <value>)`.
 
 **Netlist form**
 ```text
 NAME kind=pspwm f_min=<f64> f_max=<f64> inputs=<freq_signal,phase_signal,duty_signal> \
-     [red=<f64>] [fed=<f64>] [outputs=<main,complement>]
+     [red=<f64>] [fed=<f64>] [outputs=<main,complement>] [ic=<f64>]
 ```
 
 **Example**

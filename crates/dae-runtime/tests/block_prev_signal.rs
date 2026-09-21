@@ -31,6 +31,7 @@ fn block_prev_self_reference_builds_an_exact_discrete_accumulator() {
             name: "IN".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(1.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "ACC".to_string(),
@@ -39,6 +40,7 @@ fn block_prev_self_reference_builds_an_exact_discrete_accumulator() {
                 Signal::BlockPrev("ACC".to_string()),
                 Signal::Block("IN".to_string()),
             ],
+            ic: None,
         },
     ];
 
@@ -85,6 +87,7 @@ fn block_prev_of_an_unevaluated_block_is_zero_before_the_first_step() {
         name: "OUT".to_string(),
         kind: BlockKind::Gain(GainValue::Scalar(2.0)),
         inputs: vec![Signal::BlockPrev("NOWHERE".to_string())],
+        ic: None,
     }];
 
     let trace = simulate_transient_with_blocks(

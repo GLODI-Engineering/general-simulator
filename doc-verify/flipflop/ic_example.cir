@@ -1,0 +1,4 @@
+* ic=0|1 is the initial output. The clock never rises, so nothing changes the flip-flop: it
+* holds its declared 1 for the whole run, where a start from rest reads 0.
+Z kind=const value=0
+Q1 kind=dff clk=Z d=Z ic=1

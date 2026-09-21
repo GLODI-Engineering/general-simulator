@@ -1988,14 +1988,29 @@ pub fn simulate_transient_with_blocks_streamed(
         std::collections::BTreeSet::new();
     let mut block_states: Vec<BlockState> = Vec::with_capacity(blocks.len());
     for b in blocks {
-        let dynamic = |state_space: StateSpace| {
-            let x = vec![0.0; state_space.states()];
-            BlockState::Dynamic { state_space, x }
+        // `b.ic` is `general-mna`'s already-resolved, already-validated initial state (see
+        // `BlockInstance::ic`'s own doc comment for the per-kind layout); `None` is the start
+        // from rest every block had before `ic=` existed. The length is re-checked here only
+        // because a `BlockInstance` can also be hand-built, bypassing the netlist parser.
+        let initial_state = |states: usize| -> Result<Vec<f64>, DaeError> {
+            match &b.ic {
+                None => Ok(vec![0.0; states]),
+                Some(ic) if ic.len() == states => Ok(ic.clone()),
+                Some(ic) => Err(DaeError::BlockInitialConditionLength {
+                    block: b.name.clone(),
+                    expected: states,
+                    got: ic.len(),
+                }),
+            }
+        };
+        let dynamic = |state_space: StateSpace| -> Result<BlockState, DaeError> {
+            let x = initial_state(state_space.states())?;
+            Ok(BlockState::Dynamic { state_space, x })
         };
         let state = match &b.kind {
-            BlockKind::Pid { pid, .. } => dynamic(pid.to_state_space()),
-            BlockKind::StateSpace(ss) => dynamic(ss.clone()),
-            BlockKind::TransferFunction(tf) => dynamic(tf.to_state_space()),
+            BlockKind::Pid { pid, .. } => dynamic(pid.to_state_space())?,
+            BlockKind::StateSpace(ss) => dynamic(ss.clone())?,
+            BlockKind::TransferFunction(tf) => dynamic(tf.to_state_space())?,
             BlockKind::DiscreteStateSpace { ss, sample_time } => {
                 let (period, offset) = match sample_time {
                     SampleTimeSpec::Periodic { period, offset } => (*period, *offset),
@@ -2004,9 +2019,13 @@ pub fn simulate_transient_with_blocks_streamed(
                          ts=variable for kind=discretestatespace"
                     ),
                 };
+                // Held until the block's own first sample hit (only observable with a nonzero
+                // `offset`): what the declared state alone puts out, so a block started settled
+                // doesn't glitch through zero first.
+                let x = initial_state(ss.states())?;
                 BlockState::DiscreteDynamic {
-                    x: vec![0.0; ss.states()],
-                    last_output: vec![0.0; ss.outputs()],
+                    last_output: ss.output(&x, &vec![0.0; ss.inputs()]),
+                    x,
                     // Same `period - offset` convention as BlockKind::CScript's own init below
                     // -- guarantees the first evaluate_blocks call is due at t=offset.
                     time_since_sample: period - offset,
@@ -2022,14 +2041,17 @@ pub fn simulate_transient_with_blocks_streamed(
                     ),
                 };
                 let state_space = tf.to_state_space();
+                let x = initial_state(state_space.states())?;
                 BlockState::DiscreteDynamic {
-                    x: vec![0.0; state_space.states()],
-                    last_output: vec![0.0],
+                    last_output: state_space.output(&x, &[0.0]),
+                    x,
                     time_since_sample: period - offset,
                     state_space,
                 }
             }
-            BlockKind::DiscretePid { sample_time, .. } => {
+            BlockKind::DiscretePid {
+                pid, sample_time, ..
+            } => {
                 let (period, offset) = match sample_time {
                     SampleTimeSpec::Periodic { period, offset } => (*period, *offset),
                     SampleTimeSpec::Variable => unreachable!(
@@ -2037,41 +2059,51 @@ pub fn simulate_transient_with_blocks_streamed(
                          ts=variable for kind=discretepid"
                     ),
                 };
+                let int_state = initial_state(1)?[0];
                 BlockState::DiscretePid {
-                    state: DiscretePidState::default(),
+                    state: DiscretePidState {
+                        int_state,
+                        ..DiscretePidState::default()
+                    },
                     time_since_sample: period - offset,
-                    last_output: 0.0,
+                    // The integrator's own contribution at zero error -- see DiscreteDynamic above.
+                    last_output: pid.ki * int_state,
                 }
             }
             BlockKind::Vco(vco) => BlockState::Vco {
                 vco: *vco,
-                phase: 0.0,
+                phase: initial_state(1)?[0],
             },
             BlockKind::PhaseShiftPwm { osc, .. } => BlockState::PhaseShiftPwm {
                 osc: *osc,
-                phase: 0.0,
+                phase: initial_state(1)?[0],
             },
-            BlockKind::Pmsm { pmsm, .. } => BlockState::Pmsm {
-                pmsm: *pmsm,
-                x: [0.0; 4],
-            },
+            BlockKind::Pmsm { pmsm, .. } => {
+                let x0 = initial_state(4)?;
+                BlockState::Pmsm {
+                    pmsm: *pmsm,
+                    x: [x0[0], x0[1], x0[2], x0[3]],
+                }
+            }
             BlockKind::Hysteresis(hysteresis) => BlockState::Hysteresis {
                 hysteresis: *hysteresis,
-                on: false,
+                on: initial_state(1)?[0] >= 0.5,
             },
             // LogicGate needs no BlockState at all -- purely combinational, falls through to
             // the `_ => BlockState::Stateless` catch-all below, same as Sum/Gain.
-            BlockKind::SrLatch { .. } => BlockState::SrLatch { q: false },
+            BlockKind::SrLatch { .. } => BlockState::SrLatch {
+                q: initial_state(1)?[0] >= 0.5,
+            },
             // prev_clk starts at 0.0 (clk below threshold) -- matches every other dynamic
             // block's own "starts at rest" convention, and means a clk that's already high on
             // the very first step is correctly treated as a rising edge (0.0 -> high counts),
             // not silently missed.
             BlockKind::FlipFlop { .. } => BlockState::FlipFlop {
-                q: false,
+                q: initial_state(1)?[0] >= 0.5,
                 prev_clk: 0.0,
             },
             BlockKind::Counter { .. } => BlockState::Counter {
-                count: 0,
+                count: initial_state(1)?[0] as i64,
                 prev_clk: 0.0,
             },
             BlockKind::CScript {

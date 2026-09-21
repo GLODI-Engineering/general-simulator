@@ -10,6 +10,8 @@ editing that doc comment.
   signal, stepping `0.5 -> 0.55 -> 0.575 -> 0.575 -> 0.6` at each `ts=0.1` sample hit.
 - `error_unknown_method.cir` — `integration_method=euler` (not one of `forward`/`backward`/
   `trapezoidal`), rejected at parse time (the `## Errors` claim).
+- `ic_example.cir` — `ic=0.6` with zero error: the output holds $0.6$.
+- `error_ic_without_integrator.cir` — `ic=` with `ki=0`, rejected at parse time.
 
 ## Running
 

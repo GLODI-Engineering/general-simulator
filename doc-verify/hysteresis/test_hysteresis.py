@@ -31,5 +31,25 @@ def test_low_exceeds_high_is_rejected():
     assert "LowExceedsHigh" in stderr
 
 
+def test_ic_is_the_initial_output():
+    """## Parameters / Example: ic=1 holds 1 while nothing drives a change."""
+    _, stdout, _ = _lib.run_transient(HERE / "ic_example.cir", tfinal=0.5, dt=0.1)
+    rows = _lib.parse_csv(stdout)
+    for row in rows:
+        assert row["H1"] == 1.0, row
+
+
+def test_ic_that_is_not_a_logic_level_is_rejected():
+    """## Errors: ic= must be 0 or 1."""
+    code, _, stderr = _lib.run_transient(
+        HERE / "error_ic_not_a_logic_level.cir", tfinal=1, dt=0.1, expect_success=False
+    )
+    assert code != 0
+    assert (
+        "must be 0 or 1 (got '2')"
+        in stderr
+    ), stderr
+
+
 if __name__ == "__main__":
     _lib.run_all(sys.modules[__name__])

@@ -61,11 +61,13 @@ fn statespace_is_genuinely_mimo_two_decoupled_integrators() {
             name: "U1".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(2.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "U2".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(-1.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "SS".to_string(),
@@ -74,6 +76,7 @@ fn statespace_is_genuinely_mimo_two_decoupled_integrators() {
                 Signal::Block("U1".to_string()),
                 Signal::Block("U2".to_string()),
             ],
+            ic: None,
         },
     ];
 
@@ -122,11 +125,13 @@ fn statespace_accepts_one_vector_signal_in_place_of_several_scalar_ones() {
             name: "U".to_string(),
             kind: BlockKind::Const(ConstValue::Vector(vec![3.0, 0.5])),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "SS".to_string(),
             kind: BlockKind::StateSpace(ss),
             inputs: vec![Signal::Block("U".to_string())],
+            ic: None,
         },
     ];
 
@@ -159,11 +164,13 @@ fn statespace_rejects_a_flattened_input_length_that_does_not_match_b() {
             name: "U".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(1.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "SS".to_string(),
             kind: BlockKind::StateSpace(ss),
             inputs: vec![Signal::Block("U".to_string())],
+            ic: None,
         },
     ];
     let netlist = "V1 a 0 5\nR1 a 0 1k";
@@ -204,21 +211,25 @@ fn mathfn1_applies_elementwise_to_a_vector_and_unchanged_to_a_scalar() {
             name: "V".to_string(),
             kind: BlockKind::Const(ConstValue::Vector(vec![0.0, std::f64::consts::PI])),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "SINV".to_string(),
             kind: BlockKind::MathFn1(MathFn1::Sin),
             inputs: vec![Signal::Block("V".to_string())],
+            ic: None,
         },
         BlockInstance {
             name: "S".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(std::f64::consts::FRAC_PI_2)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "SINS".to_string(),
             kind: BlockKind::MathFn1(MathFn1::Sin),
             inputs: vec![Signal::Block("S".to_string())],
+            ic: None,
         },
     ];
     let trace = run(&blocks, 1e-4, 1e-4);
@@ -239,11 +250,13 @@ fn matrix_gain_computes_the_matrix_vector_product_and_rejects_wrong_shapes() {
             name: "X".to_string(),
             kind: BlockKind::Const(ConstValue::Vector(vec![5.0, 6.0])),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "Y".to_string(),
             kind: BlockKind::Gain(GainValue::Matrix(vec![vec![1.0, 2.0], vec![3.0, 4.0]])),
             inputs: vec![Signal::Block("X".to_string())],
+            ic: None,
         },
     ];
     let trace = run(&blocks, 1e-4, 1e-4);
@@ -258,11 +271,13 @@ fn matrix_gain_rejects_a_scalar_input() {
             name: "X".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(5.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "Y".to_string(),
             kind: BlockKind::Gain(GainValue::Matrix(vec![vec![1.0, 2.0]])),
             inputs: vec![Signal::Block("X".to_string())],
+            ic: None,
         },
     ];
     let netlist = "V1 a 0 5\nR1 a 0 1k";
@@ -292,11 +307,13 @@ fn sum_accepts_all_vector_or_all_scalar_but_rejects_a_mix() {
             name: "A".to_string(),
             kind: BlockKind::Const(ConstValue::Vector(vec![1.0, 2.0])),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "B".to_string(),
             kind: BlockKind::Const(ConstValue::Vector(vec![10.0, 20.0])),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "S".to_string(),
@@ -305,6 +322,7 @@ fn sum_accepts_all_vector_or_all_scalar_but_rejects_a_mix() {
                 Signal::Block("A".to_string()),
                 Signal::Block("B".to_string()),
             ],
+            ic: None,
         },
     ];
     let trace = run(&vector_sum, 1e-4, 1e-4);
@@ -316,11 +334,13 @@ fn sum_accepts_all_vector_or_all_scalar_but_rejects_a_mix() {
             name: "A".to_string(),
             kind: BlockKind::Const(ConstValue::Vector(vec![1.0, 2.0])),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "B".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(10.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "S".to_string(),
@@ -329,6 +349,7 @@ fn sum_accepts_all_vector_or_all_scalar_but_rejects_a_mix() {
                 Signal::Block("A".to_string()),
                 Signal::Block("B".to_string()),
             ],
+            ic: None,
         },
     ];
     let netlist = "V1 a 0 5\nR1 a 0 1k";
@@ -360,6 +381,7 @@ fn pid_rejects_a_vector_error_input() {
             name: "ERR".to_string(),
             kind: BlockKind::Const(ConstValue::Vector(vec![1.0, 2.0])),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "PID1".to_string(),
@@ -368,6 +390,7 @@ fn pid_rejects_a_vector_error_input() {
                 clamp: dae_runtime::PidClamp::Fixed(-1.0, 1.0),
             },
             inputs: vec![Signal::Block("ERR".to_string())],
+            ic: None,
         },
     ];
     let netlist = "V1 a 0 5\nR1 a 0 1k";

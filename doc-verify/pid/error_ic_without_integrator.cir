@@ -1,0 +1,3 @@
+* ic= pre-loads the integrator; with ki=0 there is none to hold it.
+ERR kind=const value=0
+PID1 kind=pid kp=2 ki=0 kd=0 n=10 clamp_lo=-1 clamp_hi=1 in=ERR ic=0.6

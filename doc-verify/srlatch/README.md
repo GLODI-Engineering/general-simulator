@@ -9,6 +9,8 @@ that doc comment.
 - `example.cir` — the doc comment's own `## Example`: `FAULT` pulses to `1` then returns to
   `0` at `t=0.1`, `LATCH1` stays `1` afterward (no reset asserted).
 - `error_bad_priority.cir` — `priority=bogus` (not `set`/`reset`), rejected at parse time.
+- `ic_example.cir` — `ic=1` with nothing driving a change: the output holds $1$.
+- `error_ic_not_a_logic_level.cir` — `ic=` that is neither `0` nor `1`, rejected at parse time.
 
 ## Running
 

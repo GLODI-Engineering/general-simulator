@@ -9,6 +9,8 @@ editing that doc comment.
 - `example.cir` — the doc comment's own `## Example`: a `[-1,1]` band fed a rising ramp, LOW
   until crossing `1`, then HIGH.
 - `error_low_exceeds_high.cir` — `low > high`, rejected at parse time.
+- `ic_example.cir` — `ic=1` with nothing driving a change: the output holds $1$.
+- `error_ic_not_a_logic_level.cir` — `ic=` that is neither `0` nor `1`, rejected at parse time.
 
 ## Running
 

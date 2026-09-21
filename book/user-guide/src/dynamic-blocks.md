@@ -114,6 +114,48 @@ Function](component-reference.md#discrete-transfer-function) entries for the ful
 reference, and `book/dev-guide/src/discrete-time-blocks.md` for why the sample-period requirement
 is mandatory here specifically.
 
+## `ic=`: starting a block somewhere other than rest
+
+Every block that carries state starts from rest by default — every state zero, every logic
+output low. `ic=` overrides that, with the same spelling the `C`/`L` electrical elements use
+(see [Grammar overview](netlist-grammar.md#ic-initial-conditions)), evaluated once at $t = 0$:
+
+| kind | form | meaning |
+|---|---|---|
+| `statespace`, `discretestatespace` | `ic=[x1,...,xn]` | the state vector $x(0)$ (a bare number for one state) |
+| `tf`, `discretetf` | `ic=[x1,...,xn]` | the state of the controllable canonical realization |
+| `tf`, `discretetf` | `y0=<f64>` | start already settled at output $y_0$ |
+| `pid`, `discretepid` | `ic=<f64>` | integrator pre-load: the output held at zero error |
+| `vco`, `pspwm` | `ic=<f64>` | initial phase in cycles, $0 \le \phi_0 < 1$ |
+| `pmsm` | `ic=[id,iq,omega_m,theta_e]` | the four machine states |
+| `hysteresis`, `srlatch`, `dff`/`tff`/`jkff` | `ic=0\|1` | initial output |
+| `counter` | `ic=<integer>` | initial count |
+
+A transfer function's canonical states are rarely what you know; its output usually is. That is
+what `y0=` is for. In controllable canonical form an equilibrium is $x = (x_1, 0, \dots, 0)$, and
+the output there is $y_0 = N(0)\,x_1$ with $N(0)$ the (normalized) numerator's constant term, so
+
+$$x_1 = \frac{y_0}{N(0)},$$
+
+held in place by the constant input $u_0 = y_0 / G(0)$. Feed the block that input and the output
+sits at $y_0$ from the first step:
+
+```text
+SRC kind=const value=4
+TF1 kind=tf num=[1,3] den=[1,3,2] in=SRC y0=6
+```
+
+($G(0) = 3/2$, so $u_0 = 4$ holds $y_0 = 6$.) A pole at the origin is no obstacle — the holding
+input is then simply zero — and that case is exactly what `kind=pid`'s `ic=` is: the controller
+output at zero error, i.e. the integrator wound up to a known operating duty before the run
+starts, instead of spending the first several hundred switching periods getting there. A
+numerator that vanishes at DC ($N(0) = 0$, a high-pass) has no such state and `y0=` is rejected.
+
+`ic=` on a block with no state (a `gain`, a `sum`) is an error rather than a silent no-op, and a
+vector of the wrong length is rejected at parse time with the block's own state count.
+`cscript`/`pyblock`/`octblock` initialize their own state in their own start functions and take
+no `ic=`.
+
 ## Closing a loop through a dynamic block
 
 A controller reading its own previous output, or regulating a block that (directly or

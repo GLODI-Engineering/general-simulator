@@ -1,0 +1,4 @@
+* ic= pre-loads the integrator so the output starts at that value with zero error. With the
+* error held at 0 the output stays at 0.6.
+ERR kind=const value=0
+DPID1 kind=discretepid in=ERR kp=1 ki=0.5 kd=0 n=1 ts=0.1 clamp_lo=-1 clamp_hi=1 ic=0.6

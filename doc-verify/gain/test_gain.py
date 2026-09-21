@@ -64,5 +64,17 @@ def test_matrix_gain_with_wrong_length_vector_rejected():
     assert "VectorSignalSizeMismatch" in stderr and "expected: 2, got: 3" in stderr
 
 
+def test_ic_on_a_stateless_block_is_rejected():
+    """BlockInstance's generic errors: ic= on a kind with no state."""
+    code, _, stderr = _lib.run_transient(
+        HERE / "error_ic_on_stateless_block.cir", tfinal=1, dt=0.1, expect_success=False
+    )
+    assert code != 0
+    assert (
+        "this kind has no state to initialize"
+        in stderr
+    ), stderr
+
+
 if __name__ == "__main__":
     _lib.run_all(sys.modules[__name__])

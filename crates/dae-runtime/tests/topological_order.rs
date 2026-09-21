@@ -56,16 +56,19 @@ fn a_block_declared_before_its_own_dependency_still_computes_correctly() {
                 Signal::Block("A".to_string()),
                 Signal::Block("B".to_string()),
             ],
+            ic: None,
         },
         BlockInstance {
             name: "A".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(7.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "B".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(3.0)),
             inputs: vec![],
+            ic: None,
         },
     ];
 
@@ -83,16 +86,19 @@ fn a_three_block_cycle_is_rejected_with_the_exact_closing_path() {
             name: "A".to_string(),
             kind: BlockKind::Gain(GainValue::Scalar(1.0)),
             inputs: vec![Signal::Block("C".to_string())],
+            ic: None,
         },
         BlockInstance {
             name: "B".to_string(),
             kind: BlockKind::Gain(GainValue::Scalar(1.0)),
             inputs: vec![Signal::Block("A".to_string())],
+            ic: None,
         },
         BlockInstance {
             name: "C".to_string(),
             kind: BlockKind::Gain(GainValue::Scalar(1.0)),
             inputs: vec![Signal::Block("B".to_string())],
+            ic: None,
         },
     ];
 
@@ -118,6 +124,7 @@ fn a_self_referencing_block_is_rejected_as_a_length_one_cycle() {
         name: "A".to_string(),
         kind: BlockKind::Gain(GainValue::Scalar(1.0)),
         inputs: vec![Signal::Block("A".to_string())],
+        ic: None,
     }];
 
     let err = run(&blocks).unwrap_err();
@@ -142,21 +149,25 @@ fn a_cycle_broken_by_block_prev_is_not_a_cycle_at_all() {
                 Signal::BlockPrev("C".to_string()),
                 Signal::Block("SEED".to_string()),
             ],
+            ic: None,
         },
         BlockInstance {
             name: "SEED".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(1.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "B".to_string(),
             kind: BlockKind::Gain(GainValue::Scalar(1.0)),
             inputs: vec![Signal::Block("A".to_string())],
+            ic: None,
         },
         BlockInstance {
             name: "C".to_string(),
             kind: BlockKind::Gain(GainValue::Scalar(1.0)),
             inputs: vec![Signal::Block("B".to_string())],
+            ic: None,
         },
     ];
 

@@ -1,0 +1,5 @@
+* ic= pre-loads the integrator so the controller output starts at that value with zero error
+* (a bumpless start). With the error held at 0 the output must simply stay at 0.6; from rest it
+* would stay at 0.
+ERR kind=const value=0
+PID1 kind=pid kp=2 ki=3 kd=0 n=10 clamp_lo=-1 clamp_hi=1 in=ERR ic=0.6

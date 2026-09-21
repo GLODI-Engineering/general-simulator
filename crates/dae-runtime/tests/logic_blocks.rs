@@ -50,6 +50,7 @@ fn pwc(name: &str, points: &[(f64, f64)]) -> BlockInstance {
             repeat: false,
         },
         inputs: vec![],
+        ic: None,
     }
 }
 
@@ -70,11 +71,13 @@ fn and_or_xor_not_match_the_truth_table_through_the_real_graph() {
             name: "A".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(1.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "B".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(0.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "AND1".to_string(),
@@ -83,6 +86,7 @@ fn and_or_xor_not_match_the_truth_table_through_the_real_graph() {
                 Signal::Block("A".to_string()),
                 Signal::Block("B".to_string()),
             ],
+            ic: None,
         },
         BlockInstance {
             name: "OR1".to_string(),
@@ -91,6 +95,7 @@ fn and_or_xor_not_match_the_truth_table_through_the_real_graph() {
                 Signal::Block("A".to_string()),
                 Signal::Block("B".to_string()),
             ],
+            ic: None,
         },
         BlockInstance {
             name: "XOR1".to_string(),
@@ -99,11 +104,13 @@ fn and_or_xor_not_match_the_truth_table_through_the_real_graph() {
                 Signal::Block("A".to_string()),
                 Signal::Block("B".to_string()),
             ],
+            ic: None,
         },
         BlockInstance {
             name: "NOT1".to_string(),
             kind: BlockKind::LogicGate(LogicOp::Not),
             inputs: vec![Signal::Block("A".to_string())],
+            ic: None,
         },
     ];
     let trace = run(&blocks, 1e-4, 1e-4);
@@ -148,6 +155,7 @@ fn srlatch_stays_latched_until_reset_and_set_wins_when_both_asserted() {
             Signal::Block("SET".to_string()),
             Signal::Block("RESET".to_string()),
         ],
+        ic: None,
     };
     let trace = run(&[set, reset, latch], 0.007, 0.0005);
 
@@ -185,6 +193,7 @@ fn dff_only_updates_q_on_a_rising_clk_edge() {
             Signal::Block("CLK".to_string()),
             Signal::Block("D".to_string()),
         ],
+        ic: None,
     };
     let trace = run(&[clk, d, dff], 0.004, 0.0001);
 
@@ -212,6 +221,7 @@ fn tff_toggles_once_per_rising_edge_a_classic_divide_by_two() {
         name: "T".to_string(),
         kind: BlockKind::Const(ConstValue::Scalar(1.0)),
         inputs: vec![],
+        ic: None,
     };
     let tff = BlockInstance {
         name: "Q".to_string(),
@@ -223,6 +233,7 @@ fn tff_toggles_once_per_rising_edge_a_classic_divide_by_two() {
             Signal::Block("CLK".to_string()),
             Signal::Block("T".to_string()),
         ],
+        ic: None,
     };
     let trace = run(&[clk, t_in, tff], 0.004, 0.0001);
 
@@ -260,6 +271,7 @@ fn counter_increments_once_per_edge_and_wraps_at_the_declared_modulus() {
             reset: false,
         },
         inputs: vec![Signal::Block("CLK".to_string())],
+        ic: None,
     };
     let trace = run(&[clk, counter], 0.006, 0.0001);
 

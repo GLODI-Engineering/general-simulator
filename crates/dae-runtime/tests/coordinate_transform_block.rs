@@ -28,21 +28,25 @@ fn coordinate_transform_block_exposes_all_outputs_by_name() {
             name: "A".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(1.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "B".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(-0.5)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "C".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(-0.5)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "THETA".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(0.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "CLARKE".to_string(),
@@ -59,6 +63,7 @@ fn coordinate_transform_block_exposes_all_outputs_by_name() {
                 dae_runtime::Signal::Block("B".to_string()),
                 dae_runtime::Signal::Block("C".to_string()),
             ],
+            ic: None,
         },
         BlockInstance {
             name: "DQ0".to_string(),
@@ -76,6 +81,7 @@ fn coordinate_transform_block_exposes_all_outputs_by_name() {
                 dae_runtime::Signal::Block("C".to_string()),
                 dae_runtime::Signal::Block("THETA".to_string()),
             ],
+            ic: None,
         },
     ];
 

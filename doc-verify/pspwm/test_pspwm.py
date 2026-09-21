@@ -39,5 +39,25 @@ def test_fmin_exceeds_fmax_is_rejected():
     assert "FMinExceedsFMax" in stderr
 
 
+def test_ic_is_the_initial_carrier_phase():
+    """## Parameters / Example: ic=0.75 shifts the first edge -- 0, 0, 1, 1, 1."""
+    _, stdout, _ = _lib.run_transient(HERE / "ic_example.cir", tfinal=0.5, dt=0.1)
+    rows = _lib.parse_csv(stdout)
+    assert [row["PSPWM1"] for row in rows[:5]] == [0.0, 0.0, 1.0, 1.0, 1.0], rows[:5]
+    assert [row["PSPWM1_comp"] for row in rows[:5]] == [1.0, 1.0, 0.0, 0.0, 0.0], rows[:5]
+
+
+def test_ic_outside_the_unit_interval_is_rejected():
+    """## Errors: ic= must satisfy 0 <= ic < 1."""
+    code, _, stderr = _lib.run_transient(
+        HERE / "error_ic_out_of_range.cir", tfinal=1, dt=0.1, expect_success=False
+    )
+    assert code != 0
+    assert (
+        "must satisfy 0 <= ic < 1 (got 1)"
+        in stderr
+    ), stderr
+
+
 if __name__ == "__main__":
     _lib.run_all(sys.modules[__name__])

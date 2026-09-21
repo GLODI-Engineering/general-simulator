@@ -1,0 +1,3 @@
+* ic= and y0= both set the initial condition -- giving both is rejected, not silently resolved.
+SRC kind=const value=1
+TF1 kind=tf num=[1] den=[1,1] in=SRC ic=[1] y0=1

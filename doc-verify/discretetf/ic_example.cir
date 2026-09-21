@@ -1,0 +1,4 @@
+* ic= is the canonical state vector. H(z) = 1/(z-0.5): x[k+1] = 0.5 x[k] + u, y = x. With
+* u = 0 and x[0] = 8 the output reads 4, 2, 1.
+SRC kind=const value=0
+DTF1 kind=discretetf num=[1] den=[1,-0.5] ts=0.1 in=SRC ic=[8]

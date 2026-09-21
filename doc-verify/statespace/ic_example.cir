@@ -1,0 +1,4 @@
+* ic= is the state vector x(0). An undriven harmonic oscillator started at (1, 0) puts out
+* y(t) = cos(t); started from rest it never leaves 0.
+SRC kind=const value=0
+SS1 kind=statespace a=[[0,1],[-1,0]] b=[0,0] c=[1,0] in=SRC ic=[1,0]

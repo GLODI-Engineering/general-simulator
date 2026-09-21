@@ -39,6 +39,7 @@ fn sig2phys_voltage_drives_a_voltage_source_exactly_through_a_pwl_ramp() {
                 repeat: false,
             },
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "CMD_V".to_string(),
@@ -46,6 +47,7 @@ fn sig2phys_voltage_drives_a_voltage_source_exactly_through_a_pwl_ramp() {
                 domain: PhysicalDomain::Voltage,
             },
             inputs: vec![Signal::Block("CMD".to_string())],
+            ic: None,
         },
     ];
 
@@ -90,6 +92,7 @@ fn sig2phys_current_drives_a_current_source_matching_ohms_law_exactly() {
             name: "CMD".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(0.01)), // 10mA
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "CMD_I".to_string(),
@@ -97,6 +100,7 @@ fn sig2phys_current_drives_a_current_source_matching_ohms_law_exactly() {
                 domain: PhysicalDomain::Current,
             },
             inputs: vec![Signal::Block("CMD".to_string())],
+            ic: None,
         },
     ];
 
@@ -138,6 +142,7 @@ fn a_voltage_source_naming_a_domain_current_sig2phys_block_is_rejected() {
             name: "CMD".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(5.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "CMD_I".to_string(),
@@ -145,6 +150,7 @@ fn a_voltage_source_naming_a_domain_current_sig2phys_block_is_rejected() {
                 domain: PhysicalDomain::Current,
             },
             inputs: vec![Signal::Block("CMD".to_string())],
+            ic: None,
         },
     ];
 
@@ -188,6 +194,7 @@ fn a_voltage_source_naming_a_plain_block_directly_is_rejected() {
         name: "CMD".to_string(),
         kind: BlockKind::Const(ConstValue::Scalar(5.0)),
         inputs: vec![],
+        ic: None,
     }];
 
     let err = simulate_transient_with_blocks(
@@ -237,6 +244,7 @@ fn wiring_a_converter_into_the_netlist_as_a_node_is_rejected_before_any_step_run
             name: "CMD".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(5.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "CMD_V".to_string(),
@@ -244,6 +252,7 @@ fn wiring_a_converter_into_the_netlist_as_a_node_is_rejected_before_any_step_run
                 domain: PhysicalDomain::Voltage,
             },
             inputs: vec![Signal::Block("CMD".to_string())],
+            ic: None,
         },
     ];
 
@@ -289,6 +298,7 @@ fn wiring_a_converter_as_a_node_is_rejected_case_insensitively() {
             name: "CMD".to_string(),
             kind: BlockKind::Const(ConstValue::Scalar(5.0)),
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "CMD_V".to_string(),
@@ -296,6 +306,7 @@ fn wiring_a_converter_as_a_node_is_rejected_case_insensitively() {
                 domain: PhysicalDomain::Current,
             },
             inputs: vec![Signal::Block("CMD".to_string())],
+            ic: None,
         },
     ];
 
@@ -341,6 +352,7 @@ fn a_node_merely_named_like_a_non_converter_block_is_still_allowed() {
         name: "PROBE".to_string(),
         kind: BlockKind::Const(ConstValue::Scalar(1.0)),
         inputs: vec![],
+        ic: None,
     }];
 
     let trace = simulate_transient_with_blocks(
@@ -382,6 +394,7 @@ fn sig2phys_voltage_driven_source_produces_correct_rc_charging_dynamics_under_tr
                 repeat: false,
             },
             inputs: vec![],
+            ic: None,
         },
         BlockInstance {
             name: "CMD_V".to_string(),
@@ -389,6 +402,7 @@ fn sig2phys_voltage_driven_source_produces_correct_rc_charging_dynamics_under_tr
                 domain: PhysicalDomain::Voltage,
             },
             inputs: vec![Signal::Block("CMD".to_string())],
+            ic: None,
         },
     ];
 
