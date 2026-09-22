@@ -1,0 +1,6 @@
+* CScript escape-hatch chapter, "Checkpoint and resume": gain.c exports none of the checkpoint
+* state symbols. This deck runs normally without --checkpoint-out (see example.cir, the same
+* netlist); with --checkpoint-out it is refused at the first snapshot with
+* CheckpointUnsupportedBlock naming G1, and no checkpoint file is written.
+SRC kind=const value=3
+G1 kind=cscript lib=doc-verify/cscript/gain.so in=SRC

@@ -213,3 +213,62 @@ fn failed_stateful_call_does_not_corrupt_instance_state() {
         .unwrap();
     assert_eq!(out3, vec![10.0]);
 }
+
+/// `save_state`/`load_state`: the bytes taken from one instance rebuild another (here: a fresh
+/// slot in the same session, but the bytes are what a checkpoint file holds) that continues
+/// bit for bit where the first one was, on a struct-valued state.
+#[test]
+fn save_state_bytes_load_into_a_slot_that_continues_bit_identically() {
+    let mut session = spawn();
+    session.call_start("leaky", "A").unwrap();
+    let mut expect = 0.0_f64;
+    for u in [0.1, 0.2, 0.3] {
+        expect = 0.9 * expect + u;
+        let out = session
+            .call_stateful("leaky", "A", &[0.0, 0.0, u], None, 1)
+            .unwrap();
+        assert!(out[0].to_bits() == expect.to_bits());
+    }
+    let bytes = session.save_state("A").unwrap();
+    assert!(
+        bytes.starts_with(b"Octave-1-"),
+        "Octave's own binary header"
+    );
+
+    session.call_start("leaky", "B").unwrap();
+    session.load_state("B", &bytes).unwrap();
+    let from_a = session
+        .call_stateful("leaky", "A", &[0.0, 0.0, 0.4], None, 1)
+        .unwrap();
+    let from_b = session
+        .call_stateful("leaky", "B", &[0.0, 0.0, 0.4], None, 1)
+        .unwrap();
+    assert!(from_a[0].to_bits() == from_b[0].to_bits());
+    assert!(from_a[0].to_bits() == (0.9 * expect + 0.4).to_bits());
+
+    // The temporary files are gone.
+    let leftovers: Vec<_> = std::fs::read_dir(std::env::temp_dir())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with(&format!("gs-octblock-state-{}-", std::process::id())))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "temp files left behind: {leftovers:?}"
+    );
+}
+
+/// Saving an instance that was never started is an ordinary Octave-side error, and the
+/// session keeps working afterwards.
+#[test]
+fn save_state_of_an_unset_slot_is_a_runtime_error_and_the_session_survives() {
+    let mut session = spawn();
+    let err = session.save_state("never_started").unwrap_err();
+    assert!(matches!(err, OctaveError::Runtime { .. }), "got {err:?}");
+    session.call_start("accumulator", "A").unwrap();
+    let out = session
+        .call_stateful("accumulator", "A", &[0.0, 0.0, 2.0], None, 1)
+        .unwrap();
+    assert_eq!(out, vec![2.0]);
+}

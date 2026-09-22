@@ -1,0 +1,5 @@
+* CScript escape-hatch chapter, "Checkpoint and resume": partial_state.c exports only two of the
+* three checkpoint state symbols. Loading it fails up front with MissingSymbol naming
+* `cscript_state_read` -- even in this run, which asks for no checkpoint at all.
+SRC kind=const value=3
+G1 kind=cscript lib=doc-verify/cscript/partial_state.so in=SRC

@@ -1,0 +1,9 @@
+* CScript escape-hatch chapter, "Checkpoint and resume": a cscript whose library exports the
+* cscript_state_size/_write/_read triple (accumulator_checkpoint.c, compiled to
+* accumulator_checkpoint.so by test_cscript.py) checkpoints like any built-in block. The test
+* runs this to --tfinal 2e-3, then to 1e-3 with --checkpoint-out and on to 2e-3 with --resume,
+* and asserts the two CSVs are byte for byte the same. RAMP grows every step, so the running
+* sum G1 carries a full-precision fraction at the split.
+T kind=time
+RAMP kind=gain in=T k=0.7
+G1 kind=cscript lib=doc-verify/cscript/accumulator_checkpoint.so in=RAMP

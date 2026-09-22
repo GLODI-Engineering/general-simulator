@@ -139,6 +139,39 @@
 //! (`CScriptError::MissingSymbol`), not a silent no-op, since there would otherwise be no way
 //! to ever know when to run the block at all.
 //!
+//! ## The optional checkpoint state contract
+//!
+//! `dae-runtime`'s checkpoint/resume writes every block's state to a file and reads it back
+//! later, possibly in another process. The opaque `void *state` is the one thing it cannot
+//! reach on its own — only the author's own C code knows the layout — so a library opts in by
+//! exporting **all three** of:
+//!
+//! ```c
+//! // How many bytes cscript_state_write() will produce for this state. Called with the same
+//! // `state` pointer cscript_start()/cscript_clone()/cscript_state_read() returned (NULL for a
+//! // block that keeps no state -- return 0 in that case).
+//! size_t cscript_state_size(const void *state);
+//!
+//! // Serialize `state` into `out`, which has exactly cscript_state_size(state) bytes of room.
+//! // Never called when that size is 0. Write every value the block needs to continue
+//! // *bit-identically*: a memcpy of a plain-old-data struct is the usual implementation; a
+//! // struct holding pointers must serialize what they point at, not the addresses.
+//! void cscript_state_write(const void *state, uint8_t *out);
+//!
+//! // The inverse: build a fresh, independently owned state object from `len` bytes written
+//! // by cscript_state_write() (possibly by another process), and return it. The instance's
+//! // previous state is released through cscript_free() (if exported) once this returns.
+//! void *cscript_state_read(const uint8_t *in, size_t len);
+//! ```
+//!
+//! The three are all-or-nothing: exporting none keeps today's behaviour (a run that asks for
+//! a checkpoint is refused at the first snapshot, naming the block; a run that does not is
+//! unaffected), and exporting only some is a load-time [`CScriptError::MissingSymbol`] naming
+//! the absent one — a library half-way through adopting the contract would otherwise look
+//! exactly like one that never started. [`CScriptInstance::supports_state_io`] is the
+//! up-front check, [`CScriptInstance::state_bytes`]/[`CScriptInstance::restore_state`] the two
+//! halves. `xc` needs nothing from this contract: it is a plain `Vec<f64>` on the Rust side.
+//!
 //! ## Adaptive step-size control and instance cloning
 //!
 //! general-simulator's adaptive step-size control retries a rejected trial step from scratch: every
@@ -227,6 +260,19 @@ type NextSampleHitFn = unsafe extern "C" fn(
     xc: *const f64,
     xc_len: i32,
 ) -> f64;
+type StateSizeFn = unsafe extern "C" fn(state: *const c_void) -> usize;
+type StateWriteFn = unsafe extern "C" fn(state: *const c_void, out: *mut u8);
+type StateReadFn = unsafe extern "C" fn(input: *const u8, len: usize) -> *mut c_void;
+
+/// The three symbols of the checkpoint state contract, resolved together — see the module doc
+/// comment, "The optional checkpoint state contract." Held as one `Option<StateIo>` on the
+/// library so "partially exported" cannot be represented at all past load time.
+#[derive(Clone, Copy)]
+struct StateIo {
+    size: StateSizeFn,
+    write: StateWriteFn,
+    read: StateReadFn,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CScriptError {
@@ -238,6 +284,12 @@ pub enum CScriptError {
         path: PathBuf,
         symbol: &'static str,
         message: String,
+    },
+    /// [`CScriptInstance::state_bytes`]/[`CScriptInstance::restore_state`] were called on an
+    /// instance whose library exports none of the checkpoint state contract's three symbols —
+    /// check [`CScriptInstance::supports_state_io`] first.
+    StateContractNotExported {
+        path: PathBuf,
     },
 }
 
@@ -258,6 +310,12 @@ impl std::fmt::Display for CScriptError {
             } => write!(
                 f,
                 "C-script library {} is missing required symbol `{symbol}`: {message}",
+                path.display()
+            ),
+            CScriptError::StateContractNotExported { path } => write!(
+                f,
+                "C-script library {} does not export the checkpoint state contract \
+                 (`cscript_state_size`/`cscript_state_write`/`cscript_state_read`)",
                 path.display()
             ),
         }
@@ -292,15 +350,23 @@ pub struct CScriptLibrary {
     next_sample_hit: Option<NextSampleHitFn>,
     free: Option<FreeFn>,
     clone_state: Option<CloneFn>,
+    // The checkpoint state contract, all three or none -- see the module doc comment, "The
+    // optional checkpoint state contract." A partial set is refused by `load` itself.
+    state_io: Option<StateIo>,
+    // Kept for error messages (`CScriptError::StateContractNotExported`).
+    path: PathBuf,
 }
 
 impl CScriptLibrary {
     /// Loads `path` and resolves `cscript_start` (always required) plus every optional symbol
     /// this crate knows about (`cscript_output`, `cscript_derivative`, `cscript_output_xc`,
-    /// `cscript_update`, `cscript_free`, `cscript_clone`) — see the module doc comment for what
-    /// each one's absence means. Which combination is actually *required* for a given
-    /// instantiation is checked separately, by
-    /// [`CScriptRegistry::instantiate`]/[`CScriptRegistry::instantiate_xc`].
+    /// `cscript_update`, `cscript_free`, `cscript_clone`, and the
+    /// `cscript_state_size`/`cscript_state_write`/`cscript_state_read` triple) — see the module
+    /// doc comment for what each one's absence means. Which combination is actually *required*
+    /// for a given instantiation is checked separately, by
+    /// [`CScriptRegistry::instantiate`]/[`CScriptRegistry::instantiate_xc`] — except the state
+    /// triple, which is all-or-nothing and checked here: exporting one or two of the three is
+    /// [`CScriptError::MissingSymbol`] naming the first absent one.
     pub fn load(path: &Path) -> Result<Self, CScriptError> {
         // SAFETY: dlopen-ing and resolving symbols from a user-specified path is exactly the
         // unsafety this crate exists to contain -- see the module doc comment. The caller
@@ -363,6 +429,48 @@ impl CScriptLibrary {
                 .ok()
                 .map(|symbol: Symbol<CloneFn>| *symbol)
         };
+        let state_size: Option<StateSizeFn> = unsafe {
+            library
+                .get(b"cscript_state_size\0")
+                .ok()
+                .map(|symbol: Symbol<StateSizeFn>| *symbol)
+        };
+        let state_write: Option<StateWriteFn> = unsafe {
+            library
+                .get(b"cscript_state_write\0")
+                .ok()
+                .map(|symbol: Symbol<StateWriteFn>| *symbol)
+        };
+        let state_read: Option<StateReadFn> = unsafe {
+            library
+                .get(b"cscript_state_read\0")
+                .ok()
+                .map(|symbol: Symbol<StateReadFn>| *symbol)
+        };
+        let state_io = match (state_size, state_write, state_read) {
+            (None, None, None) => None,
+            (Some(size), Some(write), Some(read)) => Some(StateIo { size, write, read }),
+            (size, write, read) => {
+                // A partial set: name the first missing one, so the author sees which of the
+                // three to add rather than a generic "checkpointing unsupported" later on.
+                let symbol = if size.is_none() {
+                    "cscript_state_size"
+                } else if write.is_none() {
+                    "cscript_state_write"
+                } else {
+                    debug_assert!(read.is_none());
+                    "cscript_state_read"
+                };
+                return Err(CScriptError::MissingSymbol {
+                    path: path.to_path_buf(),
+                    symbol,
+                    message: "the checkpoint state contract is all-or-nothing: \
+                              cscript_state_size, cscript_state_write and cscript_state_read \
+                              must all be exported, or none of them"
+                        .to_string(),
+                });
+            }
+        };
 
         Ok(CScriptLibrary {
             _library: library,
@@ -374,6 +482,8 @@ impl CScriptLibrary {
             next_sample_hit,
             free,
             clone_state,
+            state_io,
+            path: path.to_path_buf(),
         })
     }
 }
@@ -603,6 +713,62 @@ impl CScriptInstance {
             library: self.library.clone(),
             state,
         })
+    }
+
+    /// Whether this instance's library exported the
+    /// `cscript_state_size`/`cscript_state_write`/`cscript_state_read` triple — check this once,
+    /// up front, before deciding whether a run containing this block can be checkpointed (see
+    /// the module doc comment, "The optional checkpoint state contract"). A library exporting
+    /// none of the three is the "no" case; a partial set never loads at all.
+    pub fn supports_state_io(&self) -> bool {
+        self.library.state_io.is_some()
+    }
+
+    /// This instance's opaque state, serialized by the library's own `cscript_state_write` into
+    /// exactly `cscript_state_size` bytes — the save half of the checkpoint state contract.
+    /// Empty for a state the library reports as zero-sized (a `NULL` state, typically).
+    pub fn state_bytes(&self) -> Result<Vec<u8>, CScriptError> {
+        let io = self
+            .library
+            .state_io
+            .ok_or_else(|| CScriptError::StateContractNotExported {
+                path: self.library.path.clone(),
+            })?;
+        // SAFETY: `self.state` came from this same library's own `cscript_start`/`cscript_clone`/
+        // `cscript_state_read`; `size` is documented as read-only on it.
+        let len = unsafe { (io.size)(self.state) };
+        let mut bytes = vec![0_u8; len];
+        if len > 0 {
+            // SAFETY: `bytes` is exactly the `len` bytes the contract promises `write` room
+            // for, valid for the duration of the call.
+            unsafe { (io.write)(self.state, bytes.as_mut_ptr()) };
+        }
+        Ok(bytes)
+    }
+
+    /// Replaces this instance's state with one rebuilt by the library's own `cscript_state_read`
+    /// from `bytes` (as produced by [`Self::state_bytes`], possibly in another process) — the
+    /// load half of the checkpoint state contract. The previous state is released through
+    /// `cscript_free` if the library exported it, exactly as on drop.
+    pub fn restore_state(&mut self, bytes: &[u8]) -> Result<(), CScriptError> {
+        let io = self
+            .library
+            .state_io
+            .ok_or_else(|| CScriptError::StateContractNotExported {
+                path: self.library.path.clone(),
+            })?;
+        // SAFETY: `bytes` is a valid slice for the duration of the call; the callee is
+        // documented to return a fresh, independently owned state (or NULL for none).
+        let new_state = unsafe { (io.read)(bytes.as_ptr(), bytes.len()) };
+        if let Some(free) = self.library.free {
+            if !self.state.is_null() {
+                // SAFETY: the old `state` was returned by this same library and is released
+                // exactly once, here, before the pointer is overwritten below.
+                unsafe { free(self.state) };
+            }
+        }
+        self.state = new_state;
+        Ok(())
     }
 }
 

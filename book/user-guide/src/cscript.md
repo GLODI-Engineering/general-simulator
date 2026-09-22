@@ -48,6 +48,10 @@ Called once per resolved step (or once per `ts=`/`freq=` sample hit — see belo
   long-running.
 - `void *cscript_clone(void *state);` — see "Adaptive step-size control" below. **Not optional**
   if you want to run under adaptive stepping.
+- `size_t cscript_state_size(const void *state);`, `void cscript_state_write(const void *state,
+  uint8_t *out);`, `void *cscript_state_read(const uint8_t *in, size_t len);` — all three
+  together, see "Checkpoint and resume" below. **Not optional** if you want to run under
+  `--checkpoint-out`/`--resume`.
 
 ## A complete minimal example
 
@@ -148,6 +152,55 @@ CScriptRequiresCloneForAdaptiveStep { block_name: "<name>" }
 message — searchable verbatim). `doc-verify/cscript/error_adaptive_needs_clone.cir` reproduces
 it directly against `gain.c` above, which deliberately exports no `cscript_clone`. The fix is
 one of two things: export `cscript_clone` from your library, or run with a fixed `--dt` instead.
+
+## Checkpoint and resume
+
+[Checkpoint and resume](checkpoint-resume.md) writes every block's state to a file and reads it
+back later, possibly in another process. Your `void *state` is the one thing the simulator
+cannot serialize on its own — only your code knows its layout — so a library opts in by
+exporting **all three** of:
+
+```c
+#include <stdint.h>
+#include <stddef.h>
+
+// How many bytes cscript_state_write() will produce for `state`. `state` is whatever
+// cscript_start()/cscript_clone()/cscript_state_read() returned -- NULL for a stateless
+// block, in which case return 0.
+size_t cscript_state_size(const void *state);
+
+// Serialize `state` into `out`, which has exactly cscript_state_size(state) bytes of room.
+// Never called when that size is 0.
+void cscript_state_write(const void *state, uint8_t *out);
+
+// The inverse: build a fresh, independently owned state from `len` bytes written by
+// cscript_state_write() -- possibly by another process -- and return it. The instance's
+// previous state is released through cscript_free() (if you export one) afterwards.
+void *cscript_state_read(const uint8_t *in, size_t len);
+```
+
+For a plain-old-data struct, each half is a `memcpy`. `doc-verify/cscript/accumulator_checkpoint.c`
+is the complete worked example — a running sum with all three functions — and
+`doc-verify/cscript/checkpoint_example.cir` runs it split across a checkpoint and asserts the
+CSV is byte for byte the uninterrupted run's. Write every value the block needs to continue
+*bit-identically*; a struct holding pointers must serialize what they point at, not the
+addresses. `xc` needs nothing from you: the solver owns it and saves it itself.
+
+The three are **all-or-nothing**:
+
+- Export **none** of them and nothing changes: the block runs exactly as before without
+  `--checkpoint-out`/`--resume`, and a run that asks for a checkpoint is refused at the first
+  one with `CheckpointUnsupportedBlock { block: "<name>", kind: "cscript" }` — never written
+  partially, no file left behind (`doc-verify/cscript/error_checkpoint_unsupported.cir`).
+- Export **some** of them and the library does not load at all, checkpoint or not, so a
+  half-adopted contract cannot masquerade as a library that never opted in:
+
+  ```text
+  error: CScript(MissingSymbol { path: "doc-verify/cscript/partial_state.so", symbol: "cscript_state_read", message: "the checkpoint state contract is all-or-nothing: cscript_state_size, cscript_state_write and cscript_state_read must all be exported, or none of them" })
+  ```
+
+  (`doc-verify/cscript/error_partial_state_contract.cir`, against `partial_state.c`, which
+  exports only the first two.)
 
 ## What isn't checked
 

@@ -3549,6 +3549,10 @@ Called once per resolved step (or once per `ts=`/`freq=` sample hit — see belo
   long-running.
 - `void *cscript_clone(void *state);` — see "Adaptive step-size control" below. **Not optional**
   if you want to run under adaptive stepping.
+- `size_t cscript_state_size(const void *state);`, `void cscript_state_write(const void *state,
+  uint8_t *out);`, `void *cscript_state_read(const uint8_t *in, size_t len);` — all three
+  together, see "Checkpoint and resume" below. **Not optional** if you want to run under
+  `--checkpoint-out`/`--resume`.
 
 ## A complete minimal example
 
@@ -3649,6 +3653,55 @@ CScriptRequiresCloneForAdaptiveStep { block_name: "<name>" }
 message — searchable verbatim). `doc-verify/cscript/error_adaptive_needs_clone.cir` reproduces
 it directly against `gain.c` above, which deliberately exports no `cscript_clone`. The fix is
 one of two things: export `cscript_clone` from your library, or run with a fixed `--dt` instead.
+
+## Checkpoint and resume
+
+[Checkpoint and resume](checkpoint-resume.md) writes every block's state to a file and reads it
+back later, possibly in another process. Your `void *state` is the one thing the simulator
+cannot serialize on its own — only your code knows its layout — so a library opts in by
+exporting **all three** of:
+
+```c
+#include <stdint.h>
+#include <stddef.h>
+
+// How many bytes cscript_state_write() will produce for `state`. `state` is whatever
+// cscript_start()/cscript_clone()/cscript_state_read() returned -- NULL for a stateless
+// block, in which case return 0.
+size_t cscript_state_size(const void *state);
+
+// Serialize `state` into `out`, which has exactly cscript_state_size(state) bytes of room.
+// Never called when that size is 0.
+void cscript_state_write(const void *state, uint8_t *out);
+
+// The inverse: build a fresh, independently owned state from `len` bytes written by
+// cscript_state_write() -- possibly by another process -- and return it. The instance's
+// previous state is released through cscript_free() (if you export one) afterwards.
+void *cscript_state_read(const uint8_t *in, size_t len);
+```
+
+For a plain-old-data struct, each half is a `memcpy`. `doc-verify/cscript/accumulator_checkpoint.c`
+is the complete worked example — a running sum with all three functions — and
+`doc-verify/cscript/checkpoint_example.cir` runs it split across a checkpoint and asserts the
+CSV is byte for byte the uninterrupted run's. Write every value the block needs to continue
+*bit-identically*; a struct holding pointers must serialize what they point at, not the
+addresses. `xc` needs nothing from you: the solver owns it and saves it itself.
+
+The three are **all-or-nothing**:
+
+- Export **none** of them and nothing changes: the block runs exactly as before without
+  `--checkpoint-out`/`--resume`, and a run that asks for a checkpoint is refused at the first
+  one with `CheckpointUnsupportedBlock { block: "<name>", kind: "cscript" }` — never written
+  partially, no file left behind (`doc-verify/cscript/error_checkpoint_unsupported.cir`).
+- Export **some** of them and the library does not load at all, checkpoint or not, so a
+  half-adopted contract cannot masquerade as a library that never opted in:
+
+  ```text
+  error: CScript(MissingSymbol { path: "doc-verify/cscript/partial_state.so", symbol: "cscript_state_read", message: "the checkpoint state contract is all-or-nothing: cscript_state_size, cscript_state_write and cscript_state_read must all be exported, or none of them" })
+  ```
+
+  (`doc-verify/cscript/error_partial_state_contract.cir`, against `partial_state.c`, which
+  exports only the first two.)
 
 ## What isn't checked
 
@@ -4124,8 +4177,8 @@ t,SRC,G1
 
 Each instance's own state (whatever `<function>_start` returns) lives entirely **inside the
 shared `octave-cli` session itself**, in one global struct keyed by the block's own instance
-name — it is never serialized back into Rust the way `pyblock`'s opaque Python-object handle or
-`cscript`'s opaque `void*` are. Two instances of the *same* Octave function never contaminate
+name — it is never handed back to Rust step by step the way `pyblock`'s opaque Python-object
+handle or `cscript`'s opaque `void*` are (the one exception is a checkpoint, see below). Two instances of the *same* Octave function never contaminate
 each other's state (validated directly against real `octave-cli`, interleaved calls, zero
 cross-contamination). A failed call — an Octave-side exception caught by this crate's own
 `try`/`catch` protocol — cannot corrupt that state either: Octave never performs a multi-value
@@ -4163,6 +4216,19 @@ not the block's own opaque one, exactly mirroring `cscript`'s/`pyblock`'s own `x
 - `in=<signal>` or `inputs=<sig1,sig2,...>` — exactly one of these.
 - `ts=<f64>` / `freq=<f64>` [`to=<f64>`] / `ts=variable` — optional.
 - `xc_count=<usize>` — optional, default `0`.
+
+### Checkpoint and resume
+
+[Checkpoint and resume](checkpoint-resume.md) works for `kind=octblock` with **no change to
+your `.m` files**. At a checkpoint the simulator copies the instance's own state slot to a
+scratch variable and writes it with Octave's own `save -binary` to a short-lived temporary
+file, reads the bytes into the checkpoint, and deletes the file; on `--resume` it writes the
+bytes back out, `load`s them, and assigns the result into the same slot, replacing what
+`<function>_start` had just put there. Whatever your `_start` returned — a scalar, a struct, a
+matrix — goes along, and Octave's binary format stores doubles as their exact bits, so the
+resumed run is bit-identical to an uninterrupted one exactly as it is for the built-in blocks.
+`doc-verify/octblock/checkpoint_example.cir` runs the unmodified accumulator above split across
+a checkpoint and asserts the CSV is byte for byte the uninterrupted run's.
 
 ## Adaptive step-size control is not supported — a hard limitation, not a caveat
 
@@ -4574,14 +4640,25 @@ periodic checkpoint.
 |---|---|---|
 | `pyblock` | yes | the state object is pickled; anything `copy.deepcopy` accepts almost always pickles too |
 | `pyfunc`, `octfunc` | yes | stateless hosts — only their sample-time bookkeeping is stored |
-| `cscript` | **not yet** | its state is an opaque C heap object |
-| `octblock` | **not yet** | its state lives inside the `octave-cli` child process |
+| `octblock` | yes | the instance's own state slot is written with Octave's `save -binary` and read back with `load` — no change to your `.m` files |
+| `cscript` | **opt-in** | the library exports `cscript_state_size`, `cscript_state_write` and `cscript_state_read` — see [the CScript chapter](cscript.md#checkpoint-and-resume) |
 
-A run containing a `cscript` or `octblock` block is refused at the first checkpoint with
-`CheckpointUnsupportedBlock`, naming the block — never written partially. Runs that do not ask
-for a checkpoint are unaffected. The intended opt-in contracts (a
-`cscript_state_size`/`cscript_state_write`/`cscript_state_read` symbol triple, and an Octave
-`save -binary`/`load` round trip of the instance struct) are tracked as follow-up work.
+A `cscript` block's state is an opaque C heap object that only its own library can lay out,
+so checkpointing it needs three more exported functions. A library exporting **none** of them
+behaves as before: the run is fine without `--checkpoint-out`/`--resume`, and with one it is
+refused at the first checkpoint with `CheckpointUnsupportedBlock`, naming the block — never
+written partially, and no file is left behind:
+
+```text
+error: CheckpointUnsupportedBlock { block: "G1", kind: "cscript" }
+```
+
+A library exporting only **some** of the three does not load at all, whether or not a
+checkpoint was asked for, with a `MissingSymbol` error naming the one that is absent.
+
+`octblock` needs no opt-in: whatever `<function>_start` returned — a scalar, a struct, a
+matrix — is what Octave's own binary format saves, and it stores doubles as their exact bits,
+so the resumed run is bit-identical exactly as it is for the built-in blocks.
 
 ## The file
 
@@ -7798,10 +7875,29 @@ whose output is not stable across Rust versions and would make a file from one t
 under another. A hash mismatch or an `unknowns` mismatch is `DaeError::CheckpointDeckMismatch`.
 
 The final snapshot is opt-in (`CheckpointControl::final_snapshot`) rather than unconditional
-for one reason: `cscript`/`octblock` state cannot be snapshotted, and that must only surface
-when a checkpoint was actually asked for. The first cut of this feature returned a final
-snapshot always and broke every `cscript` CLI test — a good illustration of why the refusal is
-lazy, not up front.
+for one reason: a `cscript` whose library does not export the checkpoint state contract cannot
+be snapshotted, and that must only surface when a checkpoint was actually asked for. The first
+cut of this feature returned a final snapshot always and broke every `cscript` CLI test — a
+good illustration of why the refusal is lazy, not up front.
+
+The escape hatches each carry their opaque state as bytes in `BlockSnapshot`:
+
+- `pyblock` — `pickle`, no opt-in.
+- `octblock` — `OctaveSession::save_state`/`load_state`: the `__gs_state.<name>` slot is copied
+  to a scratch variable, `save('-binary', ...)`d to a temporary file under `std::env::temp_dir`
+  (unique per process, child and call), read into Rust and deleted; `load` is the mirror. It
+  rides the same marker-framed call protocol as every other session method, so an Octave-side
+  failure is an ordinary `OctaveError::Runtime` and the session survives. No opt-in.
+- `cscript` — `CScriptInstance::state_bytes`/`restore_state` over the
+  `cscript_state_size`/`_write`/`_read` triple, resolved in `CScriptLibrary::load` as one
+  `Option<StateIo>` so a partial set cannot exist past load time (it is a `MissingSymbol`
+  naming the absent one). `supports_state_io()` is the up-front check the snapshot arm makes
+  before refusing with `CheckpointUnsupportedBlock`. The restore arm re-checks it, because the
+  deck hash covers the `lib=` path, not the `.so`'s contents.
+
+The `CScript`/`OctBlock` variants were appended to `BlockSnapshot` after `PyBlock`; postcard
+encodes a variant as its index, so every existing file decodes unchanged and `FORMAT_VERSION`
+stayed at 1.
 
 
 <!-- Developer Guide / `continuous-blocks`: the block library -->

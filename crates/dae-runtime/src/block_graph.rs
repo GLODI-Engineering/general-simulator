@@ -1892,9 +1892,11 @@ pub type CheckpointSink<'a> = dyn FnMut(&Checkpoint) -> Result<(), DaeError> + '
 /// a later call continues bit-identically to a run that never stopped. See `checkpoint`'s own
 /// module doc comment for what a snapshot holds and the identity check a resume performs.
 ///
-/// Escape-hatch blocks whose state this crate cannot read (`cscript`, `octblock`) are refused
-/// at the first snapshot as [`DaeError::CheckpointUnsupportedBlock`] — *not* up front, so a run
-/// that never asks for a checkpoint (every existing caller) is unaffected by their presence.
+/// A `cscript` block whose library does not export the checkpoint state contract (the
+/// `cscript_state_size`/`_write`/`_read` triple) is refused at the first snapshot as
+/// [`DaeError::CheckpointUnsupportedBlock`] — *not* up front, so a run that never asks for a
+/// checkpoint (every existing caller) is unaffected by its presence. `octblock` and `pyblock`
+/// need no opt-in.
 #[allow(clippy::too_many_arguments)]
 pub fn simulate_transient_with_blocks_checkpointed(
     source: &str,
@@ -2908,18 +2910,48 @@ fn snapshot_block_states(
                     count: *count,
                     prev_clk: *prev_clk,
                 },
-                BlockState::CScript { .. } => {
-                    return Err(DaeError::CheckpointUnsupportedBlock {
-                        block: b.name.clone(),
-                        kind: "cscript",
-                    })
+                BlockState::CScript {
+                    instance,
+                    time_since_sample,
+                    next_hit_dt,
+                    last_output,
+                    xc,
+                } => {
+                    // Opt-in: only a library exporting the state triple can be read. Refused
+                    // here, at the first snapshot, so a run that never asks for one is
+                    // unaffected -- see `checkpoint`'s module doc comment.
+                    if !instance.supports_state_io() {
+                        return Err(DaeError::CheckpointUnsupportedBlock {
+                            block: b.name.clone(),
+                            kind: "cscript",
+                        });
+                    }
+                    BlockSnapshot::CScript {
+                        time_since_sample: *time_since_sample,
+                        next_hit_dt: *next_hit_dt,
+                        last_output: last_output.clone(),
+                        xc: xc.clone(),
+                        state: instance.state_bytes().map_err(DaeError::CScript)?,
+                    }
                 }
-                BlockState::OctBlock { .. } => {
-                    return Err(DaeError::CheckpointUnsupportedBlock {
-                        block: b.name.clone(),
-                        kind: "octblock",
-                    })
-                }
+                BlockState::OctBlock {
+                    session,
+                    instance,
+                    time_since_sample,
+                    next_hit_dt,
+                    last_output,
+                    xc,
+                    ..
+                } => BlockSnapshot::OctBlock {
+                    time_since_sample: *time_since_sample,
+                    next_hit_dt: *next_hit_dt,
+                    last_output: last_output.clone(),
+                    xc: xc.clone(),
+                    state: session
+                        .borrow_mut()
+                        .save_state(instance)
+                        .map_err(DaeError::Octave)?,
+                },
                 BlockState::OctFunction {
                     time_since_sample,
                     last_output,
@@ -3110,17 +3142,63 @@ fn restore_block_states(
                 last_output.clone_from(so);
                 xc.clone_from(sxc);
             }
-            (BlockState::CScript { .. }, _) => {
-                return Err(DaeError::CheckpointUnsupportedBlock {
-                    block: b.name.clone(),
-                    kind: "cscript",
-                })
+            (
+                BlockState::CScript {
+                    instance,
+                    time_since_sample,
+                    next_hit_dt,
+                    last_output,
+                    xc,
+                },
+                BlockSnapshot::CScript {
+                    time_since_sample: st,
+                    next_hit_dt: sn,
+                    last_output: so,
+                    xc: sxc,
+                    state: bytes,
+                },
+            ) => {
+                // The deck hash covers the `lib=` path, not the library's contents: a `.so`
+                // rebuilt without the triple since the checkpoint was written is caught here.
+                if !instance.supports_state_io() {
+                    return Err(DaeError::CheckpointUnsupportedBlock {
+                        block: b.name.clone(),
+                        kind: "cscript",
+                    });
+                }
+                instance.restore_state(bytes).map_err(DaeError::CScript)?;
+                *time_since_sample = *st;
+                *next_hit_dt = *sn;
+                last_output.clone_from(so);
+                xc.clone_from(sxc);
             }
-            (BlockState::OctBlock { .. }, _) => {
-                return Err(DaeError::CheckpointUnsupportedBlock {
-                    block: b.name.clone(),
-                    kind: "octblock",
-                })
+            (
+                BlockState::OctBlock {
+                    session,
+                    instance,
+                    time_since_sample,
+                    next_hit_dt,
+                    last_output,
+                    xc,
+                    ..
+                },
+                BlockSnapshot::OctBlock {
+                    time_since_sample: st,
+                    next_hit_dt: sn,
+                    last_output: so,
+                    xc: sxc,
+                    state: bytes,
+                },
+            ) => {
+                // Overwrites the slot `call_start` just initialised at construction.
+                session
+                    .borrow_mut()
+                    .load_state(instance, bytes)
+                    .map_err(DaeError::Octave)?;
+                *time_since_sample = *st;
+                *next_hit_dt = *sn;
+                last_output.clone_from(so);
+                xc.clone_from(sxc);
             }
             _ => return Err(corrupt(&b.name)),
         }

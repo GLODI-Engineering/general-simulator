@@ -20,8 +20,9 @@
 //!   and the adaptive controller's next $\Delta t$;
 //! - `prev_outputs` — what every `prev:` signal reads on the next step;
 //! - every block's own state, as a [`BlockSnapshot`]: state vectors, sample-time accumulators
-//!   and held outputs, phases, logic bits, counts — and for a `pyblock`, its state object as
-//!   `pickle` bytes.
+//!   and held outputs, phases, logic bits, counts — and for the escape-hatch hosts, the opaque
+//!   state as bytes (`pickle` for a `pyblock`, the library's own `cscript_state_write` for a
+//!   `cscript`, an Octave `save -binary` for an `octblock`).
 //!
 //! Not in it: the netlist, the block definitions, the diode/switch models, the time-step
 //! configuration. A checkpoint is loaded *into* a deck the caller supplies, and refuses a deck
@@ -33,17 +34,22 @@
 //! `u32` [`FORMAT_VERSION`]. postcard because it is compact, has a stable published wire
 //! encoding, and round-trips `f64` bit-exactly (a text format would need care to do so).
 //! A future incompatible layout bumps `FORMAT_VERSION`; an old file is then rejected up front
-//! by [`Checkpoint::from_bytes`] rather than misread.
+//! by [`Checkpoint::from_bytes`] rather than misread. Appending a variant to
+//! [`BlockSnapshot`] is *not* such a change — postcard writes a variant as its index, so the
+//! existing variants keep their bytes — which is how the `CScript`/`OctBlock` variants landed
+//! without a bump.
 //!
 //! # Escape-hatch blocks
 //!
 //! `kind=pyblock` state round-trips via `pickle` with no author opt-in (the same reasoning as
-//! its `copy.deepcopy`-based clone). `kind=cscript` and `kind=octblock` hold their state in a
-//! C heap object / an Octave child process, neither of which this crate can read: a run
-//! containing one is refused at checkpoint time with
-//! [`DaeError::CheckpointUnsupportedBlock`], naming the block, rather than written partially.
-//! The intended opt-in contracts (a `cscript_state_size`/`_write`/`_read` symbol triple, an
-//! Octave `save -binary`/`load` round trip of the instance struct) are follow-up work.
+//! its `copy.deepcopy`-based clone). `kind=octblock` state is the `__gs_state.<name>` slot in
+//! the `octave-cli` child, saved and loaded with Octave's own `save -binary`/`load` through a
+//! short-lived temporary file — also no opt-in. `kind=cscript` state is an opaque C heap object
+//! only the author's code can lay out, so it is opt-in: a library exporting the
+//! `cscript_state_size`/`cscript_state_write`/`cscript_state_read` triple checkpoints; one
+//! exporting none of them keeps running unchanged but is refused at checkpoint time with
+//! [`DaeError::CheckpointUnsupportedBlock`], naming the block, rather than written partially;
+//! one exporting only some of them fails to load at all (`cscript_ffi::CScriptError::MissingSymbol`).
 
 use std::collections::BTreeMap;
 use std::hash::Hasher;
@@ -112,6 +118,32 @@ pub enum BlockSnapshot {
     /// `PyBlock` — the zero-order-hold bookkeeping, the solver-owned `xc`, and the block's own
     /// state object as `pickle` bytes.
     PyBlock {
+        time_since_sample: f64,
+        next_hit_dt: f64,
+        last_output: Vec<f64>,
+        xc: Vec<f64>,
+        state: Vec<u8>,
+    },
+    /// `CScript` — the same bookkeeping and `xc` as `PyBlock`, and the opaque C state as the
+    /// bytes the library's own `cscript_state_write` produced (see `cscript_ffi`'s module doc
+    /// comment, "The optional checkpoint state contract"). Only ever built for a library that
+    /// exports that contract; otherwise the run is refused as
+    /// [`DaeError::CheckpointUnsupportedBlock`].
+    ///
+    /// Appended after `PyBlock` on purpose: postcard encodes a variant as its index, so adding
+    /// variants at the end leaves every existing file's encoding unchanged and
+    /// [`FORMAT_VERSION`] stays at 1.
+    CScript {
+        time_since_sample: f64,
+        next_hit_dt: f64,
+        last_output: Vec<f64>,
+        xc: Vec<f64>,
+        state: Vec<u8>,
+    },
+    /// `OctBlock` — the same bookkeeping and `xc`, and the instance's `__gs_state.<name>` slot
+    /// as the bytes of an Octave `save -binary` of it (see
+    /// `octave_ffi::OctaveSession::save_state`). Needs no author opt-in.
+    OctBlock {
         time_since_sample: f64,
         next_hit_dt: f64,
         last_output: Vec<f64>,

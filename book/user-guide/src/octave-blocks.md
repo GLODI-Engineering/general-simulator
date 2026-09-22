@@ -190,8 +190,8 @@ t,SRC,G1
 
 Each instance's own state (whatever `<function>_start` returns) lives entirely **inside the
 shared `octave-cli` session itself**, in one global struct keyed by the block's own instance
-name — it is never serialized back into Rust the way `pyblock`'s opaque Python-object handle or
-`cscript`'s opaque `void*` are. Two instances of the *same* Octave function never contaminate
+name — it is never handed back to Rust step by step the way `pyblock`'s opaque Python-object
+handle or `cscript`'s opaque `void*` are (the one exception is a checkpoint, see below). Two instances of the *same* Octave function never contaminate
 each other's state (validated directly against real `octave-cli`, interleaved calls, zero
 cross-contamination). A failed call — an Octave-side exception caught by this crate's own
 `try`/`catch` protocol — cannot corrupt that state either: Octave never performs a multi-value
@@ -229,6 +229,19 @@ not the block's own opaque one, exactly mirroring `cscript`'s/`pyblock`'s own `x
 - `in=<signal>` or `inputs=<sig1,sig2,...>` — exactly one of these.
 - `ts=<f64>` / `freq=<f64>` [`to=<f64>`] / `ts=variable` — optional.
 - `xc_count=<usize>` — optional, default `0`.
+
+### Checkpoint and resume
+
+[Checkpoint and resume](checkpoint-resume.md) works for `kind=octblock` with **no change to
+your `.m` files**. At a checkpoint the simulator copies the instance's own state slot to a
+scratch variable and writes it with Octave's own `save -binary` to a short-lived temporary
+file, reads the bytes into the checkpoint, and deletes the file; on `--resume` it writes the
+bytes back out, `load`s them, and assigns the result into the same slot, replacing what
+`<function>_start` had just put there. Whatever your `_start` returned — a scalar, a struct, a
+matrix — goes along, and Octave's binary format stores doubles as their exact bits, so the
+resumed run is bit-identical to an uninterrupted one exactly as it is for the built-in blocks.
+`doc-verify/octblock/checkpoint_example.cir` runs the unmodified accumulator above split across
+a checkpoint and asserts the CSV is byte for byte the uninterrupted run's.
 
 ## Adaptive step-size control is not supported — a hard limitation, not a caveat
 

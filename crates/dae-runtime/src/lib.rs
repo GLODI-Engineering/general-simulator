@@ -296,8 +296,9 @@ pub enum DaeError {
         unknowns_in_checkpoint: Vec<String>,
         unknowns_in_deck: Vec<String>,
     },
-    /// A block whose state lives where this crate cannot read it (`cscript`'s C heap object,
-    /// `octblock`'s Octave-side struct) is in a run being checkpointed — refused whole, never
+    /// A block whose state this crate cannot read is in a run being checkpointed: a `cscript`
+    /// whose library exports none of the `cscript_state_size`/`_write`/`_read` triple (its
+    /// state is an opaque C heap object only that library can lay out). Refused whole, never
     /// written partially. See `checkpoint`'s own module doc comment.
     CheckpointUnsupportedBlock {
         block: String,

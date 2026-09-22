@@ -344,3 +344,75 @@ fn supports_next_sample_hit_is_true_for_the_variable_sample_time_fixture() {
     let instance = registry.instantiate(&lib_path).expect("load fixture");
     assert!(instance.supports_next_sample_hit());
 }
+
+/// The checkpoint state contract, end to end against a real compiled `.so`: the bytes written
+/// after a few calls rebuild an instance that continues *exactly* where the original was, and
+/// the original is untouched by the read (an independent object, not an alias).
+#[test]
+fn state_bytes_round_trip_rebuilds_an_identical_independent_state() {
+    let lib_path = compile_fixture("accumulator_checkpoint");
+    let mut registry = CScriptRegistry::new();
+    let mut a = registry.instantiate(&lib_path).expect("load fixture");
+    assert!(a.supports_state_io());
+
+    a.call(&[0.1], 0.0, 2);
+    a.call(&[0.2], 0.0, 2);
+    let bytes = a.state_bytes().expect("state_bytes");
+    assert_eq!(bytes.len(), 16, "sizeof(AccState) = double + long");
+
+    let mut b = registry
+        .instantiate(&lib_path)
+        .expect("load second instance");
+    b.restore_state(&bytes).expect("restore_state");
+    let from_a = a.call(&[0.4], 0.0, 2);
+    let from_b = b.call(&[0.4], 0.0, 2);
+    assert_eq!(from_a, from_b);
+    assert!(
+        from_a[0].to_bits() == (0.1_f64 + 0.2 + 0.4).to_bits(),
+        "the sum carries its exact bits, got {:e}",
+        from_a[0]
+    );
+    assert_eq!(from_a[1], 3.0);
+    // Independent: stepping b again leaves a where it was.
+    b.call(&[100.0], 0.0, 2);
+    assert_eq!(a.call(&[0.0], 0.0, 2)[1], 4.0);
+}
+
+/// Exporting only some of the three symbols is a load-time error naming the missing one --
+/// not a silent "this library does not checkpoint".
+#[test]
+fn a_partial_state_contract_is_rejected_at_load_naming_the_missing_symbol() {
+    let lib_path = compile_fixture("accumulator_partial_state");
+    let mut registry = CScriptRegistry::new();
+    let err = registry
+        .instantiate(&lib_path)
+        .expect_err("a partial state contract must not load");
+    assert!(
+        matches!(
+            &err,
+            cscript_ffi::CScriptError::MissingSymbol { symbol, .. }
+                if *symbol == "cscript_state_read"
+        ),
+        "expected MissingSymbol naming cscript_state_read, got {err:?}"
+    );
+    assert!(err.to_string().contains("all-or-nothing"));
+}
+
+/// A library exporting none of the three still loads and runs; the state calls report the
+/// absence as an ordinary error rather than a panic.
+#[test]
+fn no_state_contract_reports_unsupported_not_panic() {
+    let lib_path = compile_fixture("accumulator");
+    let mut registry = CScriptRegistry::new();
+    let mut instance = registry.instantiate(&lib_path).expect("load fixture");
+    assert!(!instance.supports_state_io());
+    assert!(matches!(
+        instance.state_bytes(),
+        Err(cscript_ffi::CScriptError::StateContractNotExported { .. })
+    ));
+    assert!(matches!(
+        instance.restore_state(&[]),
+        Err(cscript_ffi::CScriptError::StateContractNotExported { .. })
+    ));
+    assert_eq!(instance.call(&[1.0], 0.0, 2), vec![1.0, 1.0]);
+}

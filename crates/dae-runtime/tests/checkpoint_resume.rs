@@ -371,3 +371,169 @@ fn a_pyblock_state_round_trips_through_pickle() {
     // The integral is genuinely nonzero by the split, i.e. there was state to carry.
     assert_ne!(first.last().unwrap().4["PI"], SignalValue::Scalar(0.0));
 }
+
+// ---------------------------------------------------------------------------------------------
+// Escape hatches: `cscript` (opt-in state contract) and `octblock` (Octave `save`/`load`).
+// ---------------------------------------------------------------------------------------------
+
+/// Compiles one of `cscript-ffi`'s own `.c` fixtures into a `.so` under a directory unique to
+/// this process, so two test binaries (or two tests here) never race on the same file.
+fn compile_cscript_fixture(name: &str) -> std::path::PathBuf {
+    let source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../cscript-ffi/tests/fixtures")
+        .join(format!("{name}.c"));
+    let out_dir = std::env::temp_dir().join(format!(
+        "dae-runtime-checkpoint-fixtures-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let lib = out_dir.join(format!("lib{name}.so"));
+    let status = std::process::Command::new("cc")
+        .args(["-shared", "-fPIC", "-O0", "-o"])
+        .arg(&lib)
+        .arg(&source)
+        .status()
+        .expect("run cc");
+    assert!(status.success(), "cc failed on {name}.c");
+    lib
+}
+
+/// A small deck around one escape-hatch block `G` fed by a ramp, so its state (a running sum)
+/// carries a full-precision fraction by the split. `block_line` is the `G kind=... ` line.
+fn escape_hatch_deck(block_line: &str) -> String {
+    format!(
+        "V1 a 0 0.7\nR1 a 0 1k\nVA kind=phys2sig node=a\nT kind=time\n\
+         U kind=product inputs=VA,T\n{block_line}\nF kind=tf in=G num=[1] den=[1e-3,1]\n"
+    )
+}
+
+/// Runs `deck` from `resume` to `t_final` with a fixed step, returning the rows and the final
+/// snapshot (or the error).
+fn run_deck(
+    deck: &str,
+    t_final: f64,
+    resume: Option<&Checkpoint>,
+    final_snapshot: bool,
+) -> Result<(Vec<Row>, Option<Checkpoint>), DaeError> {
+    let System {
+        ideal_diodes,
+        ideal_switches,
+        gates,
+        blocks,
+        shared_r_on,
+        ..
+    } = build_system(deck, Dialect::Ngspice).unwrap();
+    let mut rows = Vec::new();
+    let last = simulate_transient_with_blocks_checkpointed(
+        deck,
+        Dialect::Ngspice,
+        &ideal_diodes,
+        &ideal_switches,
+        &blocks,
+        &gates,
+        shared_r_on,
+        None,
+        t_final,
+        TimeStep::Fixed(1e-4),
+        1_000_000,
+        CheckpointControl {
+            resume,
+            final_snapshot,
+            ..CheckpointControl::default()
+        },
+        |t, p, o| {
+            rows.push(row(t, p, o));
+            Ok(())
+        },
+    )?;
+    Ok((rows, last))
+}
+
+/// The same split-run identity as the built-in blocks, on a `cscript` whose library exports
+/// the `cscript_state_size`/`_write`/`_read` triple: the C heap state crosses the checkpoint
+/// as bytes and the resumed half agrees bit for bit.
+#[test]
+fn a_cscript_state_round_trips_through_the_state_contract() {
+    let lib = compile_cscript_fixture("accumulator_checkpoint");
+    let deck = escape_hatch_deck(&format!(
+        "G kind=cscript lib=\"{}\" in=U outputs=G,GCOUNT",
+        lib.display()
+    ));
+    let (whole, _) = run_deck(&deck, 2e-2, None, false).unwrap();
+    let (first, ckpt) = run_deck(&deck, 1e-2, None, true).unwrap();
+    let ckpt = Checkpoint::from_bytes(&ckpt.unwrap().to_bytes().unwrap()).unwrap();
+    let (second, _) = run_deck(&deck, 2e-2, Some(&ckpt), false).unwrap();
+    assert_bit_identical(&whole, &first, &second);
+    // There was real state to carry: the sum is a nonzero fraction, the count is the step count.
+    let last = first.last().unwrap();
+    assert_ne!(last.4["G"], SignalValue::Scalar(0.0));
+    assert_eq!(last.4["GCOUNT"], SignalValue::Scalar(first.len() as f64));
+}
+
+/// A library exporting only some of the triple does not load at all, naming the missing
+/// symbol -- whether or not a checkpoint was asked for.
+#[test]
+fn a_cscript_with_a_partial_state_contract_is_refused_at_load() {
+    let lib = compile_cscript_fixture("accumulator_partial_state");
+    let deck = escape_hatch_deck(&format!("G kind=cscript lib=\"{}\" in=U", lib.display()));
+    let err = run_deck(&deck, 1e-3, None, false).unwrap_err();
+    match &err {
+        DaeError::CScript(cscript_ffi::CScriptError::MissingSymbol { symbol, .. }) => {
+            assert_eq!(*symbol, "cscript_state_read");
+        }
+        other => panic!("expected MissingSymbol, got {other:?}"),
+    }
+}
+
+/// A library exporting none of the triple runs exactly as before when no checkpoint is asked
+/// for, and is refused -- naming the block -- the moment one is.
+#[test]
+fn a_cscript_without_the_state_contract_runs_but_is_refused_at_checkpoint_time() {
+    let lib = compile_cscript_fixture("accumulator");
+    let deck = escape_hatch_deck(&format!(
+        "G kind=cscript lib=\"{}\" in=U outputs=G,GCOUNT",
+        lib.display()
+    ));
+    let (rows, none) = run_deck(&deck, 1e-3, None, false).unwrap();
+    assert_eq!(rows.len(), 10);
+    assert!(none.is_none());
+
+    let err = run_deck(&deck, 1e-3, None, true).unwrap_err();
+    assert!(
+        matches!(&err, DaeError::CheckpointUnsupportedBlock { block, kind }
+            if block == "G" && *kind == "cscript"),
+        "expected CheckpointUnsupportedBlock naming G, got {err:?}"
+    );
+}
+
+fn octave_cli_available() -> bool {
+    std::process::Command::new("octave-cli")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// An `octblock`'s `__gs_state.<name>` slot -- here a struct with a double and an int32 -- rides
+/// along as Octave `save -binary` bytes, with no author opt-in, and the resumed half agrees bit
+/// for bit. Skipped (with a note) when `octave-cli` is not on `PATH`.
+#[test]
+fn an_octblock_state_round_trips_through_octave_save_and_load() {
+    if !octave_cli_available() {
+        eprintln!("skipping: octave-cli is not on PATH");
+        return;
+    }
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/oct_leaky");
+    let deck = escape_hatch_deck(&format!(
+        "G kind=octblock path=\"{}\" function=leaky in=U",
+        dir.display()
+    ));
+    let (whole, _) = run_deck(&deck, 2e-2, None, false).unwrap();
+    let (first, ckpt) = run_deck(&deck, 1e-2, None, true).unwrap();
+    let ckpt = Checkpoint::from_bytes(&ckpt.unwrap().to_bytes().unwrap()).unwrap();
+    let (second, _) = run_deck(&deck, 2e-2, Some(&ckpt), false).unwrap();
+    assert_bit_identical(&whole, &first, &second);
+    assert_ne!(first.last().unwrap().4["G"], SignalValue::Scalar(0.0));
+}
