@@ -1,0 +1,15 @@
+* The phase input is a LEAD, not a lag. Both modulators share one 1 Hz frequency command and a
+* 50 % duty; REF is commanded phase=0, LEAD phase=0.25 cycles. The gate reads
+* theta = (internal phase + phase input) mod 1, so LEAD's carrier is already a quarter cycle
+* ahead: its on-interval begins at t = (1 - 0.25) T = 0.75 s, a quarter period BEFORE REF's
+* first wrap at t = 1.0 s. dt = 0.125 s (8 steps per period) is exactly representable, so the
+* integrated phase lands on the wrap points without rounding.
+* Expected main outputs (t = 0.125, 0.25, ..., 1.0):
+*   REF  = 1 1 1 0 0 0 0 1
+*   LEAD = 1 0 0 0 0 1 1 1
+FREQ kind=const value=1
+PH0 kind=const value=0
+PH25 kind=const value=0.25
+DUTY kind=const value=0.5
+REF kind=pspwm f_min=0.1 f_max=10 inputs=FREQ,PH0,DUTY
+LEAD kind=pspwm f_min=0.1 f_max=10 inputs=FREQ,PH25,DUTY

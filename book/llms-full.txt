@@ -670,6 +670,47 @@ the control variable rather than duty. It owns its own internal oscillator state
 bit-for-bit phase-synchronized — the way a bridge's two legs need to be — without a
 separately-declared shared oscillator block in between.
 
+### `pspwm`'s `phase` input is a lead, not a lag
+
+The block keeps its own integrated carrier phase $\varphi \in [0, 1)$ (cycles), advanced each
+step by the clamped frequency command, and gates on
+
+$$\theta = (\varphi + \text{phase}) \bmod 1,$$
+
+with `main` on for $\theta \in [\text{red}, \text{duty})$. Adding the `phase` input *advances*
+$\theta$, so a positive `phase` command moves every edge **earlier**: the on-interval of a block
+commanded `phase` $= p$ begins at
+
+$$t_{\text{on}} = (1 - p)\,T \pmod T,$$
+
+where $T = 1/f$ is the carrier period — not at $p\,T$. A phase of $0.25$ starts the pulse three
+quarters of the way through the reference block's period, not one quarter.
+
+Concretely, at $f = 1\,\text{Hz}$, 50 % duty and $\Delta t = 0.125\,\text{s}$:
+
+```text
+FREQ kind=const value=1
+PH0  kind=const value=0
+PH25 kind=const value=0.25
+DUTY kind=const value=0.5
+REF  kind=pspwm f_min=0.1 f_max=10 inputs=FREQ,PH0,DUTY
+LEAD kind=pspwm f_min=0.1 f_max=10 inputs=FREQ,PH25,DUTY
+```
+
+`REF` first rises (its carrier wraps) at $t = 1.0\,\text{s}$; `LEAD` rises at
+$t = 0.75\,\text{s}$ — a quarter period *before* it, and its falling edge at $0.25\,\text{s}$
+likewise precedes `REF`'s at $0.5\,\text{s}$. `doc-verify/pspwm/phase_lead.cir` reproduces
+this run and `test_pspwm.py::test_phase_input_is_a_lead_not_a_lag` asserts it.
+
+Why it is easy to get wrong: for a single modulator the sign is invisible — the waveform is a
+correct square wave at the right duty and frequency, merely positioned elsewhere. It only
+matters once two modulators must hold a phase relationship, which is what the block exists
+for. In a symmetric structure it can even partially cancel: mirroring both legs of a bridge
+about the period preserves the *difference* waveform when the inner angle is the only shift,
+so a dual-active-bridge primary can come out right while the secondary, which carries the main
+phase shift, does not. If you want a leg to start its pulse at a fraction $s$ *into* the
+reference period (a lag), command `phase` $= 1 - s$.
+
 ## Two real errors worth knowing before you hit them
 
 **`ctrl=` naming something that isn't a `domain=voltage` sig2phys.** Wiring `ctrl=` directly to
@@ -846,7 +887,7 @@ by *name* (as a `V`/`I` source's literal or a gate's `ctrl=`), never wired into 
 | `discretestatespace` / `discretetf` / `discretepid` | the discrete-domain counterparts of the three above (`ts=`/`freq=` required) | same as their continuous counterparts | same | `dynamic-blocks.md` |
 | `vco` | bare `[0, 1)` oscillator ramp from a frequency command | 1 | 1 | `dynamic-blocks.md` |
 | `pwm` | PWM Modulator 1: fixed frequency, block-driven duty, active-high complementary pair with dead time | 1 (`duty`) | 2 (`main`, `complement`) | `gate-bindings.md` |
-| `pspwm` | PWM Modulator 2: frequency+phase+duty block-driven, own phase-integration state | 3 (`freq`, `phase`, `duty`) | 2 (`main`, `complement`) | `gate-bindings.md` |
+| `pspwm` | PWM Modulator 2: frequency+phase+duty block-driven, own phase-integration state; `phase` is a *lead* (see `gate-bindings.md`) | 3 (`freq`, `phase`, `duty`) | 2 (`main`, `complement`) | `gate-bindings.md` |
 | `hysteresis` | Schmitt-trigger comparator (bang-bang current-mode control) | 1 | 1 | `dynamic-blocks.md` |
 | `and`, `or`, `xor`, `nand`, `nor`, `xnor` | N-input combinational logic gate (`inputs=`) | >= 2 | 1 | Component Reference |
 | `not` | 1-input logic inversion (`in=`) | 1 | 1 | Component Reference |
