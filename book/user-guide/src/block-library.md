@@ -46,7 +46,7 @@ by *name* (as a `V`/`I` source's literal or a gate's `ctrl=`), never wired into 
 | `discretestatespace` / `discretetf` / `discretepid` | the discrete-domain counterparts of the three above (`ts=`/`freq=` required) | same as their continuous counterparts | same | `dynamic-blocks.md` |
 | `vco` | bare `[0, 1)` oscillator ramp from a frequency command | 1 | 1 | `dynamic-blocks.md` |
 | `pwm` | PWM Modulator 1: fixed frequency, block-driven duty, active-high complementary pair with dead time | 1 (`duty`) | 2 (`main`, `complement`) | `gate-bindings.md` |
-| `pspwm` | PWM Modulator 2: frequency+phase+duty block-driven, own phase-integration state | 3 (`freq`, `phase`, `duty`) | 2 (`main`, `complement`) | `gate-bindings.md` |
+| `pspwm` | PWM Modulator 2: frequency+phase+duty block-driven, own phase-integration state; `phase` is a *lead* (see `gate-bindings.md`) | 3 (`freq`, `phase`, `duty`) | 2 (`main`, `complement`) | `gate-bindings.md` |
 | `hysteresis` | Schmitt-trigger comparator (bang-bang current-mode control) | 1 | 1 | `dynamic-blocks.md` |
 | `and`, `or`, `xor`, `nand`, `nor`, `xnor` | N-input combinational logic gate (`inputs=`) | >= 2 | 1 | Component Reference |
 | `not` | 1-input logic inversion (`in=`) | 1 | 1 | Component Reference |
