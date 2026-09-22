@@ -3,29 +3,82 @@
 //! them through `cscript-ffi` -- an end-to-end check of the whole load/start/output/free
 //! lifecycle against a real compiled `.so`, not just a self-consistency check against Rust-side
 //! mocks.
+//!
+//! Concurrency contract of the compile helpers (GOTCHA-001): the test harness runs every
+//! `#[test]` here on its own thread, and several of them ask for the same fixture. Each fixture
+//! is therefore compiled at most once per test process (a process-wide registry behind a
+//! `Mutex`), into a directory whose name is a hash of the fixture's source and compile flags,
+//! and the `.so` is written under a temporary name and `rename`d into place -- so a thread (or
+//! another process) that already `dlopen`ed the library never observes a truncated or
+//! half-written file. Never `cc -o <final path>` directly: that truncates the file in place.
 
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 
 use cscript_ffi::CScriptRegistry;
 
-fn compile_fixture(name: &str) -> PathBuf {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let source = manifest_dir
-        .join("tests/fixtures")
-        .join(format!("{name}.c"));
-    let out_dir = std::env::temp_dir().join("cscript-ffi-test-fixtures");
+const CC_FLAGS: [&str; 4] = ["-shared", "-fPIC", "-O0", "-o"];
+
+/// Fixture name -> compiled library path, for every fixture this process has already built.
+fn compiled() -> &'static Mutex<HashMap<String, PathBuf>> {
+    static COMPILED: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
+    COMPILED.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Compile `source` (C code) into `lib<name>.so` exactly once per process and return its path.
+///
+/// The output directory is keyed by a hash of the source text and the compiler flags, so two
+/// different sources under the same `name` (or a fixture edited between runs) never share a
+/// path, and a library left behind by an earlier process is only ever reused when it was built
+/// from byte-identical input.
+fn compile_source(name: &str, source: &str) -> PathBuf {
+    let mut registry = compiled().lock().expect("fixture registry poisoned");
+    if let Some(path) = registry.get(name) {
+        return path.clone();
+    }
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    CC_FLAGS.hash(&mut hasher);
+    source.hash(&mut hasher);
+    let out_dir = std::env::temp_dir()
+        .join("cscript-ffi-test-fixtures")
+        .join(format!("{:016x}", hasher.finish()));
     std::fs::create_dir_all(&out_dir).expect("create fixture output dir");
     let lib_path = out_dir.join(format!("lib{name}.so"));
 
-    let status = Command::new("cc")
-        .args(["-shared", "-fPIC", "-O0", "-o"])
-        .arg(&lib_path)
-        .arg(&source)
-        .status()
-        .expect("run cc to compile fixture");
-    assert!(status.success(), "cc failed to compile fixture {name}");
+    if !lib_path.exists() {
+        // Unique per process so two concurrent `cargo test` invocations (e.g. two checkouts
+        // sharing one TMPDIR) never write the same temporary file either.
+        let source_path = out_dir.join(format!("{name}.{}.c", std::process::id()));
+        let tmp_path = out_dir.join(format!("lib{name}.so.{}.tmp", std::process::id()));
+        std::fs::write(&source_path, source).expect("write fixture source");
+        let status = Command::new("cc")
+            .args(CC_FLAGS)
+            .arg(&tmp_path)
+            .arg(&source_path)
+            .status()
+            .expect("run cc to compile fixture");
+        assert!(status.success(), "cc failed to compile fixture {name}");
+        // Atomic on POSIX: a reader either sees the old complete inode or the new one.
+        std::fs::rename(&tmp_path, &lib_path).expect("move compiled fixture into place");
+        let _ = std::fs::remove_file(&source_path);
+    }
+
+    registry.insert(name.to_owned(), lib_path.clone());
     lib_path
+}
+
+/// Compile `tests/fixtures/<name>.c` (once per process, see [`compile_source`]).
+fn compile_fixture(name: &str) -> PathBuf {
+    let source_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(format!("{name}.c"));
+    let source = std::fs::read_to_string(&source_path)
+        .unwrap_or_else(|e| panic!("read fixture source {}: {e}", source_path.display()));
+    compile_source(name, &source)
 }
 
 #[test]
@@ -199,22 +252,12 @@ fn instantiate_rejects_an_xc_only_library_and_instantiate_xc_rejects_a_plain_one
 #[test]
 fn missing_required_symbol_is_a_clear_error_not_a_panic() {
     // A block exporting only cscript_start, to exercise the MissingSymbol path for a
-    // genuinely required symbol (cscript_output) -- generated straight into the temp output
-    // dir, not tests/fixtures/, since this source is synthesized by the test itself rather
-    // than a real fixture meant to be read/reused.
-    let out_dir = std::env::temp_dir().join("cscript-ffi-test-fixtures");
-    std::fs::create_dir_all(&out_dir).expect("create fixture output dir");
-    let source = out_dir.join("broken_missing_output.c");
-    std::fs::write(&source, "void *cscript_start(void) { return (void*)0; }\n")
-        .expect("write broken fixture source");
-    let lib_path = out_dir.join("libbroken_missing_output.so");
-    let status = Command::new("cc")
-        .args(["-shared", "-fPIC", "-O0", "-o"])
-        .arg(&lib_path)
-        .arg(&source)
-        .status()
-        .expect("run cc to compile broken fixture");
-    assert!(status.success());
+    // genuinely required symbol (cscript_output) -- synthesized by the test itself rather
+    // than kept in tests/fixtures/, since it is not a real fixture meant to be read/reused.
+    let lib_path = compile_source(
+        "broken_missing_output",
+        "void *cscript_start(void) { return (void*)0; }\n",
+    );
 
     let mut registry = CScriptRegistry::new();
     let err = registry

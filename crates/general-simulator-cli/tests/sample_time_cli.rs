@@ -8,26 +8,8 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
-}
-
-fn compile_c_fixture(name: &str) -> PathBuf {
-    let source = fixture(&format!("{name}.c"));
-    let out_dir = std::env::temp_dir().join("general-simulator-cli-test-fixtures");
-    std::fs::create_dir_all(&out_dir).expect("create fixture output dir");
-    let lib_path = out_dir.join(format!("lib{name}.so"));
-    let status = Command::new("cc")
-        .args(["-shared", "-fPIC", "-O0", "-o"])
-        .arg(&lib_path)
-        .arg(&source)
-        .status()
-        .expect("run cc to compile fixture");
-    assert!(status.success(), "cc failed to compile fixture {name}");
-    lib_path
-}
+mod support;
+use support::compile_c_fixture;
 
 fn write_devices_file(contents: &str) -> PathBuf {
     let out_dir = std::env::temp_dir().join("general-simulator-cli-test-fixtures");

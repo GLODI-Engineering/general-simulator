@@ -12,25 +12,13 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+mod support;
+use support::compile_c_fixture;
+
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(name)
-}
-
-fn compile_fixture(name: &str) -> PathBuf {
-    let source = fixture(&format!("{name}.c"));
-    let out_dir = std::env::temp_dir().join("general-simulator-cli-test-fixtures");
-    std::fs::create_dir_all(&out_dir).expect("create fixture output dir");
-    let lib_path = out_dir.join(format!("lib{name}.so"));
-    let status = Command::new("cc")
-        .args(["-shared", "-fPIC", "-O0", "-o"])
-        .arg(&lib_path)
-        .arg(&source)
-        .status()
-        .expect("run cc to compile fixture");
-    assert!(status.success(), "cc failed to compile fixture {name}");
-    lib_path
 }
 
 fn write_devices_file(contents: &str) -> PathBuf {
@@ -53,7 +41,7 @@ fn run(args: &[&str]) -> std::process::Output {
 
 #[test]
 fn cscript_gain_reproduces_a_hand_known_result_every_step() {
-    let lib = compile_fixture("cscript_gain");
+    let lib = compile_c_fixture("cscript_gain");
     let devices = write_devices_file(&format!(
         "OFFVAL kind=const value=0\n\
          OFFGATE kind=sig2phys domain=voltage in=OFFVAL\n\
@@ -90,7 +78,7 @@ fn cscript_gain_reproduces_a_hand_known_result_every_step() {
 
 #[test]
 fn cscript_sample_time_holds_between_samples_zero_order() {
-    let lib = compile_fixture("cscript_counter");
+    let lib = compile_c_fixture("cscript_counter");
     // dt=0.0001, ts=0.0005 -> the counter should only increment once every 5 rows.
     let devices = write_devices_file(&format!(
         "OFFVAL kind=const value=0\n\
@@ -171,7 +159,7 @@ fn cscript_xc_matches_the_closed_form_step_response() {
     // closed-form check on the whole xc_count=1 path (netlist parsing -> BlockKind::CScript's
     // xc_count field -> CScriptRegistry::instantiate_xc -> rk4_step_xc/call_xc), not just
     // cscript-ffi's own lower-level unit test against the same fixture.
-    let lib = compile_fixture("cscript_decay_xc");
+    let lib = compile_c_fixture("cscript_decay_xc");
     let devices = write_devices_file(&format!(
         "OFFVAL kind=const value=0\n\
          OFFGATE kind=sig2phys domain=voltage in=OFFVAL\n\
@@ -219,7 +207,7 @@ fn cscript_xc_matches_the_closed_form_step_response() {
 
 #[test]
 fn cscript_without_clone_is_rejected_under_adaptive_step_not_silently_wrong() {
-    let lib = compile_fixture("cscript_gain"); // exports no cscript_clone
+    let lib = compile_c_fixture("cscript_gain"); // exports no cscript_clone
     let devices = write_devices_file(&format!(
         "OFFVAL kind=const value=0\n\
          OFFGATE kind=sig2phys domain=voltage in=OFFVAL\n\
