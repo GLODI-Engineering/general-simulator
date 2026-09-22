@@ -1,6 +1,6 @@
 [package]
 name = "pyblock-ffi"
-version = "0.3.1"
+version = "0.4.0"
 description = "Embeds a Python interpreter and calls user-supplied Python functions (start/output, optionally derivative/output_xc) once per resolved block-graph step -- the Python-hosted counterpart to cscript-ffi's dynamically-linked C blocks, kept isolated from every other crate."
 edition.workspace = true
 license.workspace = true

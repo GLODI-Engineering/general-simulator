@@ -1,6 +1,6 @@
 [package]
 name = "general-simulator-cli"
-version = "0.3.1"
+version = "0.4.0"
 description = "Thin runner for general-simulator: netlist + a small PWL-device params file in, a waveform CSV out."
 edition.workspace = true
 license.workspace = true
@@ -24,11 +24,11 @@ default = []
 python = ["dae-runtime/python"]
 
 [dependencies]
-continuous-blocks = { path = "../continuous-blocks", version = "0.3.0" }
-dae-runtime = { path = "../dae-runtime", version = "0.3.0" }
-pwl-devices = { path = "../pwl-devices", version = "0.3.0" }
+continuous-blocks = { path = "../continuous-blocks", version = "0.4.0" }
+dae-runtime = { path = "../dae-runtime", version = "0.4.0" }
+pwl-devices = { path = "../pwl-devices", version = "0.4.0" }
 general-spice-core = { path = "../../../spice-lsp/servers/core", version = "0.1.0" }
-general-mna = { path = "../../../general-mna", version = "0.1.0" }
+general-mna = { path = "../../../general-mna", version = "0.2.0" }
 gs-waveform-measurements = { path = "../../../gs-waveform-measurements", version = "0.1.0" }
 
 [[test]]
