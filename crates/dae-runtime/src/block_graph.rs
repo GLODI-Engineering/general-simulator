@@ -42,6 +42,7 @@ use cscript_ffi::CScriptRegistry;
 use general_spice_core::Dialect;
 use pwl_devices::{IdealDiode, IdealSwitch};
 
+use crate::checkpoint::{BlockSnapshot, Checkpoint, PointSnapshot, SignalSnapshot};
 use crate::{
     classify_segments, sawtooth_carrier, step_control, step_with_fallback, DaeError, GateState,
     OperatingPoint, Segment, TimeStep, RINGING_COOLDOWN_STEPS,
@@ -1844,9 +1845,82 @@ pub fn simulate_transient_with_blocks_streamed(
     t_final: f64,
     step: TimeStep,
     max_adaptive_steps: usize,
-    mut on_step: impl FnMut(f64, OperatingPoint, BTreeMap<String, SignalValue>) -> Result<(), DaeError>,
+    on_step: impl FnMut(f64, OperatingPoint, BTreeMap<String, SignalValue>) -> Result<(), DaeError>,
 ) -> Result<(), DaeError> {
+    simulate_transient_with_blocks_checkpointed(
+        source,
+        dialect,
+        diodes,
+        ideal_switches,
+        blocks,
+        gates,
+        shared_r_on,
+        x_initial,
+        t_final,
+        step,
+        max_adaptive_steps,
+        CheckpointControl::default(),
+        on_step,
+    )
+    .map(|_| ())
+}
+
+/// How a run interacts with checkpoints — see [`simulate_transient_with_blocks_checkpointed`].
+#[derive(Default)]
+pub struct CheckpointControl<'a> {
+    /// Continue from this snapshot instead of from `x_initial`/`ic=`/rest. `t_final` is still
+    /// absolute simulated time; a checkpoint at or past it yields an empty run.
+    pub resume: Option<&'a Checkpoint>,
+    /// Hand a fresh snapshot to `on_checkpoint` every time this much simulated time has passed
+    /// since the last one (the first interval counts from the run's start). `None`: only the
+    /// final snapshot is returned, none are handed out mid-run.
+    pub every: Option<f64>,
+    /// Receives each mid-run snapshot (see `every`). Typically writes it to a file.
+    pub on_checkpoint: Option<&'a mut CheckpointSink<'a>>,
+    /// Return the run's final state as a snapshot. Off by default so a run that never asked for
+    /// a checkpoint (every pre-existing caller) is unaffected by an escape-hatch block whose
+    /// state cannot be snapshotted -- see [`DaeError::CheckpointUnsupportedBlock`].
+    pub final_snapshot: bool,
+}
+
+/// What [`CheckpointControl::on_checkpoint`] points at.
+pub type CheckpointSink<'a> = dyn FnMut(&Checkpoint) -> Result<(), DaeError> + 'a;
+
+/// [`simulate_transient_with_blocks_streamed`] plus checkpointing: optionally *starts from* a
+/// [`Checkpoint`], optionally hands one out every so often, and optionally returns the run's
+/// final state as one — the exact loop-carried state after the last accepted step, from which
+/// a later call continues bit-identically to a run that never stopped. See `checkpoint`'s own
+/// module doc comment for what a snapshot holds and the identity check a resume performs.
+///
+/// Escape-hatch blocks whose state this crate cannot read (`cscript`, `octblock`) are refused
+/// at the first snapshot as [`DaeError::CheckpointUnsupportedBlock`] — *not* up front, so a run
+/// that never asks for a checkpoint (every existing caller) is unaffected by their presence.
+#[allow(clippy::too_many_arguments)]
+pub fn simulate_transient_with_blocks_checkpointed(
+    source: &str,
+    dialect: Dialect,
+    diodes: &BTreeMap<String, IdealDiode>,
+    ideal_switches: &BTreeMap<String, IdealSwitch>,
+    blocks: &[BlockInstance],
+    gates: &BTreeMap<String, GateBinding>,
+    shared_r_on: f64,
+    x_initial: Option<&[f64]>,
+    t_final: f64,
+    step: TimeStep,
+    max_adaptive_steps: usize,
+    mut checkpoints: CheckpointControl<'_>,
+    mut on_step: impl FnMut(f64, OperatingPoint, BTreeMap<String, SignalValue>) -> Result<(), DaeError>,
+) -> Result<Option<Checkpoint>, DaeError> {
     let statements = general_mna::parse_and_flatten(source, dialect).map_err(DaeError::Parse)?;
+    let deck_hash = crate::checkpoint::deck_hash(&[
+        &statements,
+        &dialect,
+        &blocks,
+        &diodes,
+        &ideal_switches,
+        &gates,
+        &shared_r_on,
+    ]);
 
     // A CScript, CoordinateTransform, or Pmsm block's own `.name` is only its *primary* output
     // alias; `output_names` may also register extra named outputs (see evaluate_blocks' arms
@@ -2418,11 +2492,132 @@ pub fn simulate_transient_with_blocks_streamed(
 
     let mut accepted_steps: usize = 0;
     let mut t = 0.0;
+    let mut step_index = 0usize;
+    let mut dt_next: Option<f64> = None;
+    // What the final snapshot records as the controller's next step -- only the adaptive arm
+    // sets it, so a fixed-step run's checkpoint carries `None`, as documented on `Checkpoint`.
+    let mut dt_next_final: Option<f64> = None;
+
+    if let Some(ckpt) = checkpoints.resume {
+        if ckpt.deck_hash != deck_hash || ckpt.unknowns != system0.unknowns {
+            return Err(DaeError::CheckpointDeckMismatch {
+                unknowns_in_checkpoint: ckpt.unknowns.clone(),
+                unknowns_in_deck: system0.unknowns.clone(),
+            });
+        }
+        restore_block_states(blocks, &mut block_states, ckpt)?;
+        x_prev = ckpt.x_prev.clone();
+        x_prev_prev = ckpt.x_prev_prev.clone();
+        point_prev = OperatingPoint {
+            unknowns: system0.unknowns.clone(),
+            x: ckpt.point_prev.x.clone(),
+            diode_names: ckpt.point_prev.diode_names.clone(),
+            diode_z: ckpt.point_prev.diode_z.clone(),
+            diode_raw_ioff: ckpt.point_prev.diode_raw_ioff.clone(),
+        };
+        prev_diode_raw_ioff = ckpt.prev_diode_raw_ioff.clone();
+        prev_segments = ckpt.prev_segments.as_ref().map(|v| {
+            v.iter()
+                .map(|s| match s {
+                    0 => Segment::Breakdown,
+                    1 => Segment::Leakage,
+                    _ => Segment::Forward,
+                })
+                .collect()
+        });
+        prev_gate_states = ckpt.prev_gate_states.as_ref().map(|m| {
+            m.iter()
+                .map(|(k, on)| (k.clone(), if *on { GateState::On } else { GateState::Off }))
+                .collect()
+        });
+        ringing_cooldown = ckpt.ringing_cooldown;
+        prev_outputs = ckpt
+            .prev_outputs
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    match v {
+                        SignalSnapshot::Scalar(x) => SignalValue::Scalar(*x),
+                        SignalSnapshot::Vector(x) => SignalValue::Vector(x.clone()),
+                    },
+                )
+            })
+            .collect();
+        accepted_steps = ckpt.accepted_steps;
+        step_index = ckpt.step_index;
+        dt_next = ckpt.dt_next;
+        t = ckpt.t;
+    }
+
+    // Everything a snapshot needs, gathered in one place so the mid-run and final captures
+    // cannot drift apart. Borrows only what it reads; the loop's own variables stay in scope.
+    let snapshot = |block_states: &[BlockState],
+                    t: f64,
+                    accepted_steps: usize,
+                    step_index: usize,
+                    dt_next: Option<f64>,
+                    ringing_cooldown: u32,
+                    x_prev: &[f64],
+                    x_prev_prev: &Option<Vec<f64>>,
+                    point_prev: &OperatingPoint,
+                    prev_diode_raw_ioff: &BTreeMap<String, f64>,
+                    prev_segments: &Option<Vec<Segment>>,
+                    prev_gate_states: &Option<BTreeMap<String, GateState>>,
+                    prev_outputs: &BTreeMap<String, SignalValue>|
+     -> Result<Checkpoint, DaeError> {
+        Ok(Checkpoint {
+            deck_hash,
+            unknowns: system0.unknowns.clone(),
+            t,
+            accepted_steps,
+            step_index,
+            dt_next,
+            ringing_cooldown,
+            x_prev: x_prev.to_vec(),
+            x_prev_prev: x_prev_prev.clone(),
+            point_prev: PointSnapshot {
+                x: point_prev.x.clone(),
+                diode_names: point_prev.diode_names.clone(),
+                diode_z: point_prev.diode_z.clone(),
+                diode_raw_ioff: point_prev.diode_raw_ioff.clone(),
+            },
+            prev_diode_raw_ioff: prev_diode_raw_ioff.clone(),
+            prev_segments: prev_segments.as_ref().map(|v| {
+                v.iter()
+                    .map(|s| match s {
+                        Segment::Breakdown => 0,
+                        Segment::Leakage => 1,
+                        Segment::Forward => 2,
+                    })
+                    .collect()
+            }),
+            prev_gate_states: prev_gate_states.as_ref().map(|m| {
+                m.iter()
+                    .map(|(k, g)| (k.clone(), *g == GateState::On))
+                    .collect()
+            }),
+            prev_outputs: prev_outputs
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        match v {
+                            SignalValue::Scalar(x) => SignalSnapshot::Scalar(*x),
+                            SignalValue::Vector(x) => SignalSnapshot::Vector(x.clone()),
+                        },
+                    )
+                })
+                .collect(),
+            blocks: snapshot_block_states(blocks, block_states)?,
+        })
+    };
+    let mut last_checkpoint_t = t;
 
     match step {
         TimeStep::Fixed(dt) => {
-            let steps = (t_final / dt).round() as usize;
-            for step_index in 0..steps {
+            let steps = ((t_final - t) / dt).round() as usize;
+            for _ in 0..steps {
                 t += dt;
 
                 let outputs = evaluate_blocks(
@@ -2486,11 +2681,33 @@ pub fn simulate_transient_with_blocks_streamed(
                 point_prev = point.clone();
                 prev_outputs = outputs.clone();
                 on_step(t, point, outputs)?;
+                step_index += 1;
+                if let (Some(every), Some(on_checkpoint)) =
+                    (checkpoints.every, checkpoints.on_checkpoint.as_deref_mut())
+                {
+                    if t - last_checkpoint_t >= every {
+                        last_checkpoint_t = t;
+                        on_checkpoint(&snapshot(
+                            &block_states,
+                            t,
+                            accepted_steps,
+                            step_index,
+                            None,
+                            ringing_cooldown,
+                            &x_prev,
+                            &x_prev_prev,
+                            &point_prev,
+                            &prev_diode_raw_ioff,
+                            &prev_segments,
+                            &prev_gate_states,
+                            &prev_outputs,
+                        )?)?;
+                    }
+                }
             }
         }
         TimeStep::Adaptive(config) => {
-            let mut dt_next = config.dt_init;
-            let mut step_index = 0usize;
+            let mut dt_next = dt_next.unwrap_or(config.dt_init);
             while t < t_final {
                 let mut dt = dt_next.min(t_final - t);
                 // Clamp to the earliest predicted discrete-block/gate-edge event so a trial step
@@ -2593,9 +2810,319 @@ pub fn simulate_transient_with_blocks_streamed(
                             t_final,
                         });
                     }
+                    if let (Some(every), Some(on_checkpoint)) =
+                        (checkpoints.every, checkpoints.on_checkpoint.as_deref_mut())
+                    {
+                        if t - last_checkpoint_t >= every {
+                            last_checkpoint_t = t;
+                            on_checkpoint(&snapshot(
+                                &block_states,
+                                t,
+                                accepted_steps,
+                                step_index,
+                                Some(dt_next),
+                                ringing_cooldown,
+                                &x_prev,
+                                &x_prev_prev,
+                                &point_prev,
+                                &prev_diode_raw_ioff,
+                                &prev_segments,
+                                &prev_gate_states,
+                                &prev_outputs,
+                            )?)?;
+                        }
+                    }
                     break;
                 }
             }
+            dt_next_final = Some(dt_next);
+        }
+    }
+    if !checkpoints.final_snapshot {
+        return Ok(None);
+    }
+    snapshot(
+        &block_states,
+        t,
+        accepted_steps,
+        step_index,
+        dt_next_final,
+        ringing_cooldown,
+        &x_prev,
+        &x_prev_prev,
+        &point_prev,
+        &prev_diode_raw_ioff,
+        &prev_segments,
+        &prev_gate_states,
+        &prev_outputs,
+    )
+    .map(Some)
+}
+
+/// Every block's own state as a [`BlockSnapshot`], in block order — see `checkpoint`'s own
+/// module doc comment for which variants are refused and why.
+fn snapshot_block_states(
+    blocks: &[BlockInstance],
+    block_states: &[BlockState],
+) -> Result<Vec<(String, BlockSnapshot)>, DaeError> {
+    blocks
+        .iter()
+        .zip(block_states)
+        .map(|(b, state)| {
+            let snap = match state {
+                BlockState::Stateless => BlockSnapshot::Stateless,
+                BlockState::Dynamic { x, .. } => BlockSnapshot::Dynamic { x: x.clone() },
+                BlockState::DiscreteDynamic {
+                    x,
+                    time_since_sample,
+                    last_output,
+                    ..
+                } => BlockSnapshot::DiscreteDynamic {
+                    x: x.clone(),
+                    time_since_sample: *time_since_sample,
+                    last_output: last_output.clone(),
+                },
+                BlockState::DiscretePid {
+                    state,
+                    time_since_sample,
+                    last_output,
+                } => BlockSnapshot::DiscretePid {
+                    int_state: state.int_state,
+                    int_prev_e: state.int_prev_e,
+                    filt_state: state.filt_state,
+                    filt_prev_v: state.filt_prev_v,
+                    time_since_sample: *time_since_sample,
+                    last_output: *last_output,
+                },
+                BlockState::Vco { phase, .. } | BlockState::PhaseShiftPwm { phase, .. } => {
+                    BlockSnapshot::Phase(*phase)
+                }
+                BlockState::Pmsm { x, .. } => BlockSnapshot::Pmsm { x: x.to_vec() },
+                BlockState::Hysteresis { on, .. } => BlockSnapshot::Bit(*on),
+                BlockState::SrLatch { q } => BlockSnapshot::Bit(*q),
+                BlockState::FlipFlop { q, prev_clk } => BlockSnapshot::FlipFlop {
+                    q: *q,
+                    prev_clk: *prev_clk,
+                },
+                BlockState::Counter { count, prev_clk } => BlockSnapshot::Counter {
+                    count: *count,
+                    prev_clk: *prev_clk,
+                },
+                BlockState::CScript { .. } => {
+                    return Err(DaeError::CheckpointUnsupportedBlock {
+                        block: b.name.clone(),
+                        kind: "cscript",
+                    })
+                }
+                BlockState::OctBlock { .. } => {
+                    return Err(DaeError::CheckpointUnsupportedBlock {
+                        block: b.name.clone(),
+                        kind: "octblock",
+                    })
+                }
+                BlockState::OctFunction {
+                    time_since_sample,
+                    last_output,
+                    ..
+                } => BlockSnapshot::SampledFunction {
+                    time_since_sample: *time_since_sample,
+                    last_output: last_output.clone(),
+                },
+                #[cfg(feature = "python")]
+                BlockState::PyFunction {
+                    time_since_sample,
+                    last_output,
+                    ..
+                } => BlockSnapshot::SampledFunction {
+                    time_since_sample: *time_since_sample,
+                    last_output: last_output.clone(),
+                },
+                #[cfg(feature = "python")]
+                BlockState::PyBlock {
+                    instance,
+                    time_since_sample,
+                    next_hit_dt,
+                    last_output,
+                    xc,
+                } => BlockSnapshot::PyBlock {
+                    time_since_sample: *time_since_sample,
+                    next_hit_dt: *next_hit_dt,
+                    last_output: last_output.clone(),
+                    xc: xc.clone(),
+                    state: instance.pickle_state().map_err(DaeError::PyBlock)?,
+                },
+            };
+            Ok((b.name.clone(), snap))
+        })
+        .collect()
+}
+
+/// The inverse of [`snapshot_block_states`]: overwrites the freshly constructed (from the
+/// netlist) `block_states` with the checkpoint's. The deck hash has already matched, so a
+/// shape mismatch here means a corrupted file, reported as such rather than indexed past.
+fn restore_block_states(
+    blocks: &[BlockInstance],
+    block_states: &mut [BlockState],
+    ckpt: &Checkpoint,
+) -> Result<(), DaeError> {
+    let corrupt = |name: &str| {
+        DaeError::CheckpointFormat(format!(
+            "block '{name}': the checkpoint's state does not match this block's kind"
+        ))
+    };
+    if ckpt.blocks.len() != blocks.len() {
+        return Err(DaeError::CheckpointFormat(format!(
+            "checkpoint holds {} block state(s), deck declares {}",
+            ckpt.blocks.len(),
+            blocks.len()
+        )));
+    }
+    for ((b, state), (name, snap)) in blocks.iter().zip(block_states).zip(&ckpt.blocks) {
+        if *name != b.name {
+            return Err(corrupt(&b.name));
+        }
+        match (state, snap) {
+            (BlockState::Stateless, BlockSnapshot::Stateless) => {}
+            (BlockState::Dynamic { x, .. }, BlockSnapshot::Dynamic { x: sx })
+                if x.len() == sx.len() =>
+            {
+                x.clone_from(sx);
+            }
+            (
+                BlockState::DiscreteDynamic {
+                    x,
+                    time_since_sample,
+                    last_output,
+                    ..
+                },
+                BlockSnapshot::DiscreteDynamic {
+                    x: sx,
+                    time_since_sample: st,
+                    last_output: so,
+                },
+            ) if x.len() == sx.len() => {
+                x.clone_from(sx);
+                *time_since_sample = *st;
+                last_output.clone_from(so);
+            }
+            (
+                BlockState::DiscretePid {
+                    state,
+                    time_since_sample,
+                    last_output,
+                },
+                BlockSnapshot::DiscretePid {
+                    int_state,
+                    int_prev_e,
+                    filt_state,
+                    filt_prev_v,
+                    time_since_sample: st,
+                    last_output: so,
+                },
+            ) => {
+                *state = DiscretePidState {
+                    int_state: *int_state,
+                    int_prev_e: *int_prev_e,
+                    filt_state: *filt_state,
+                    filt_prev_v: *filt_prev_v,
+                };
+                *time_since_sample = *st;
+                *last_output = *so;
+            }
+            (BlockState::Vco { phase, .. }, BlockSnapshot::Phase(p))
+            | (BlockState::PhaseShiftPwm { phase, .. }, BlockSnapshot::Phase(p)) => {
+                *phase = *p;
+            }
+            (BlockState::Pmsm { x, .. }, BlockSnapshot::Pmsm { x: sx }) if sx.len() == 4 => {
+                x.copy_from_slice(sx);
+            }
+            (BlockState::Hysteresis { on, .. }, BlockSnapshot::Bit(b)) => *on = *b,
+            (BlockState::SrLatch { q }, BlockSnapshot::Bit(b)) => *q = *b,
+            (
+                BlockState::FlipFlop { q, prev_clk },
+                BlockSnapshot::FlipFlop {
+                    q: sq,
+                    prev_clk: sp,
+                },
+            ) => {
+                *q = *sq;
+                *prev_clk = *sp;
+            }
+            (
+                BlockState::Counter { count, prev_clk },
+                BlockSnapshot::Counter {
+                    count: sc,
+                    prev_clk: sp,
+                },
+            ) => {
+                *count = *sc;
+                *prev_clk = *sp;
+            }
+            (
+                BlockState::OctFunction {
+                    time_since_sample,
+                    last_output,
+                    ..
+                },
+                BlockSnapshot::SampledFunction {
+                    time_since_sample: st,
+                    last_output: so,
+                },
+            ) => {
+                *time_since_sample = *st;
+                last_output.clone_from(so);
+            }
+            #[cfg(feature = "python")]
+            (
+                BlockState::PyFunction {
+                    time_since_sample,
+                    last_output,
+                    ..
+                },
+                BlockSnapshot::SampledFunction {
+                    time_since_sample: st,
+                    last_output: so,
+                },
+            ) => {
+                *time_since_sample = *st;
+                last_output.clone_from(so);
+            }
+            #[cfg(feature = "python")]
+            (
+                BlockState::PyBlock {
+                    instance,
+                    time_since_sample,
+                    next_hit_dt,
+                    last_output,
+                    xc,
+                },
+                BlockSnapshot::PyBlock {
+                    time_since_sample: st,
+                    next_hit_dt: sn,
+                    last_output: so,
+                    xc: sxc,
+                    state: bytes,
+                },
+            ) => {
+                instance.restore_state(bytes).map_err(DaeError::PyBlock)?;
+                *time_since_sample = *st;
+                *next_hit_dt = *sn;
+                last_output.clone_from(so);
+                xc.clone_from(sxc);
+            }
+            (BlockState::CScript { .. }, _) => {
+                return Err(DaeError::CheckpointUnsupportedBlock {
+                    block: b.name.clone(),
+                    kind: "cscript",
+                })
+            }
+            (BlockState::OctBlock { .. }, _) => {
+                return Err(DaeError::CheckpointUnsupportedBlock {
+                    block: b.name.clone(),
+                    kind: "octblock",
+                })
+            }
+            _ => return Err(corrupt(&b.name)),
         }
     }
     Ok(())

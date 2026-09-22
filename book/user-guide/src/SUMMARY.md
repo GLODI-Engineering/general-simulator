@@ -31,6 +31,7 @@
 
 - [Command-line flags](cli-reference.md)
 - [Fixed vs. adaptive time stepping](time-stepping.md)
+- [Checkpoint and resume](checkpoint-resume.md)
 
 # Post-processing measurements
 

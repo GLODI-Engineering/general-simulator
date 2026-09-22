@@ -124,3 +124,34 @@ of this crate).
   module docs.
 - `AGENTS.md` — "Project boundaries".
 - `docs/journal/2026-09.md` — the 2026-09-11 `ic=` solve→assignment entry.
+
+## Checkpoint and resume (`checkpoint.rs`)
+
+`simulate_transient_with_blocks_checkpointed` is the streamed transient loop with three
+additions, all driven by a `CheckpointControl`: it can *start from* a `Checkpoint`, hand one to
+a callback every so much simulated time, and return the final state as one. The plain
+`simulate_transient_with_blocks_streamed` is now a thin wrapper passing the default (no
+resume, no periodic hand-out, no final snapshot), so no existing caller changed behaviour.
+
+The design rule is that a snapshot is exactly the loop-carried state and nothing else — the
+`snapshot` closure inside the loop and `restore_block_states` are the two places to read, and
+they are deliberately written as a mirror pair. Two details matter for the bit-identity
+guarantee:
+
+- The loop's own `step_index` is saved and restored, so a resumed run's first step is not
+  treated as "the first step of a run" (which forces backward Euler). Combined with the saved
+  $x_{k-1}$, the resumed step is an ordinary trapezoidal continuation.
+- The fixed-step arm computes its step count from `t_final - t`, and `t` itself is restored
+  exactly, so the sequence of `t += dt` additions — and hence every rounding — is the one the
+  uninterrupted run performed.
+
+`Checkpoint::deck_hash` is a hand-rolled FNV-1a over the `Debug` rendering of the flattened
+statements, dialect, blocks, models, gates and shared on-resistance — not `DefaultHasher`,
+whose output is not stable across Rust versions and would make a file from one toolchain refuse
+under another. A hash mismatch or an `unknowns` mismatch is `DaeError::CheckpointDeckMismatch`.
+
+The final snapshot is opt-in (`CheckpointControl::final_snapshot`) rather than unconditional
+for one reason: `cscript`/`octblock` state cannot be snapshotted, and that must only surface
+when a checkpoint was actually asked for. The first cut of this feature returned a final
+snapshot always and broke every `cscript` CLI test — a good illustration of why the refusal is
+lazy, not up front.

@@ -37,6 +37,7 @@ For netlist authors: writing, running, and reading the output of a general-simul
 
 - [Command-line flags](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/cli-reference.md): <netlist> is the one required positional argument — the .cir file to run.
 - [Fixed vs. adaptive time stepping](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/time-stepping.md): general-simulator steps a transient run one of two ways: a fixed step size you choose (--dt), or an adaptive, local-truncation-error-controlled step size the solver chooses for itself (the default whenever --dt is omitte
+- [Checkpoint and resume](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/checkpoint-resume.md): A transient run can save its complete state to a file and continue from it later — in another invocation, on another machine, after the first run was killed — and the continued run is bit-identical to one that never stop
 
 ### Post-processing measurements
 
