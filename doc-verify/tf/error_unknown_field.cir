@@ -1,0 +1,6 @@
+* A field name no block of this kind accepts is a parse-time error, not silently ignored.
+* `wibble=3` on a kind=tf block is rejected with the line number, the device name, the
+* offending key and the exact list of fields kind=tf does accept:
+*   line 6: device 'G' unknown field 'wibble' (kind=tf accepts only: den, ic, in, num, y0)
+U kind=const value=1
+G kind=tf in=U num=[1] den=[1,1] wibble=3

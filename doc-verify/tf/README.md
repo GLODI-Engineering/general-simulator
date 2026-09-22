@@ -16,6 +16,7 @@ editing that doc comment.
 - `error_ic_wrong_length.cir` — `ic=` with the wrong number of entries, rejected at parse time.
 - `error_ic_and_y0.cir` — `ic=` and `y0=` together, rejected at parse time.
 - `error_y0_zero_dc_numerator.cir` — `y0=` on a transfer function whose numerator vanishes at DC, rejected at parse time.
+- `error_unknown_field.cir` — `wibble=3` on a `kind=tf` block: the generic unknown-field error every `kind=` block shares (documented once on `BlockInstance`), rejected at parse time with the exact accepted-field list (`den, ic, in, num, y0`).
 
 ## Running
 
