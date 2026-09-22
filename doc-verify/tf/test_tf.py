@@ -90,5 +90,20 @@ def test_y0_on_a_dc_blocking_transfer_function_is_rejected():
     ), stderr
 
 
+def test_unknown_field_is_rejected_with_the_accepted_list():
+    """## Errors (generic, documented once on BlockInstance): a field no block of this kind
+    accepts is a parse-time error naming the line, the device, the key and the exact accepted
+    field list."""
+    code, _, stderr = _lib.run_transient(
+        HERE / "error_unknown_field.cir", tfinal=1, dt=0.1, expect_success=False
+    )
+    assert code != 0
+    assert (
+        "line 6: device 'G' unknown field 'wibble' "
+        "(kind=tf accepts only: den, ic, in, num, y0)"
+        in stderr
+    ), stderr
+
+
 if __name__ == "__main__":
     _lib.run_all(sys.modules[__name__])
