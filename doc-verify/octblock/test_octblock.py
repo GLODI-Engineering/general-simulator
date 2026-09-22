@@ -10,6 +10,7 @@ see README.md).
 import math
 import pathlib
 import sys
+import tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
@@ -75,6 +76,29 @@ def test_adaptive_stepping_is_rejected():
     )
     assert code != 0
     assert "OctBlockDoesNotSupportAdaptiveStep" in stderr
+
+
+def test_checkpoint_round_trips_the_octave_state_slot_bit_for_bit():
+    """The Octave chapter, "Checkpoint and resume": an octblock's state slot is saved with
+    Octave's own `save -binary` and loaded back on --resume with no author change -- the split
+    run's CSV is byte for byte the uninterrupted run's, and the accumulator carried state."""
+    cir = HERE / "checkpoint_example.cir"
+    with tempfile.TemporaryDirectory() as tmp:
+        ckpt = str(pathlib.Path(tmp) / "half.ckpt")
+        _, whole, _ = _lib.run_transient(cir, tfinal=2e-3, dt=1e-4)
+        _, first, _ = _lib.run(cir, "--mode", "transient", "--tfinal", "1e-3", "--dt", "1e-4",
+                               "--checkpoint-out", ckpt)
+        assert pathlib.Path(ckpt).is_file()
+        _, second, _ = _lib.run(cir, "--mode", "transient", "--tfinal", "2e-3", "--dt", "1e-4",
+                                "--resume", ckpt)
+    first_lines = first.splitlines()
+    second_lines = second.splitlines()
+    assert first_lines[0] == second_lines[0], "headers differ"
+    joined = "\n".join(first_lines + second_lines[1:]) + "\n"
+    assert whole == joined
+    rows = _lib.parse_csv(whole)
+    assert len(rows) == 20
+    assert rows[9]["G1"] != 0.0 and rows[19]["G1"] > rows[9]["G1"]
 
 
 if __name__ == "__main__":

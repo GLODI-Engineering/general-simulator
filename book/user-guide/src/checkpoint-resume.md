@@ -76,14 +76,25 @@ periodic checkpoint.
 |---|---|---|
 | `pyblock` | yes | the state object is pickled; anything `copy.deepcopy` accepts almost always pickles too |
 | `pyfunc`, `octfunc` | yes | stateless hosts — only their sample-time bookkeeping is stored |
-| `cscript` | **not yet** | its state is an opaque C heap object |
-| `octblock` | **not yet** | its state lives inside the `octave-cli` child process |
+| `octblock` | yes | the instance's own state slot is written with Octave's `save -binary` and read back with `load` — no change to your `.m` files |
+| `cscript` | **opt-in** | the library exports `cscript_state_size`, `cscript_state_write` and `cscript_state_read` — see [the CScript chapter](cscript.md#checkpoint-and-resume) |
 
-A run containing a `cscript` or `octblock` block is refused at the first checkpoint with
-`CheckpointUnsupportedBlock`, naming the block — never written partially. Runs that do not ask
-for a checkpoint are unaffected. The intended opt-in contracts (a
-`cscript_state_size`/`cscript_state_write`/`cscript_state_read` symbol triple, and an Octave
-`save -binary`/`load` round trip of the instance struct) are tracked as follow-up work.
+A `cscript` block's state is an opaque C heap object that only its own library can lay out,
+so checkpointing it needs three more exported functions. A library exporting **none** of them
+behaves as before: the run is fine without `--checkpoint-out`/`--resume`, and with one it is
+refused at the first checkpoint with `CheckpointUnsupportedBlock`, naming the block — never
+written partially, and no file is left behind:
+
+```text
+error: CheckpointUnsupportedBlock { block: "G1", kind: "cscript" }
+```
+
+A library exporting only **some** of the three does not load at all, whether or not a
+checkpoint was asked for, with a `MissingSymbol` error naming the one that is absent.
+
+`octblock` needs no opt-in: whatever `<function>_start` returned — a scalar, a struct, a
+matrix — is what Octave's own binary format saves, and it stores doubles as their exact bits,
+so the resumed run is bit-identical exactly as it is for the built-in blocks.
 
 ## The file
 

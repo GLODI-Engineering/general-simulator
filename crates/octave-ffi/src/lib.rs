@@ -681,6 +681,115 @@ impl OctaveSession {
             .collect())
     }
 
+    /// Serializes `instance`'s own `__gs_state.('<instance>')` slot to bytes, for a checkpoint:
+    /// the slot is copied into a scratch variable, written with Octave's own
+    /// `save('-binary', ...)` to a temporary file, and that file is read back here and deleted
+    /// -- the same call protocol every other method uses, so a failed `save` (an unset slot, a
+    /// value Octave's binary format cannot hold) surfaces as [`OctaveError::Runtime`] and the
+    /// session survives. Octave's binary format stores doubles as their exact bits, which is
+    /// what makes a resumed run bit-identical. No author-side opt-in is needed, unlike
+    /// `cscript`'s own state contract: whatever `<function>_start` returned is what gets saved.
+    ///
+    /// The temporary file lives in [`std::env::temp_dir`] under a name unique to this process
+    /// and call, and is removed before this returns -- on the error path too.
+    pub fn save_state(&mut self, instance: &str) -> Result<Vec<u8>, OctaveError> {
+        let call_id = self.next_call_id;
+        self.next_call_id += 1;
+        let path = self.state_temp_path(call_id);
+        let inst = escape_octave_single_quoted(instance);
+        let file = escape_octave_single_quoted(&path.to_string_lossy());
+
+        let mut script = String::new();
+        script.push_str("global __gs_state;\n");
+        script.push_str("try\n");
+        script.push_str(&format!("  __gs_ckpt = __gs_state.('{inst}');\n"));
+        script.push_str(&format!("  save('-binary', '{file}', '__gs_ckpt');\n"));
+        script.push_str("  clear __gs_ckpt;\n");
+        script.push_str(&format!("  printf(\"@@GS_OCT_{call_id}@@\\n\");\n"));
+        script.push_str("catch __err\n");
+        script.push_str("  printf(\"ERROR: %s\\n\", __err.message);\n");
+        script.push_str(&format!("  printf(\"@@GS_OCT_{call_id}@@\\n\");\n"));
+        script.push_str("end\n");
+        script.push_str("fflush(stdout);\n");
+
+        let result = self
+            .write_and_flush(&script)
+            .and_then(|()| read_until_marker(&mut self.stdout, call_id, &self.stderr_rx))
+            .and_then(|lines| {
+                if let Some(message) = lines.first().and_then(|l| l.strip_prefix("ERROR: ")) {
+                    return Err(OctaveError::Runtime {
+                        message: message.to_string(),
+                    });
+                }
+                std::fs::read(&path).map_err(|e| OctaveError::Io {
+                    message: format!(
+                        "could not read the state file Octave saved at {}: {e}",
+                        path.display()
+                    ),
+                })
+            });
+        let _ = std::fs::remove_file(&path);
+        result
+    }
+
+    /// The inverse of [`Self::save_state`]: writes `bytes` to a temporary file, `load`s it in
+    /// the session, and assigns the loaded value into `__gs_state.('<instance>')` -- replacing
+    /// whatever [`Self::call_start`] put there at construction. The file is removed before this
+    /// returns, on every path.
+    pub fn load_state(&mut self, instance: &str, bytes: &[u8]) -> Result<(), OctaveError> {
+        let call_id = self.next_call_id;
+        self.next_call_id += 1;
+        let path = self.state_temp_path(call_id);
+        std::fs::write(&path, bytes).map_err(|e| OctaveError::Io {
+            message: format!(
+                "could not write the state file for Octave at {}: {e}",
+                path.display()
+            ),
+        })?;
+        let inst = escape_octave_single_quoted(instance);
+        let file = escape_octave_single_quoted(&path.to_string_lossy());
+
+        let mut script = String::new();
+        script.push_str("global __gs_state;\n");
+        script.push_str("try\n");
+        script.push_str(&format!("  __gs_loaded = load('-binary', '{file}');\n"));
+        script.push_str(&format!(
+            "  __gs_state.('{inst}') = __gs_loaded.__gs_ckpt;\n"
+        ));
+        script.push_str("  clear __gs_loaded;\n");
+        script.push_str(&format!("  printf(\"@@GS_OCT_{call_id}@@\\n\");\n"));
+        script.push_str("catch __err\n");
+        script.push_str("  printf(\"ERROR: %s\\n\", __err.message);\n");
+        script.push_str(&format!("  printf(\"@@GS_OCT_{call_id}@@\\n\");\n"));
+        script.push_str("end\n");
+        script.push_str("fflush(stdout);\n");
+
+        let result = self
+            .write_and_flush(&script)
+            .and_then(|()| read_until_marker(&mut self.stdout, call_id, &self.stderr_rx))
+            .and_then(|lines| {
+                if let Some(message) = lines.first().and_then(|l| l.strip_prefix("ERROR: ")) {
+                    return Err(OctaveError::Runtime {
+                        message: message.to_string(),
+                    });
+                }
+                Ok(())
+            });
+        let _ = std::fs::remove_file(&path);
+        result
+    }
+
+    /// Where [`Self::save_state`]/[`Self::load_state`] put their one short-lived file: unique
+    /// per host process and per call, so two sessions (two test binaries, two runs) never
+    /// collide on the same name.
+    fn state_temp_path(&self, call_id: u64) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "gs-octblock-state-{}-{}-{call_id}.bin",
+            std::process::id(),
+            self.child.id()
+        ))
+    }
+
     /// Kills the underlying `octave-cli` process immediately (`SIGKILL`, not a graceful
     /// shutdown), simulating a crash for [`Self`]'s own EOF/broken-pipe handling to be tested
     /// against. Exists purely so this crate's own test suite can exercise

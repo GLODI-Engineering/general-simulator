@@ -1,0 +1,8 @@
+* Octave escape-hatch chapter, "Checkpoint and resume": an octblock's own state slot is saved
+* with Octave's `save -binary` and loaded back on --resume, with no author change -- accum/ is
+* the unmodified "## Example" accumulator. The test runs this to --tfinal 2e-3, then to 1e-3
+* with --checkpoint-out and on to 2e-3 with --resume, and asserts the two CSVs are byte for
+* byte the same. RAMP grows every step, so the running sum carries a full-precision fraction.
+T kind=time
+RAMP kind=gain in=T k=0.7
+G1 kind=octblock path=doc-verify/octblock/accum function=accumulate in=RAMP

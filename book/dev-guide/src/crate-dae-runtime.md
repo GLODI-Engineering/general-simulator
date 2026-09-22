@@ -151,7 +151,26 @@ whose output is not stable across Rust versions and would make a file from one t
 under another. A hash mismatch or an `unknowns` mismatch is `DaeError::CheckpointDeckMismatch`.
 
 The final snapshot is opt-in (`CheckpointControl::final_snapshot`) rather than unconditional
-for one reason: `cscript`/`octblock` state cannot be snapshotted, and that must only surface
-when a checkpoint was actually asked for. The first cut of this feature returned a final
-snapshot always and broke every `cscript` CLI test — a good illustration of why the refusal is
-lazy, not up front.
+for one reason: a `cscript` whose library does not export the checkpoint state contract cannot
+be snapshotted, and that must only surface when a checkpoint was actually asked for. The first
+cut of this feature returned a final snapshot always and broke every `cscript` CLI test — a
+good illustration of why the refusal is lazy, not up front.
+
+The escape hatches each carry their opaque state as bytes in `BlockSnapshot`:
+
+- `pyblock` — `pickle`, no opt-in.
+- `octblock` — `OctaveSession::save_state`/`load_state`: the `__gs_state.<name>` slot is copied
+  to a scratch variable, `save('-binary', ...)`d to a temporary file under `std::env::temp_dir`
+  (unique per process, child and call), read into Rust and deleted; `load` is the mirror. It
+  rides the same marker-framed call protocol as every other session method, so an Octave-side
+  failure is an ordinary `OctaveError::Runtime` and the session survives. No opt-in.
+- `cscript` — `CScriptInstance::state_bytes`/`restore_state` over the
+  `cscript_state_size`/`_write`/`_read` triple, resolved in `CScriptLibrary::load` as one
+  `Option<StateIo>` so a partial set cannot exist past load time (it is a `MissingSymbol`
+  naming the absent one). `supports_state_io()` is the up-front check the snapshot arm makes
+  before refusing with `CheckpointUnsupportedBlock`. The restore arm re-checks it, because the
+  deck hash covers the `lib=` path, not the `.so`'s contents.
+
+The `CScript`/`OctBlock` variants were appended to `BlockSnapshot` after `PyBlock`; postcard
+encodes a variant as its index, so every existing file decodes unchanged and `FORMAT_VERSION`
+stayed at 1.

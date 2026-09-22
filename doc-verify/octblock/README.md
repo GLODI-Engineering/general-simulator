@@ -28,6 +28,12 @@ that doc comment.
   state lives inside the one shared `octave-cli` session, which a rejected adaptive trial step
   cannot roll back (see that error's own doc comment in `dae_runtime::DaeError`).
 
+- `checkpoint_example.cir` — backs the user guide's Octave chapter, "Checkpoint and resume" (and
+  the checkpoint chapter's escape-hatch table): the unmodified `accum/` block run whole and
+  split across `--checkpoint-out`/`--resume`, asserting the two CSVs are byte for byte
+  identical — the state slot round-trips through Octave's own `save -binary`/`load` with no
+  author change.
+
 ## Running
 
 Requires `octave-cli` on `PATH` at run time (no special `--features python` *build* is needed —
