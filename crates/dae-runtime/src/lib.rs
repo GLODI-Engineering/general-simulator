@@ -25,6 +25,7 @@
 //! `(M, q)` this crate builds and hands to `lcp_solver::solve`.
 
 mod block_graph;
+pub mod checkpoint;
 mod closed_loop;
 mod linsolve;
 mod step_control;
@@ -32,8 +33,9 @@ mod topology;
 
 pub use block_graph::{
     reject_sig2phys_wired_into_circuit, simulate_transient_with_blocks,
-    simulate_transient_with_blocks_capped, simulate_transient_with_blocks_streamed, BlockInstance,
-    BlockKind, ConstValue, GainValue, GateBinding, Phys2SigTarget, PhysicalDomain, PidClamp,
+    simulate_transient_with_blocks_capped, simulate_transient_with_blocks_checkpointed,
+    simulate_transient_with_blocks_streamed, BlockInstance, BlockKind, CheckpointControl,
+    CheckpointSink, ConstValue, GainValue, GateBinding, Phys2SigTarget, PhysicalDomain, PidClamp,
     SampleTimeSpec, Signal, SignalValue, TransientWithBlocksStep, ADAPTIVE_STEP_HARD_CAP,
 };
 pub use closed_loop::{sawtooth_carrier, simulate_closed_loop};
@@ -279,6 +281,28 @@ pub enum DaeError {
     /// the later one win, so a `Signal::Block(name)` reference would silently resolve to the
     /// wrong block instead of failing loudly.
     DuplicateBlockName(String),
+    /// A checkpoint file is not one, or is a version this build does not read — see
+    /// `checkpoint`'s own module doc comment for the format.
+    CheckpointFormat(String),
+    /// Reading or writing a checkpoint file failed.
+    CheckpointIo {
+        path: std::path::PathBuf,
+        message: String,
+    },
+    /// A checkpoint was loaded into a deck it was not taken from: a different netlist, block
+    /// list, device model, or unknown ordering. `unknowns_in_checkpoint` versus the deck's own
+    /// unknowns is reported to make the usual cause (an edited netlist) visible at a glance.
+    CheckpointDeckMismatch {
+        unknowns_in_checkpoint: Vec<String>,
+        unknowns_in_deck: Vec<String>,
+    },
+    /// A block whose state lives where this crate cannot read it (`cscript`'s C heap object,
+    /// `octblock`'s Octave-side struct) is in a run being checkpointed — refused whole, never
+    /// written partially. See `checkpoint`'s own module doc comment.
+    CheckpointUnsupportedBlock {
+        block: String,
+        kind: &'static str,
+    },
     /// A hand-built [`block_graph::BlockInstance`] carries an `ic` whose length is not its
     /// block's own state count. Unreachable from a netlist — `general-mna` checks the same thing
     /// at parse time, with a line number — so this only guards callers that construct blocks
@@ -554,8 +578,8 @@ pub fn simulate_transient(
     Ok(trace)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Segment {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Segment {
     Breakdown,
     Leakage,
     Forward,

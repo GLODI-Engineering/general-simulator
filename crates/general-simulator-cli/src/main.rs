@@ -306,9 +306,11 @@ use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use dae_runtime::checkpoint::Checkpoint;
 use dae_runtime::{
-    simulate_transient, simulate_transient_with_blocks_streamed, solve_dc, AdaptiveConfig,
-    BlockInstance, BlockKind, DaeError, GateBinding, TimeStep, ADAPTIVE_STEP_HARD_CAP,
+    simulate_transient, simulate_transient_with_blocks_checkpointed, solve_dc, AdaptiveConfig,
+    BlockInstance, BlockKind, CheckpointControl, CheckpointSink, DaeError, GateBinding, TimeStep,
+    ADAPTIVE_STEP_HARD_CAP,
 };
 use general_spice_core::Dialect;
 use pwl_devices::{IdealDiode, IdealSwitch};
@@ -364,6 +366,9 @@ fn run() -> Result<(), String> {
     let mut format = "csv".to_string();
     let mut out_path: Option<String> = None;
     let mut out_every: usize = 1;
+    let mut checkpoint_out: Option<String> = None;
+    let mut checkpoint_every: Option<f64> = None;
+    let mut resume: Option<String> = None;
 
     let mut i = 2;
     while i < args.len() {
@@ -415,6 +420,25 @@ fn run() -> Result<(), String> {
             }
             "--format" => {
                 format = args.get(i + 1).ok_or("--format needs a value")?.clone();
+                i += 2;
+            }
+            "--checkpoint-out" => {
+                checkpoint_out = Some(
+                    args.get(i + 1)
+                        .ok_or("--checkpoint-out needs a value")?
+                        .clone(),
+                );
+                i += 2;
+            }
+            "--checkpoint-every" => {
+                let v = parse_f64("--checkpoint-every", &mut i)?;
+                if v <= 0.0 {
+                    return Err("--checkpoint-every must be positive".to_string());
+                }
+                checkpoint_every = Some(v);
+            }
+            "--resume" => {
+                resume = Some(args.get(i + 1).ok_or("--resume needs a value")?.clone());
                 i += 2;
             }
             "--out" => {
@@ -589,7 +613,17 @@ fn run() -> Result<(), String> {
         // (see its own doc comment) -- only the truly block-free, ideal switch-free case still uses
         // the plain `simulate_transient` path, since that's the one case with nothing for a
         // block-graph step to resolve at all.
-        if ideal_switches.is_empty() && blocks.is_empty() {
+        let checkpointing = checkpoint_out.is_some() || resume.is_some();
+        if checkpoint_every.is_some() && checkpoint_out.is_none() {
+            return Err("--checkpoint-every needs --checkpoint-out <file>".to_string());
+        }
+        if checkpointing && mode != "transient" {
+            return Err("--checkpoint-out/--resume only apply to --mode transient".to_string());
+        }
+        // Checkpointing always goes through the block-graph path (the plain path has no
+        // checkpoint support and would only ever be picked for a block-free, switch-free deck,
+        // which that path handles identically).
+        if ideal_switches.is_empty() && blocks.is_empty() && !checkpointing {
             let trace = simulate_transient(&netlist, dialect, &diodes, None, t_final, step)
                 .map_err(|e| format!("{e:?}"))?;
             let headers = match trace.first() {
@@ -631,6 +665,11 @@ fn run() -> Result<(), String> {
                 raw_out_path.as_deref(),
                 netlist_path,
                 &measurements,
+                CheckpointArgs {
+                    out: checkpoint_out.as_deref().map(Path::new),
+                    every: checkpoint_every,
+                    resume: resume.as_deref().map(Path::new),
+                },
             );
         }
     } else {
@@ -772,7 +811,20 @@ fn run_transient_streamed(
     raw_out_path: Option<&Path>,
     netlist_path: &str,
     measurements: &[measure::MeasureSpec],
+    checkpoints: CheckpointArgs<'_>,
 ) -> Result<(), String> {
+    let resume_from = match checkpoints.resume {
+        Some(path) => Some(Checkpoint::read_from(path).map_err(|e| format!("{e:?}"))?),
+        None => None,
+    };
+    // Written on every periodic hand-out and again at the end -- the same file, atomically
+    // replaced (see `Checkpoint::write_to`), so what is on disk is always the latest complete one.
+    let mut write_checkpoint = |c: &Checkpoint| -> Result<(), DaeError> {
+        match checkpoints.out {
+            Some(path) => c.write_to(path),
+            None => Ok(()),
+        }
+    };
     // A cscript, coordinate-transform, pmsm, pwm, or pspwm block registers extra named outputs
     // beyond its own block name (see block_graph::evaluate_blocks) -- list those too, so they
     // show up as their own CSV columns instead of only being reachable via Signal::Block from
@@ -825,7 +877,7 @@ fn run_transient_streamed(
     let mut n_points: usize = 0;
     let mut n_resolved: usize = 0;
 
-    simulate_transient_with_blocks_streamed(
+    let final_checkpoint = simulate_transient_with_blocks_checkpointed(
         netlist,
         dialect,
         diodes,
@@ -837,6 +889,14 @@ fn run_transient_streamed(
         t_final,
         step,
         max_steps,
+        CheckpointControl {
+            resume: resume_from.as_ref(),
+            every: checkpoints.every,
+            on_checkpoint: checkpoints
+                .every
+                .map(|_| &mut write_checkpoint as &mut CheckpointSink<'_>),
+            final_snapshot: checkpoints.out.is_some(),
+        },
         |t, point, outputs| {
             if headers.is_none() {
                 // A name whose value is a SignalValue::Vector expands into one CSV column per
@@ -916,6 +976,11 @@ fn run_transient_streamed(
         },
     )
     .map_err(|e| format!("{e:?}"))?;
+    if let (Some(path), Some(final_checkpoint)) = (checkpoints.out, final_checkpoint) {
+        final_checkpoint
+            .write_to(path)
+            .map_err(|e| format!("{e:?}"))?;
+    }
 
     if let Some(w) = &mut csv_writer {
         w.flush()
@@ -1052,10 +1117,24 @@ fn write_measurements_log(
 /// before this convention was enforced is simply treated as an ordinary (and therefore unknown)
 /// block name, surfacing as a clear `UnknownBlockInput` error rather than silently reading the
 /// circuit.
+/// The three checkpoint flags, passed together -- see the module doc comment's own
+/// "Checkpoint and resume" section.
+struct CheckpointArgs<'a> {
+    out: Option<&'a Path>,
+    every: Option<f64>,
+    resume: Option<&'a Path>,
+}
+
 fn usage() -> String {
     "usage: general-simulator <netlist> [--devices <file>] [--mode dc|transient] [--tfinal T] \
      [--dt DT | --dt-max T --dt-min T --dt-init T --reltol R --abstol A] [--max-steps N] \
      [--format csv|raw] [--out <path>] [--out-every N]\n\
+     [--checkpoint-out <file>] [--checkpoint-every T] [--resume <file>]\n\
+     \n\
+     --checkpoint-out writes the run's complete state at --tfinal (and, with --checkpoint-every T, \
+     every T seconds of simulated time, replacing the same file) so a later run can --resume it \
+     and continue to a larger --tfinal bit-identically to a run that never stopped. A checkpoint \
+     only loads into the deck it came from.\n\
      \n\
      --dt fixes the step size every step (deterministic, exactly reproducible). Omit it (and \
      optionally tune --dt-max/--dt-min/--dt-init/--reltol/--abstol) for adaptive step-size \

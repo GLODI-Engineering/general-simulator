@@ -631,6 +631,42 @@ impl PyBlockInstance {
         })
     }
 
+    /// This instance's state object as `pickle` bytes -- the checkpoint counterpart of
+    /// [`Self::try_clone`], same no-author-opt-in reasoning: anything `copy.deepcopy` accepts is
+    /// almost always picklable, and the exceptions (an open handle, a lambda held in state)
+    /// surface as an ordinary Python exception naming this block's file, never a panic. The
+    /// module's functions are *not* serialized -- a resumed run re-executes the block's own
+    /// `.py` file and only swaps the state object back in (see [`Self::restore_state`]).
+    pub fn pickle_state(&self) -> Result<Vec<u8>, PyBlockError> {
+        Python::attach(|py| {
+            let pickle = py
+                .import("pickle")
+                .map_err(|e| self.exception(py, "pickle_state", e))?;
+            let bytes = pickle
+                .call_method1("dumps", (self.state.bind(py),))
+                .map_err(|e| self.exception(py, "pickle_state", e))?;
+            bytes
+                .extract::<Vec<u8>>()
+                .map_err(|e| self.exception(py, "pickle_state", e))
+        })
+    }
+
+    /// Replaces this instance's state object with the unpickled `bytes` -- the load half of
+    /// [`Self::pickle_state`]. The instance itself (its module, its functions) is the one the
+    /// netlist built; only the state it carries changes.
+    pub fn restore_state(&mut self, bytes: &[u8]) -> Result<(), PyBlockError> {
+        Python::attach(|py| {
+            let pickle = py
+                .import("pickle")
+                .map_err(|e| self.exception(py, "restore_state", e))?;
+            let state = pickle
+                .call_method1("loads", (pyo3::types::PyBytes::new(py, bytes),))
+                .map_err(|e| self.exception(py, "restore_state", e))?;
+            self.state = state.unbind();
+            Ok(())
+        })
+    }
+
     fn exception(&self, py: Python<'_>, function: &'static str, err: PyErr) -> PyBlockError {
         PyBlockError::Exception {
             path: self.path.clone(),

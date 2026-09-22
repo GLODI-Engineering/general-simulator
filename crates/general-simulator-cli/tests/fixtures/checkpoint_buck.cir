@@ -1,0 +1,30 @@
+* Checkpoint/resume fixture: a PWM-driven buck with a PI loop, a prev: accumulator, and one of
+* every stateful block kind -- the same deck dae-runtime's own checkpoint_resume.rs test uses. A
+* run split at --tfinal 1.5e-4 / resumed to 3e-4 must reproduce the uninterrupted 3e-4 run's
+* CSV byte for byte.
+VIN vin 0 12
+DSW vin sw idealswitchmodel
+DSW kind=ideal_switch r_on=0.05 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=block ctrl=GATE
+D1 0 sw dmodel
+D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.4 g_on=5
+L1 sw out 22e-6
+C1 out 0 47e-6 ic=3
+RL out 0 4
+VOUT kind=phys2sig node=out
+REF kind=const value=5
+ERR kind=sum inputs=REF,VOUT signs=1,-1
+PI kind=pid in=ERR kp=0.02 ki=50 kd=0 n=100 clamp_lo=0.05 clamp_hi=0.95 ic=0.4
+DUTY kind=tf in=PI num=[1] den=[2e-6,1] y0=0.4
+PWM1 kind=pwm freq=100000 in=DUTY
+GATE kind=sig2phys domain=voltage in=PWM1
+ACC kind=sum inputs=prev:ACC,ERR signs=1,1
+DPI kind=discretepid in=ERR kp=0.01 ki=20 kd=0 n=1 ts=5e-6 clamp_lo=-1 clamp_hi=1 integration_method=trapezoidal
+DSS kind=discretestatespace in=ERR a=[[0.9]] b=[0.1] c=[1] ts=5e-6
+DTF kind=discretetf in=ERR num=[0.5] den=[1,-0.5] ts=5e-6
+SS kind=statespace in=ERR a=[[0,1],[-1e10,-2e5]] b=[0,1e10] c=[1,0]
+OSC kind=vco in=REF f_min=1 f_max=1e6 ic=0.3
+CMP kind=hysteresis in=VOUT high=5.2 low=4.8
+LAT kind=srlatch set=CMP reset=PWM1
+FF kind=dff clk=PWM1 d=CMP
+CNT kind=counter clk=PWM1 modulus=7
+PS kind=pspwm f_min=1 f_max=1e6 inputs=REF,REF,DUTY ic=0.1

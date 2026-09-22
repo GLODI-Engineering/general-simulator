@@ -4,6 +4,7 @@
 general-simulator <netlist> [--devices <file>] [--mode dc|transient] [--tfinal T]
                    [--dt DT | --dt-max T --dt-min T --dt-init T --reltol R --abstol A]
                    [--format csv|raw] [--out <path>] [--out-every N]
+                   [--checkpoint-out <file>] [--checkpoint-every T] [--resume <file>]
 ```
 
 `<netlist>` is the one required positional argument — the `.cir` file to run. Every flag below
@@ -20,6 +21,9 @@ is optional.
 | `--format csv\|raw` | Output serialization — see below. Default: `csv`. |
 | `--out <path>` | Destination file for `--format raw`. Ignored for `--format csv` (CSV always goes to stdout). |
 | `--out-every N` | Write only every Nth resolved point. Thins the output, never the computation — see below. Default: `1`. |
+| `--checkpoint-out <file>` | Write the run's complete state at `--tfinal` so a later run can `--resume` it. See [Checkpoint and resume](checkpoint-resume.md). |
+| `--checkpoint-every T` | With `--checkpoint-out`: also rewrite that file every `T` seconds of simulated time, so a killed run loses at most `T`. |
+| `--resume <file>` | Continue from a checkpoint instead of from $t = 0$; `--tfinal` stays absolute. Only loads into the deck it was written from. |
 
 `--dt` and any of `--dt-max`/`--dt-min`/`--dt-init`/`--reltol`/`--abstol` are mutually
 exclusive — pick fixed-step or adaptive stepping, not both. Omitting `--dt` entirely selects

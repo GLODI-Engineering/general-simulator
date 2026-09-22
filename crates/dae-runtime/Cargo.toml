@@ -31,6 +31,12 @@ pyblock-ffi = { path = "../pyblock-ffi", version = "0.3.0", optional = true }
 # dependency and no optional feature gate -- see octave_ffi's own module doc comment for the
 # licensing rationale.
 octave-ffi = { path = "../octave-ffi", version = "0.3.0" }
+# Checkpoint/resume (see `checkpoint.rs`): a versioned binary snapshot of a run's whole
+# loop-carried state. postcard because it is a compact, `f64`-bit-exact, no_std-friendly serde
+# format with a stable wire encoding -- the file must round-trip every floating-point value
+# exactly for a resumed run to be bit-identical to an uninterrupted one.
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", features = ["use-std"] }
 # Cross-repo: general-spice-core lives in the separate spice-lsp repo, general-mna in its own.
 # `path` keeps local builds working against the sibling checkouts already required today;
 # `version` is what actually resolves once these are published, and is required for a `cargo
