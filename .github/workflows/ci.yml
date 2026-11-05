@@ -13,8 +13,45 @@ jobs:
   rust:
     name: Rust (fmt, clippy, test -- default features)
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: general-simulator
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out general-simulator
+        uses: actions/checkout@v4
+        with:
+          path: general-simulator
+
+      # `crates/dae-runtime` resolves general-spice-core and general-mna as
+      # *path* dependencies into sibling checkouts (`../../../spice-lsp`,
+      # `../../../general-mna`), so a runner holding only this repository
+      # cannot even run `cargo metadata` — `cargo fmt --all` failed with
+      # "failed to load manifest for workspace member crates/dae-runtime"
+      # before anything was built. Every job reproduces the local layout:
+      #
+      #   $GITHUB_WORKSPACE/general-simulator        <- this repository
+      #   $GITHUB_WORKSPACE/spice-lsp                <- general-spice-core
+      #   $GITHUB_WORKSPACE/general-mna              <- general-mna
+      #   $GITHUB_WORKSPACE/gs-waveform-measurements <- the CLI's own path dep
+      #
+      # All are public, so the default GITHUB_TOKEN can read them.
+      - name: Check out sibling spice-lsp (general-spice-core)
+        uses: actions/checkout@v4
+        with:
+          repository: GLODI-Engineering/spice-lsp
+          path: spice-lsp
+
+      - name: Check out sibling general-mna
+        uses: actions/checkout@v4
+        with:
+          repository: GLODI-Engineering/general-mna
+          path: general-mna
+
+      - name: Check out sibling gs-waveform-measurements
+        uses: actions/checkout@v4
+        with:
+          repository: GLODI-Engineering/gs-waveform-measurements
+          path: gs-waveform-measurements
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -23,6 +60,8 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: general-simulator
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
@@ -44,8 +83,45 @@ jobs:
   rust-python:
     name: Rust (clippy, test -- python feature, kind=pyblock/kind=pyfunc)
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: general-simulator
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out general-simulator
+        uses: actions/checkout@v4
+        with:
+          path: general-simulator
+
+      # `crates/dae-runtime` resolves general-spice-core and general-mna as
+      # *path* dependencies into sibling checkouts (`../../../spice-lsp`,
+      # `../../../general-mna`), so a runner holding only this repository
+      # cannot even run `cargo metadata` — `cargo fmt --all` failed with
+      # "failed to load manifest for workspace member crates/dae-runtime"
+      # before anything was built. Every job reproduces the local layout:
+      #
+      #   $GITHUB_WORKSPACE/general-simulator        <- this repository
+      #   $GITHUB_WORKSPACE/spice-lsp                <- general-spice-core
+      #   $GITHUB_WORKSPACE/general-mna              <- general-mna
+      #   $GITHUB_WORKSPACE/gs-waveform-measurements <- the CLI's own path dep
+      #
+      # All are public, so the default GITHUB_TOKEN can read them.
+      - name: Check out sibling spice-lsp (general-spice-core)
+        uses: actions/checkout@v4
+        with:
+          repository: GLODI-Engineering/spice-lsp
+          path: spice-lsp
+
+      - name: Check out sibling general-mna
+        uses: actions/checkout@v4
+        with:
+          repository: GLODI-Engineering/general-mna
+          path: general-mna
+
+      - name: Check out sibling gs-waveform-measurements
+        uses: actions/checkout@v4
+        with:
+          repository: GLODI-Engineering/gs-waveform-measurements
+          path: gs-waveform-measurements
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -54,11 +130,17 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: general-simulator
 
+      # Pinned, not "3.x": that floats forward with each runner image and has
+      # already outrun the pinned PyO3 — the build failed with "the configured
+      # Python version (3.15) is newer than PyO3's maximum supported version
+      # (3.14)". Raise this deliberately when PyO3 is upgraded.
       - name: Install Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          python-version: "3.12"
 
       - name: cargo clippy (python feature)
         run: cargo clippy --workspace --all-targets --features general-simulator-cli/python -- -D warnings
