@@ -72,6 +72,21 @@ jobs:
       - name: Install Octave (octave-cli, for crates/octave-ffi)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends octave
 
+      # "Default features" means the CLI's own `python` feature is off, not that
+      # no crate embeds Python: crates/pyblock-ffi builds and runs its own tests
+      # either way, and they import numpy (an ndarray is how a vector signal
+      # crosses that boundary). Pinned to the same 3.12 as the python-feature
+      # job, for the same reason stated there, and so both jobs link PyO3
+      # against the same interpreter rather than whatever the runner image
+      # happens to ship.
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numpy (for the kind=pyblock fixtures)
+        run: python -m pip install --upgrade "numpy<3"
+
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
