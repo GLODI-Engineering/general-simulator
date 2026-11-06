@@ -35,23 +35,34 @@ jobs:
           cargo install mdbook --locked
           cargo install mdbook-katex --locked
 
-      # `lmodern` is the package that owns lmodern.sty -- confirmed with
-      # `dpkg -S`, not inferred from a package name; texlive-fonts-recommended
-      # ships the Latin Modern *fonts* but not that style file, and under
-      # --no-install-recommends nothing pulls it in transitively. Pandoc's
-      # default LaTeX template loads lmodern unconditionally, before
-      # book/build-pdf.sh's own `-V mainfont="DejaVu Serif"` has any say, so
-      # the DejaVu setup neither causes nor avoids it.
+      # Two packages beyond the obvious ones, each found by running the build
+      # and reading what it asked for, and each located with `dpkg -S` rather
+      # than inferred from a package name:
       #
-      # Without it the PDF step failed with "! LaTeX Error: File `lmodern.sty'
-      # not found." on every push to main since 2026-09-22, and because this
+      #   lmodern                    -> lmodern.sty, which pandoc's default
+      #                                 LaTeX template loads unconditionally,
+      #                                 before book/build-pdf.sh's own
+      #                                 `-V mainfont="DejaVu Serif"` has any
+      #                                 say. The DejaVu setup neither causes
+      #                                 nor avoids it. The *fonts* in
+      #                                 texlive-fonts-recommended are not this
+      #                                 style file.
+      #   texlive-fonts-recommended  -> pzdr.tfm (ZapfDingbats metrics), which
+      #                                 hyperref's \XeTeXLink@font wants for
+      #                                 link borders. Missing, xelatex tries to
+      #                                 build it with metafont and dies.
+      #
+      # Neither arrives transitively under --no-install-recommends, which is
+      # the flag's whole job. Together they were the entire reason the PDF step
+      # failed on every push to main since 2026-09-22 -- and because this
       # workflow is `on: push` rather than a pull-request gate, the whole site
       # silently stopped publishing while every PR stayed green. See #25.
       - name: Install Pandoc, LaTeX (for PDFs), and DejaVu fonts
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            pandoc texlive-xetex texlive-latex-extra lmodern fonts-dejavu
+            pandoc texlive-xetex texlive-latex-extra \
+            lmodern texlive-fonts-recommended fonts-dejavu
 
       - name: Build user guide (HTML)
         run: mdbook build book/user-guide
