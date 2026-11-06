@@ -21,37 +21,83 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: general-simulator
     steps:
-      - uses: actions/checkout@v4
+      # Same sibling-checkout layout `ci.yml` already uses, and for the same
+      # reason: `crates/dae-runtime` resolves general-spice-core and general-mna
+      # as *path* dependencies into sibling directories, so a runner holding
+      # only this repository cannot run `cargo doc` at all --
+      # "failed to load manifest for workspace member crates/dae-runtime".
+      # ci.yml was given this treatment and this workflow never was, which is
+      # the second of the two independent reasons it has not published since
+      # 2026-09-22. All three siblings are public, so the default GITHUB_TOKEN
+      # can read them.
+      - name: Check out general-simulator
+        uses: actions/checkout@v4
+        with:
+          path: general-simulator
+
+      - name: Check out sibling spice-lsp (general-spice-core)
+        uses: actions/checkout@v4
+        with:
+          repository: GLODI-Engineering/spice-lsp
+          path: spice-lsp
+
+      - name: Check out sibling general-mna
+        uses: actions/checkout@v4
+        with:
+          repository: GLODI-Engineering/general-mna
+          path: general-mna
+
+      - name: Check out sibling gs-waveform-measurements
+        uses: actions/checkout@v4
+        with:
+          repository: GLODI-Engineering/gs-waveform-measurements
+          path: gs-waveform-measurements
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: general-simulator
 
       - name: Install mdbook and mdbook-katex
         run: |
           cargo install mdbook --locked
           cargo install mdbook-katex --locked
 
-      # `lmodern` is the package that owns lmodern.sty -- confirmed with
-      # `dpkg -S`, not inferred from a package name; texlive-fonts-recommended
-      # ships the Latin Modern *fonts* but not that style file, and under
-      # --no-install-recommends nothing pulls it in transitively. Pandoc's
-      # default LaTeX template loads lmodern unconditionally, before
-      # book/build-pdf.sh's own `-V mainfont="DejaVu Serif"` has any say, so
-      # the DejaVu setup neither causes nor avoids it.
+      # Two packages beyond the obvious ones, each found by running the build
+      # and reading what it asked for, and each located with `dpkg -S` rather
+      # than inferred from a package name:
       #
-      # Without it the PDF step failed with "! LaTeX Error: File `lmodern.sty'
-      # not found." on every push to main since 2026-09-22, and because this
+      #   lmodern                    -> lmodern.sty, which pandoc's default
+      #                                 LaTeX template loads unconditionally,
+      #                                 before book/build-pdf.sh's own
+      #                                 `-V mainfont="DejaVu Serif"` has any
+      #                                 say. The DejaVu setup neither causes
+      #                                 nor avoids it. The *fonts* in
+      #                                 texlive-fonts-recommended are not this
+      #                                 style file.
+      #   texlive-fonts-recommended  -> pzdr.tfm (ZapfDingbats metrics), which
+      #                                 hyperref's \XeTeXLink@font wants for
+      #                                 link borders. Missing, xelatex tries to
+      #                                 build it with metafont and dies.
+      #
+      # Neither arrives transitively under --no-install-recommends, which is
+      # the flag's whole job. Together they were the entire reason the PDF step
+      # failed on every push to main since 2026-09-22 -- and because this
       # workflow is `on: push` rather than a pull-request gate, the whole site
       # silently stopped publishing while every PR stayed green. See #25.
       - name: Install Pandoc, LaTeX (for PDFs), and DejaVu fonts
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            pandoc texlive-xetex texlive-latex-extra lmodern fonts-dejavu
+            pandoc texlive-xetex texlive-latex-extra \
+            lmodern texlive-fonts-recommended fonts-dejavu
 
       - name: Build user guide (HTML)
         run: mdbook build book/user-guide
@@ -91,10 +137,13 @@ jobs:
               > public/api/index.html
           fi
 
+      # An action's own inputs are resolved against the workspace root, not the
+      # `defaults.run.working-directory` above (which only applies to `run`
+      # steps), so this path carries the repository directory explicitly.
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: public
+          path: general-simulator/public
 
   deploy:
     needs: build
