@@ -63,6 +63,30 @@ jobs:
         with:
           workspaces: general-simulator
 
+      # crates/octave-ffi drives a real `octave-cli` subprocess rather than
+      # linking Octave (see that crate's module doc comment on why: "mere
+      # aggregation" under the GPL, not linking), and its tests say so in their
+      # own expect() message -- "octave-cli must be on PATH for this test". The
+      # runner image has no Octave, so without this every octave-ffi test fails
+      # at spawn, in both jobs, with nothing to do with the change under test.
+      - name: Install Octave (octave-cli, for crates/octave-ffi)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends octave
+
+      # "Default features" means the CLI's own `python` feature is off, not that
+      # no crate embeds Python: crates/pyblock-ffi builds and runs its own tests
+      # either way, and they import numpy (an ndarray is how a vector signal
+      # crosses that boundary). Pinned to the same 3.12 as the python-feature
+      # job, for the same reason stated there, and so both jobs link PyO3
+      # against the same interpreter rather than whatever the runner image
+      # happens to ship.
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numpy (for the kind=pyblock fixtures)
+        run: python -m pip install --upgrade "numpy<3"
+
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
@@ -141,6 +165,22 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      # crates/octave-ffi drives a real `octave-cli` subprocess rather than
+      # linking Octave (see that crate's module doc comment on why: "mere
+      # aggregation" under the GPL, not linking), and its tests say so in their
+      # own expect() message -- "octave-cli must be on PATH for this test". The
+      # runner image has no Octave, so without this every octave-ffi test fails
+      # at spawn, in both jobs, with nothing to do with the change under test.
+      - name: Install Octave (octave-cli, for crates/octave-ffi)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends octave
+
+      # kind=pyblock's own fixtures import numpy (an ndarray is how a vector
+      # signal crosses the boundary), so the interpreter setup-python installs
+      # is not enough on its own -- `ModuleNotFoundError: No module named
+      # 'numpy'` inside the embedded interpreter, not a Rust failure.
+      - name: Install numpy (for the kind=pyblock fixtures)
+        run: python -m pip install --upgrade "numpy<3"
 
       - name: cargo clippy (python feature)
         run: cargo clippy --workspace --all-targets --features general-simulator-cli/python -- -D warnings

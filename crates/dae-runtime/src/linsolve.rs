@@ -42,8 +42,10 @@ pub fn dense_solve(a: &Matrix<f64>, b: &[f64]) -> Result<Vec<f64>, SingularMatri
         augmented.swap(pivot_row, pivot_col);
 
         let pivot = augmented[pivot_col][pivot_col];
-        for col in pivot_col..=n {
-            augmented[pivot_col][col] /= pivot;
+        // `skip(pivot_col)` is exactly `pivot_col..=n`: each augmented row is the matrix row
+        // plus the RHS, so it holds `n + 1` entries.
+        for v in augmented[pivot_col].iter_mut().skip(pivot_col) {
+            *v /= pivot;
         }
         for row in 0..n {
             if row == pivot_col {
@@ -53,6 +55,13 @@ pub fn dense_solve(a: &Matrix<f64>, b: &[f64]) -> Result<Vec<f64>, SingularMatri
             if factor == 0.0 {
                 continue;
             }
+            // Indexed deliberately, against `clippy::needless_range_loop`: this reads one row
+            // while writing another, so an iterator over `augmented` would need the rows split
+            // apart or the pivot row copied. `augmented[row][col] -= factor *
+            // augmented[pivot_col][col]` is the textbook spelling of a Gauss-Jordan row
+            // operation, and in numerical code matching the reference form is worth more than
+            // satisfying a style lint. Every index is in `pivot_col..=n`, inside both rows.
+            #[allow(clippy::needless_range_loop)]
             for col in pivot_col..=n {
                 augmented[row][col] -= factor * augmented[pivot_col][col];
             }
