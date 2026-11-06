@@ -69,6 +69,13 @@ t,V(a),V(b),I(V1),PROBE,DELAY
 `DELAY` reads `0` at `t=0.001` (before any step has been accepted, `prev:` is `0.0` by
 convention) and `2.5` only from `t=0.003` on — one full step behind `PROBE`'s own value.
 
+Note that `PROBE` is itself one step behind `V(b)` in the same rows, which is why `DELAY`
+ends up two steps behind the circuit rather than one. That is not `prev:` — a `phys2sig`
+always reports the previous accepted step's solution, because the block graph is evaluated
+before the circuit is solved. See [What time a row's values belong
+to](reading-output.md#what-time-a-rows-values-belong-to); `prev:` adds one more step on top
+of it.
+
 ## What happens if you write a same-step cycle anyway
 
 A genuine same-step cycle among `Signal::Block` references — however indirect, including a block

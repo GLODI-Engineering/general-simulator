@@ -12,11 +12,34 @@ import _lib  # noqa: E402
 
 
 def test_example_tracks_the_node_voltage_exactly():
-    """## Example: a 5V/(1k,1k) divider -> PROBE1 == V(out) == 2.5 exactly."""
+    """## Example: a 5V/(1k,1k) divider -> PROBE1 == V(out) == 2.5 exactly, once settled.
+
+    "Once settled" is load-bearing: see the next test. This one deliberately still asserts on
+    the LAST row, which is what the entry's own `## Example` claims.
+    """
     _, stdout, _ = _lib.run_transient(HERE / "example.cir", tfinal=1e-3, dt=1e-4)
     rows = _lib.parse_csv(stdout)
     assert abs(rows[-1]["PROBE1"] - 2.5) < 1e-9, f"got {rows[-1]['PROBE1']}"
     assert rows[-1]["PROBE1"] == rows[-1]["V(out)"]
+
+
+def test_the_read_is_one_step_behind_the_quantity_it_reads():
+    """## Implementation notes: a phys2sig reports the circuit as of t - dt, and 0.0 in the
+    first row, because the block graph is evaluated before the circuit is solved.
+
+    The same divider at a coarse dt, where the delay is visible rather than hidden by the
+    settled steady state the test above happens to land in.
+    """
+    _, stdout, _ = _lib.run_transient(HERE / "example.cir", tfinal=4e-3, dt=1e-3)
+    rows = _lib.parse_csv(stdout)
+    assert len(rows) >= 3, f"expected at least three rows, got {len(rows)}"
+    assert rows[0]["PROBE1"] == 0.0, f"first row has nothing to sample; got {rows[0]['PROBE1']}"
+    assert rows[0]["V(out)"] != rows[0]["PROBE1"], "the first row must visibly differ"
+    for i in range(1, len(rows)):
+        assert abs(rows[i]["PROBE1"] - rows[i - 1]["V(out)"]) < 1e-12, (
+            f"row {i}: PROBE1={rows[i]['PROBE1']} should be the previous row's "
+            f"V(out)={rows[i - 1]['V(out)']}"
+        )
 
 
 def test_both_node_and_branch_is_rejected():
@@ -45,6 +68,9 @@ def test_ammeter_idiom_measures_the_series_current_exactly():
     rows = _lib.parse_csv(stdout)
     assert abs(rows[-1]["IMEAS"] - 0.0025) < 1e-9, f"got {rows[-1]['IMEAS']}"
     assert rows[-1]["IMEAS"] == rows[-1]["I(VAMM)"]
+    # Same one-step caveat as the divider: the ammeter reads the previous step, so the
+    # agreement above holds from the second row on, not the first.
+    assert rows[0]["IMEAS"] == 0.0, f"got {rows[0]['IMEAS']}"
     assert abs(rows[-1]["V(out)"] - 2.5) < 1e-9, f"got {rows[-1]['V(out)']}"
 
 

@@ -611,6 +611,45 @@ R2 out 0 1000
 IMEAS kind=phys2sig branch=VAMM
 ```
 
+**Implementation notes**
+
+**What a `phys2sig` reads is one step old, by construction.** The block graph is evaluated
+*before* the circuit is solved — a block's output may decide a gate state or a source
+magnitude for the step about to be solved, so it cannot depend on that step's own solution.
+A `phys2sig` therefore samples the previous accepted step's operating point: at row $t$ it
+reports the circuit quantity as of $t - \Delta t$, and `0.0` on the very first row, before
+any step has been solved.
+
+This is the project's sampled-data coupling, not an artifact of the CSV writer: every other
+column in a row — each circuit unknown, and every signal-domain block that does not read the
+circuit — is the value at that row's own $t$. A 50 Hz `SIN()` source and a `kind=sinwave`
+block both match $A\sin(2\pi f t)$ at the row's own stamp to full printed precision.
+
+Verified against a real run, a resistor divider whose node sits at a constant 2.5 V:
+
+```text
+V1 in 0 5
+R1 in out 1k
+R2 out 0 1k
+PROBE1 kind=phys2sig node=out
+```
+
+```text
+t,V(in),V(out),I(V1),PROBE1
+0.001,5,2.5,-0.0025,0      <- PROBE1 has nothing to sample yet
+0.002,5,2.5,-0.0025,2.5    <- V(out) as of t = 0.001
+0.003,5,2.5,-0.0025,2.5
+```
+
+On a circuit that settles this is invisible after the first row, which is why a
+steady-state check cannot see it — the divider `## Example` above tracks `V(out)` *exactly*
+only from its second row onward, and the ammeter example likewise. On a switching or oscillating quantity it is a real
+one-sample shift: a controller reading through a `phys2sig` sees $y(t - \Delta t)$, exactly
+as a digital controller sampling at the top of its interrupt does, and that is the
+behaviour being modelled deliberately (`book/dev-guide/src/block-graph-descriptor.md`,
+`docs/architecture.md`). Use `--dt` small enough that one step's phase lag is acceptable in
+the loop you are closing; there is no flag that removes it.
+
 ### Sig2Phys (Signal-to-Physical Converter)
 
 **Purpose:** the only legal way a signal-domain block's output drives a `V`/`I` source's
@@ -1438,7 +1477,10 @@ resonant converter's own ZVS margin, not just bookkeeping.
 - `inputs=<freq,phase,duty>` — exactly 3, in this order: `freq` (Hz, clamped internally
   to `[f_min, f_max]`), `phase` (`[0,1)`, a phase-shift command as a fraction of one
   carrier period — *not* this block's own internal integration state, a different
-  thing), `duty` (`[0,1]`, clamped).
+  thing; applied as a **lead**: conduction begins at $(1 - \text{phase})$ of the
+  carrier period, so `0.25` starts the pulse three quarters of the way through the
+  period, not one quarter — see the user guide's gate-bindings chapter for the run that
+  shows it), `duty` (`[0,1]`, clamped).
 - `red=<f64>`, `fed=<f64>` — optional, default `0.0`; seconds, converted internally to a
   phase fraction using the current resolved frequency.
 - `outputs=<main,complement>` — optional; defaults to `<name>,<name>_comp`.

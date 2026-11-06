@@ -7,7 +7,11 @@ that doc comment.
 ## Files
 
 - `example.cir` — the doc comment's own `## Example`: reading a resistor-divider node,
-  `PROBE1` tracking `V(out)` exactly.
+  `PROBE1` tracking `V(out)` exactly *once the divider has settled*. The same file is run
+  twice: once at a fine `dt` for that claim, and once at a coarse `dt` for the
+  `## Implementation notes` claim that a `phys2sig` reports the circuit as of `t - dt` and
+  `0.0` in the first row. A settled circuit hides the delay after row one, which is why the
+  first test alone could never have caught it.
 - `error_both_node_and_branch.cir` — `node=`/`branch=` both given, rejected at parse time.
 - `error_neither.cir` — neither given, rejected at parse time.
 - `ammeter.cir` — the doc comment's second `## Example`: the classic MNA "ammeter" idiom (a

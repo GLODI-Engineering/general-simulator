@@ -28,6 +28,49 @@ that comparison against two independent readers).
   than one column holding the whole vector. Arity is fixed for the whole run once a block
   declares it — see `book/dev-guide/src/vector-signals.md`.
 
+## What time a row's values belong to
+
+**The first row is $t = \Delta t$, not $t = 0$.** The initial condition is the run's input, not
+one of its results, so it is never emitted; `--mode transient --tfinal 1e-3 --dt 1e-4` writes ten
+rows, the first stamped `0.0001`. Any measurement over the whole trace is therefore taken over
+$[\Delta t, t_\mathrm{final}]$ — which is where the ~0.01 offset in
+[Measurements](measurements.md)' hand-derived `ramp.cir` example comes from.
+
+**Every value in a row is the value at that row's own `t`** — each circuit unknown, and every
+signal-domain block that does not read the circuit. There is no global one-step offset between a
+row's stamp and its contents: a 50 Hz `SIN()` source and an equivalent `kind=sinwave` block both
+match $A\sin(2\pi f t)$ at the row's own stamp to full printed precision, and a `kind=pulsewave`
+edge lands in the first row past the edge time, not the one after it.
+
+**The one exception is `kind=phys2sig`.** A `phys2sig` column holds the circuit quantity as of
+$t - \Delta t$, and `0` in the first row. The block graph is evaluated *before* the circuit is
+solved — a block's output may decide a gate state or a source magnitude for the step about to be
+solved — so a block that reads the circuit necessarily reads the previous step's solution. That
+is this project's sampled-data coupling, documented as a deliberate choice in
+[Signals](signals.md) and `book/dev-guide/src/block-graph-descriptor.md`, and it is the same
+one-sample delay a real digital controller has.
+
+So in the same row, a `phys2sig` column and the `V(...)` column it reads disagree by one step:
+
+```text
+V1 in 0 5
+R1 in out 1k
+R2 out 0 1k
+PROBE1 kind=phys2sig node=out
+```
+
+```text
+t,V(in),V(out),I(V1),PROBE1
+0.001,5,2.5,-0.0025,0
+0.002,5,2.5,-0.0025,2.5
+0.003,5,2.5,-0.0025,2.5
+```
+
+On a settled circuit this only shows in the first row, which is why it is easy to miss. On a
+switching or oscillating quantity it is a real one-sample phase shift in whatever loop is closed
+through it. There is no flag that removes it; choose `--dt` small enough that one step's lag is
+acceptable in that loop.
+
 ## `NaN` / missing columns
 
 If a block's own output isn't resolved for a given point (a genuinely exceptional case — the
