@@ -957,7 +957,7 @@ fn run_transient_streamed(
             // Point 0 is always emitted; the final point is emitted only if its index happens to
             // land on the stride, which keeps the rule to one sentence -- "every Nth point" --
             // rather than a special case a reader has to remember.
-            let emit = n_resolved % out_every == 0;
+            let emit = n_resolved.is_multiple_of(out_every);
             n_resolved += 1;
             if !emit {
                 return Ok(());
