@@ -35,19 +35,23 @@ jobs:
           cargo install mdbook --locked
           cargo install mdbook-katex --locked
 
-      # texlive-fonts-recommended carries lmodern.sty, which pandoc's default
-      # LaTeX template loads unconditionally -- before book/build-pdf.sh's own
-      # `-V mainfont="DejaVu Serif"` has any say, so the DejaVu setup neither
-      # causes nor avoids it. Without that package the PDF step failed with
-      # "! LaTeX Error: File `lmodern.sty' not found." on every push to main
-      # since 2026-09-22, and because this workflow is `on: push` rather than a
-      # pull-request gate, the whole site silently stopped publishing while
-      # every PR stayed green. See #25.
+      # `lmodern` is the package that owns lmodern.sty -- confirmed with
+      # `dpkg -S`, not inferred from a package name; texlive-fonts-recommended
+      # ships the Latin Modern *fonts* but not that style file, and under
+      # --no-install-recommends nothing pulls it in transitively. Pandoc's
+      # default LaTeX template loads lmodern unconditionally, before
+      # book/build-pdf.sh's own `-V mainfont="DejaVu Serif"` has any say, so
+      # the DejaVu setup neither causes nor avoids it.
+      #
+      # Without it the PDF step failed with "! LaTeX Error: File `lmodern.sty'
+      # not found." on every push to main since 2026-09-22, and because this
+      # workflow is `on: push` rather than a pull-request gate, the whole site
+      # silently stopped publishing while every PR stayed green. See #25.
       - name: Install Pandoc, LaTeX (for PDFs), and DejaVu fonts
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            pandoc texlive-xetex texlive-latex-extra texlive-fonts-recommended fonts-dejavu
+            pandoc texlive-xetex texlive-latex-extra lmodern fonts-dejavu
 
       - name: Build user guide (HTML)
         run: mdbook build book/user-guide
