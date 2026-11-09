@@ -187,3 +187,20 @@ jobs:
 
       - name: cargo test (python feature)
         run: cargo test --workspace --release --features general-simulator-cli/python -- --test-threads=1
+
+      # `doc-verify` is the proof that every `## Example` and `## Errors` claim in
+      # the Component Reference was run against the real CLI rather than written
+      # from plausible-looking prose. It lives in this job because this is the one
+      # that has what it needs: a CLI built with the `python` feature (six
+      # pyblock/pyfunc cases fail with PythonSupportNotCompiledIn without it),
+      # Octave for the octblock/octfunc folders, numpy, and the sibling checkouts.
+      #
+      # It builds the binary explicitly rather than relying on the test step above,
+      # because `cargo test` does not guarantee the CLI binary itself is built.
+      - name: build the CLI doc-verify subprocesses
+        run: cargo build --release -p general-simulator-cli --features python
+
+      - name: doc-verify (the documented examples still run)
+        run: |
+          python -m pip install --upgrade pytest
+          python -m pytest doc-verify -q
