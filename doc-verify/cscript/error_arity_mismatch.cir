@@ -1,0 +1,7 @@
+* CScript component reference -- the "## Declaring how many inputs and outputs the block has"
+* error case: three inputs wired into a block that declares two.
+* Expect CScriptArityMismatch naming the block and both counts.
+A kind=const value=1
+B kind=const value=2
+C kind=const value=3
+CG kind=cscript lib=doc-verify/cscript/declares_arity.so inputs=A,B,C

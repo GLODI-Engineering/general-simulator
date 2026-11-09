@@ -38,3 +38,15 @@ checkpoint chapter's escape-hatch table), not the component-reference entry:
 cargo build --release -p general-simulator-cli   # from the repo root, once
 python3 doc-verify/cscript/test_cscript.py
 ```
+
+## The arity declaration
+
+| file | proves |
+| --- | --- |
+| `declares_arity.c` | a library that exports `cscript_arity`, declaring two inputs and one output |
+| `arity_example.cir` | a netlist agreeing with it runs, and the block sums its two inputs |
+| `error_arity_mismatch.cir` | three inputs into a block declaring two is `CScriptArityMismatch`, and the message carries both counts |
+
+The second is the point of the symbol. Without it, `in_len` is whatever the netlist said and the
+block indexes past the end of a buffer — a wrong answer or a memory error, never a message
+naming the block.

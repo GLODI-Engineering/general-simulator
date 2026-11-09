@@ -143,6 +143,20 @@ pub enum DaeError {
     CScriptRequiresNextSampleHitForVariableSampleTime {
         block_name: String,
     },
+    /// A `cscript` library exported `cscript_arity` and what it declared does not match the
+    /// port counts the netlist declares for this block.
+    ///
+    /// Only possible when the library opts in. Without the symbol, `in_len`/`out_len` are
+    /// whatever the netlist said and a disagreement is an out-of-bounds C array access — a
+    /// silent corruption rather than an error, which is the whole reason the symbol exists.
+    CScriptArityMismatch {
+        block_name: String,
+        /// `None` for a side the library declined to declare (it wrote a negative value).
+        declared_inputs: Option<usize>,
+        declared_outputs: Option<usize>,
+        netlist_inputs: usize,
+        netlist_outputs: usize,
+    },
     /// The `PyBlock` counterpart to [`Self::CScriptRequiresNextSampleHitForVariableSampleTime`]
     /// — a `.py` file declared `ts=variable` but doesn't define `next_sample_hit`.
     #[cfg(feature = "python")]

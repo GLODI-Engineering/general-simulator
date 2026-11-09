@@ -237,3 +237,86 @@ fn cscript_without_clone_is_rejected_under_adaptive_step_not_silently_wrong() {
         "stderr should name the specific error, got: {stderr}"
     );
 }
+
+#[test]
+fn a_netlist_that_disagrees_with_a_declared_arity_is_rejected_before_the_first_step() {
+    // The fixture declares two inputs and one output. Wiring three inputs to it used to be
+    // undetectable: `in_len` is whatever the netlist says, so the block would index a buffer
+    // of the size it expected against one the netlist sized differently — a silent
+    // out-of-bounds read, not a failed run. With `cscript_arity` the two have to agree.
+    let lib = compile_c_fixture("cscript_declares_arity");
+    let devices = write_devices_file(&format!(
+        "OFFVAL kind=const value=0\n\
+         OFFGATE kind=sig2phys domain=voltage in=OFFVAL\n\
+         D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
+         A kind=const value=1\n\
+         B kind=const value=2\n\
+         C kind=const value=3\n\
+         CG kind=cscript lib={} inputs=A,B,C\n",
+        lib.display()
+    ));
+
+    let output = run(&[
+        fixture("cscript_gain.cir").to_str().unwrap(),
+        "--devices",
+        devices.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "0.001",
+        "--dt",
+        "0.0005",
+    ]);
+    assert!(
+        !output.status.success(),
+        "three inputs into a block declaring two must not run"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("CScriptArityMismatch"),
+        "stderr should name the specific error, got: {stderr}"
+    );
+    // The numbers matter more than the name: this is what tells someone which side is wrong.
+    assert!(
+        stderr.contains("netlist_inputs: 3") && stderr.contains("declared_inputs: Some(2)"),
+        "stderr should carry both counts, got: {stderr}"
+    );
+}
+
+#[test]
+fn a_netlist_that_matches_a_declared_arity_runs() {
+    // The other half: declaring arity must not make a correct netlist harder to write.
+    let lib = compile_c_fixture("cscript_declares_arity");
+    let devices = write_devices_file(&format!(
+        "OFFVAL kind=const value=0\n\
+         OFFGATE kind=sig2phys domain=voltage in=OFFVAL\n\
+         D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
+         A kind=const value=1\n\
+         B kind=const value=2\n\
+         CG kind=cscript lib={} inputs=A,B\n",
+        lib.display()
+    ));
+
+    let output = run(&[
+        fixture("cscript_gain.cir").to_str().unwrap(),
+        "--devices",
+        devices.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "0.001",
+        "--dt",
+        "0.0005",
+    ]);
+    assert!(
+        output.status.success(),
+        "two inputs into a block declaring two must run, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // 1 + 2, every step.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("3"),
+        "the block's own output should appear, got: {stdout}"
+    );
+}
