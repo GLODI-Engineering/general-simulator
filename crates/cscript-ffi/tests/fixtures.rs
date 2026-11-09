@@ -416,3 +416,67 @@ fn no_state_contract_reports_unsupported_not_panic() {
     ));
     assert_eq!(instance.call(&[1.0], 0.0, 2), vec![1.0, 1.0]);
 }
+
+// ---------------------------------------------------------------------------
+// The optional arity declaration
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_library_that_declares_its_arity_reports_both_sides() {
+    let lib_path = compile_fixture("declares_arity");
+    let mut registry = CScriptRegistry::new();
+    let instance = registry
+        .instantiate(&lib_path)
+        .expect("load arity-declaring fixture");
+
+    let declared = instance
+        .declared_arity()
+        .expect("fixture exports cscript_arity and returns 0");
+    assert_eq!(declared.inputs, Some(2));
+    assert_eq!(declared.outputs, Some(1));
+}
+
+#[test]
+fn a_library_without_the_symbol_declares_nothing() {
+    // The contract is opt-in: every library written before `cscript_arity` existed must keep
+    // loading and running exactly as it did.
+    let lib_path = compile_fixture("stateless_gain");
+    let mut registry = CScriptRegistry::new();
+    let instance = registry.instantiate(&lib_path).expect("load fixture");
+
+    assert_eq!(instance.declared_arity(), None);
+    assert_eq!(instance_call(&mut registry, &lib_path, &[21.0]), vec![42.0]);
+}
+
+#[test]
+fn returning_non_zero_means_declining_not_failing() {
+    // A library may export the symbol and still have no opinion — and declining must be
+    // indistinguishable from never having exported it, not an error that stops a run.
+    let lib_path = compile_fixture("declines_arity");
+    let mut registry = CScriptRegistry::new();
+    let instance = registry.instantiate(&lib_path).expect("load fixture");
+
+    assert_eq!(instance.declared_arity(), None);
+}
+
+#[test]
+fn a_negative_side_is_left_undeclared() {
+    // A block that is genuinely variadic on one side can still pin the other.
+    let lib_path = compile_fixture("declares_outputs_only");
+    let mut registry = CScriptRegistry::new();
+    let instance = registry.instantiate(&lib_path).expect("load fixture");
+
+    let declared = instance.declared_arity().expect("declares one side");
+    assert_eq!(declared.inputs, None, "-1 means 'not declaring this one'");
+    assert_eq!(declared.outputs, Some(1));
+}
+
+/// Instantiate and call once, for tests that care about the result rather than the instance.
+fn instance_call(
+    registry: &mut CScriptRegistry,
+    lib_path: &std::path::Path,
+    input: &[f64],
+) -> Vec<f64> {
+    let mut instance = registry.instantiate(lib_path).expect("load fixture");
+    instance.call(input, 0.0, 1)
+}

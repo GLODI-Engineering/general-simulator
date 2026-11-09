@@ -29,6 +29,7 @@ def setup_module():
     _compile(HERE / "gain.c", HERE / "a lib dir" / "gain.so")
     _compile(HERE / "accumulator_checkpoint.c", HERE / "accumulator_checkpoint.so")
     _compile(HERE / "partial_state.c", HERE / "partial_state.so")
+    _compile(HERE / "declares_arity.c", HERE / "declares_arity.so")
 
 
 def test_example_gain_block_doubles_its_input():
@@ -53,6 +54,27 @@ def test_adaptive_stepping_without_cscript_clone_is_rejected():
     )
     assert code != 0
     assert "CScriptRequiresCloneForAdaptiveStep" in stderr
+
+
+def test_a_declared_arity_that_matches_the_netlist_runs():
+    """## Declaring how many inputs and outputs the block has: a library exporting
+    cscript_arity with in=2/out=1, wired to two inputs, runs and sums them."""
+    _, stdout, _ = _lib.run_transient(HERE / "arity_example.cir", tfinal=1e-4, dt=1e-5)
+    rows = _lib.parse_csv(stdout)
+    assert rows[0]["CG"] == 3.0
+
+
+def test_a_declared_arity_that_disagrees_is_rejected():
+    """## Errors: three inputs wired into a block declaring two fails with
+    CScriptArityMismatch, carrying both counts."""
+    code, _, stderr = _lib.run_transient(
+        HERE / "error_arity_mismatch.cir", tfinal=1e-4, dt=1e-5, expect_success=False
+    )
+    assert code != 0
+    assert "CScriptArityMismatch" in stderr
+    # The counts are the point: the message has to say which side to change.
+    assert "declared_inputs: Some(2)" in stderr
+    assert "netlist_inputs: 3" in stderr
 
 
 def _split_run_matches_whole(cir):

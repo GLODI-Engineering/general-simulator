@@ -1,0 +1,8 @@
+* CScript component reference -- the "## Declaring how many inputs and outputs the block has"
+* netlist (compile declares_arity.c first: `cc -shared -fPIC -O0 -o declares_arity.so
+* declares_arity.c`, run from the repository root).
+* No title line -- see doc-verify/pid/example.cir's own comment for why.
+A kind=const value=1
+B kind=const value=2
+* declares_arity.so declares two inputs and one output, and this agrees, so it runs.
+CG kind=cscript lib=doc-verify/cscript/declares_arity.so inputs=A,B

@@ -2252,6 +2252,27 @@ pub fn simulate_transient_with_blocks_checkpointed(
                         },
                     );
                 }
+                // If the library declares its own arity, hold the netlist to it. Without this
+                // the two are only documented to agree: `in_len`/`out_len` are passed through
+                // as whatever the netlist said, and a library that disagrees indexes past the
+                // end of a buffer it was handed. That is a silent memory error, not a failed
+                // run, and it is the reason `cscript_arity` exists. Checked once here, before
+                // any step, with the same discipline as the two checks above.
+                if let Some(declared) = instance.declared_arity() {
+                    let netlist_inputs = b.inputs.len();
+                    let netlist_outputs = output_names.len();
+                    let inputs_disagree = declared.inputs.is_some_and(|n| n != netlist_inputs);
+                    let outputs_disagree = declared.outputs.is_some_and(|n| n != netlist_outputs);
+                    if inputs_disagree || outputs_disagree {
+                        return Err(DaeError::CScriptArityMismatch {
+                            block_name: b.name.clone(),
+                            declared_inputs: declared.inputs,
+                            declared_outputs: declared.outputs,
+                            netlist_inputs,
+                            netlist_outputs,
+                        });
+                    }
+                }
                 BlockState::CScript {
                     instance,
                     // Periodic{period, offset}: initialized to `period - offset` (not 0.0, and

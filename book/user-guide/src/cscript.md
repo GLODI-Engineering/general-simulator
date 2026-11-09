@@ -202,10 +202,56 @@ The three are **all-or-nothing**:
   (`doc-verify/cscript/error_partial_state_contract.cir`, against `partial_state.c`, which
   exports only the first two.)
 
+## Declaring how many inputs and outputs the block has
+
+`in_len` and `out_len` are whatever the netlist declared. If the `.c` file was written for a
+different number, nothing notices: the block indexes a buffer sized by the netlist against the
+size it expected. That is an out-of-bounds read or write — a wrong answer at best, and in
+neither case a message naming the block.
+
+A library can close that by saying what it was built for:
+
+```c
+/* Optional. Write the counts this block expects and return 0. */
+int cscript_arity(int *in_len, int *out_len) {
+    *in_len = 2;
+    *out_len = 1;
+    return 0;
+}
+```
+
+With it, a netlist that disagrees is refused before the first step:
+
+```console
+$ general-simulator circuit.cir --devices blocks.dev --mode transient --tfinal 1e-3 --dt 5e-4
+error: CScriptArityMismatch { block_name: "CG", declared_inputs: Some(2), declared_outputs: Some(1), netlist_inputs: 3, netlist_outputs: 1 }
+```
+
+Both counts are in the message, so it says which side to change rather than only that something
+is wrong.
+
+### Declining, and declaring one side
+
+Returning non-zero means "no opinion", and is treated exactly as if the symbol were absent. A
+negative count means "not declaring this side", so a block that genuinely takes any number of
+inputs can still pin its outputs:
+
+```c
+int cscript_arity(int *in_len, int *out_len) {
+    *in_len = -1;   /* any number of inputs */
+    *out_len = 1;
+    return 0;
+}
+```
+
+The symbol is optional. A `.c` file written before it existed keeps working unchanged — this is
+something a library opts into, not a new requirement.
+
 ## What isn't checked
 
-A `.so` missing a required export, or a signature mismatch, surfaces as a load-time or call-time
-failure from `cscript_ffi` itself rather than a netlist-parse-time error — there's no way to
+Input and output *counts* are checked when the library declares them — see above. Everything
+else is not: a `.so` missing a required export, or a signature mismatch, surfaces as a
+load-time or call-time failure from `cscript_ffi` itself rather than a netlist-parse-time error — there's no way to
 validate a shared library's actual exported signatures before trying to call them. Get the
 minimal example above working first, then extend it, rather than debugging a hand-written `.c`
 file and the netlist wiring simultaneously.

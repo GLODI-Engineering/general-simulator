@@ -194,10 +194,45 @@
 //! library themselves (e.g. `cc -shared -fPIC -o my_block.so my_block.c`); this crate never
 //! invokes a compiler.
 //!
-//! `in_len`/`out_len` must match the netlist's own declared input/output counts for this block
-//! — nothing in this crate checks that they do; a mismatch is a plain out-of-bounds C array
-//! access, same as it would be calling `OutputSignal(9, 0)` past a declared output count in any
-//! other tool's own code-slot mechanism. This is documented, not enforced.
+//! ## The optional arity declaration
+//!
+//! `in_len`/`out_len` are whatever the netlist declared for this block. If the `.c` file was
+//! written for a different number, nothing here notices: the block indexes a buffer sized by
+//! the netlist against the size it expected, which is an out-of-bounds read or write, not a
+//! failed run. A wrong answer at best, memory corruption at worst, and in neither case a
+//! message naming the block.
+//!
+//! A library can close that by saying what it was built for:
+//!
+//! ```c
+//! // Optional. Write the counts this block expects and return 0. Return non-zero to decline,
+//! // which is treated exactly like not exporting the symbol at all.
+//! int cscript_arity(int *in_len, int *out_len) {
+//!     *in_len = 2;
+//!     *out_len = 1;
+//!     return 0;
+//! }
+//! ```
+//!
+//! When present, `dae-runtime` compares it against the netlist before the first step and
+//! refuses a disagreement with `DaeError::CScriptArityMismatch`, naming the block and both
+//! counts. This crate only resolves and calls the symbol — see
+//! [`CScriptInstance::declared_arity`] — because nothing here knows what a netlist is.
+//!
+//! A negative value means "not declaring this side", so a block that genuinely takes any
+//! number of inputs can still pin its output count:
+//!
+//! ```c
+//! int cscript_arity(int *in_len, int *out_len) {
+//!     *in_len = -1;   // any number
+//!     *out_len = 1;
+//!     return 0;
+//! }
+//! ```
+//!
+//! The symbol is optional on purpose. Every library written before it existed keeps loading and
+//! running unchanged, with the old "documented, not enforced" behaviour — the check is
+//! something a library opts into, not a new requirement.
 //!
 //! ## Multi-instance state
 //!
@@ -260,6 +295,9 @@ type NextSampleHitFn = unsafe extern "C" fn(
     xc: *const f64,
     xc_len: i32,
 ) -> f64;
+/// `int cscript_arity(int *in_len, int *out_len)` — optional, see the module doc comment,
+/// "The optional arity declaration." Returns 0 to declare, non-zero to decline.
+type ArityFn = unsafe extern "C" fn(in_len: *mut i32, out_len: *mut i32) -> i32;
 type StateSizeFn = unsafe extern "C" fn(state: *const c_void) -> usize;
 type StateWriteFn = unsafe extern "C" fn(state: *const c_void, out: *mut u8);
 type StateReadFn = unsafe extern "C" fn(input: *const u8, len: usize) -> *mut c_void;
@@ -272,6 +310,17 @@ struct StateIo {
     size: StateSizeFn,
     write: StateWriteFn,
     read: StateReadFn,
+}
+
+/// What a library says about its own input and output counts.
+///
+/// Returned by [`CScriptInstance::declared_arity`]. A side is `None` when the library wrote a
+/// negative value for it, which means "I am not declaring this one" — a block genuinely
+/// variadic on one side can still pin the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeclaredArity {
+    pub inputs: Option<usize>,
+    pub outputs: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -348,6 +397,11 @@ pub struct CScriptLibrary {
     // netlist at all), by calling `CScriptInstance::supports_next_sample_hit` once at
     // construction. See the module doc comment, "The optional block-controlled sample time."
     next_sample_hit: Option<NextSampleHitFn>,
+    // Always optional. When present, `dae-runtime` checks it against the netlist's own
+    // declared input/output counts before the first step -- this crate has no notion of a
+    // netlist, so it only resolves and calls the symbol. See the module doc comment, "The
+    // optional arity declaration."
+    arity: Option<ArityFn>,
     free: Option<FreeFn>,
     clone_state: Option<CloneFn>,
     // The checkpoint state contract, all three or none -- see the module doc comment, "The
@@ -417,6 +471,12 @@ impl CScriptLibrary {
                 .ok()
                 .map(|symbol: Symbol<NextSampleHitFn>| *symbol)
         };
+        let arity: Option<ArityFn> = unsafe {
+            library
+                .get(b"cscript_arity\0")
+                .ok()
+                .map(|symbol: Symbol<ArityFn>| *symbol)
+        };
         let free: Option<FreeFn> = unsafe {
             library
                 .get(b"cscript_free\0")
@@ -480,6 +540,7 @@ impl CScriptLibrary {
             output_xc,
             update,
             next_sample_hit,
+            arity,
             free,
             clone_state,
             state_io,
@@ -613,6 +674,31 @@ impl CScriptInstance {
     /// clear error if not, before ever calling [`Self::next_sample_hit`].
     pub fn supports_next_sample_hit(&self) -> bool {
         self.library.next_sample_hit.is_some()
+    }
+
+    /// What this library declares its own arity to be, if it declares one.
+    ///
+    /// `None` when `cscript_arity` is absent, or present and returns non-zero — a library may
+    /// decline, and declining is not an error. `Some` carries each side separately, because a
+    /// negative value means "not declaring this one".
+    ///
+    /// This crate only asks the question. Comparing the answer against a netlist's declared
+    /// port counts is `dae-runtime`'s, since nothing here knows what a netlist is.
+    pub fn declared_arity(&self) -> Option<DeclaredArity> {
+        let arity = self.library.arity?;
+        let mut in_len: i32 = -1;
+        let mut out_len: i32 = -1;
+        // SAFETY: both pointers are to live locals of the right type, and the contract is that
+        // the callee writes through them and returns 0, or leaves them alone and returns
+        // non-zero. Either way nothing is read back unless it returned 0.
+        let status = unsafe { arity(&mut in_len, &mut out_len) };
+        if status != 0 {
+            return None;
+        }
+        Some(DeclaredArity {
+            inputs: usize::try_from(in_len).ok(),
+            outputs: usize::try_from(out_len).ok(),
+        })
     }
 
     /// Calls `cscript_next_sample_hit`, returning the number of seconds (relative to this call)
