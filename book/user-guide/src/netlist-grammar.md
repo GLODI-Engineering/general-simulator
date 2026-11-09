@@ -39,6 +39,44 @@ mid-statement, exactly as in the main netlist. (An earlier draft of this chapter
 as a distinct device-file comment convention; nothing in the current parser supports that — the
 grammar genuinely doesn't distinguish the two files at all.)
 
+## Number suffixes
+
+A value may be written plainly (`1000`), in exponent form (`1e3`), or with a SPICE
+suffix (`1k`). Suffixes are **case-insensitive**, which produces the one trap in
+this grammar that costs real time:
+
+| Suffix | Multiplier | Written |
+|---|---|---|
+| `T` | $10^{12}$ | `1T` |
+| `G` | $10^{9}$ | `1G` |
+| `MEG` | $10^{6}$ | `1MEG`, `1meg` |
+| `K` | $10^{3}$ | `1k`, `1K` |
+| `M` | $10^{-3}$ | `1m`, **`1M`** |
+| `U` | $10^{-6}$ | `1u`, `1U` |
+| `N` | $10^{-9}$ | `1n` |
+| `P` | $10^{-12}$ | `1p` |
+| `F` | $10^{-15}$ | `1f` |
+
+**`M` is milli, not mega.** `R1 in out 1M` is a one-milliohm resistor. Mega is the
+three-letter `MEG`, and because the parser is case-insensitive there is no spelling
+of a single `M` that means $10^{6}$:
+
+```
+R1 in out 1M        * 0.001 ohm
+R1 in out 1MEG      * 1000000 ohm
+```
+
+This is SPICE's rule rather than ours, and every SPICE-family tool shares it — but
+`M` is the obvious abbreviation for mega everywhere else an engineer works, and
+nothing in a netlist flags the difference. A deck written with `1M` for a megohm
+simulates happily, a billion times away from the circuit that was meant, and the
+symptom looks like a wrong answer rather than a wrong input. See
+[GOTCHA-003](https://github.com/GLODI-Engineering/general-simulator/blob/main/docs/gotchas/GOTCHA-003-capital-m-is-milli-not-mega.md)
+for the measured demonstration.
+
+A trailing unit is ignored, so `1kOhm`, `1kohm` and `1k` are the same value, as are
+`10uF` and `10u`. The unit is for the reader; the parser stops at the suffix.
+
 ## Blocks may reference each other in any order
 
 Blocks are *not* evaluated in file order. Each step's actual evaluation order is derived

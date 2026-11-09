@@ -23,6 +23,29 @@ extending the simulator itself (a new device model, a new block kind, the LCP fo
 adaptive-step controller), the companion **Developer Guide** is where the math and the "why"
 live — this guide deliberately stays at the netlist-author's altitude.
 
+## Other ways to drive it
+
+This guide writes netlists by hand, which is the engine's own interface and the one
+everything else is built on. Two other front ends exist, and both produce the same
+netlists described here:
+
+- **[gsim-tools](https://github.com/GLODI-Engineering/gsim-tools)** — build a schematic
+  in Python and compile it to a netlist, instead of writing one. Validation happens as
+  you build: a wire to a port that does not exist, a signal port fed twice, a connection
+  across incompatible paradigms each raise at the line that caused them. The same package
+  reads the output back and runs the measurements of
+  [`kind=measure`](measurements.md) over non-uniformly sampled waveforms.
+- **[general-simulator-gui](https://github.com/GLODI-Engineering/general-simulator-gui)**
+  — a schematic editor and waveform viewer as a VS Code extension, for drawing a circuit
+  rather than writing one.
+
+Both sit on
+**[gsim-core](https://github.com/GLODI-Engineering/gsim-core)**, the shared Rust document
+model and compile registry — one implementation of what a valid schematic is and what it
+compiles to, rather than a separate copy per front end.
+
+Nothing in this guide depends on either of them. A netlist is still the thing that runs.
+
 ## Why this instead of ngspice or Xyce
 
 Two honest reasons, not a claim of general superiority: this project exists to sidestep voltage
