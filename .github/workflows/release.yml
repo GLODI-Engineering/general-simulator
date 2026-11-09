@@ -1,0 +1,144 @@
+name: release
+
+# Builds the `general-simulator` CLI for each supported platform and attaches the
+# binaries to a GitHub release.
+#
+# The default feature set, deliberately: `--features python` links the binary
+# against one specific libpython, which makes it a worse download than it is a
+# build. `kind=pyblock`/`pyfunc` therefore need a locally built binary — the
+# user guide's Python chapter says so.
+#
+# Octave is not a build dependency at all: `octave-ffi` spawns `octave-cli` as a
+# subprocess, so a release binary runs `octfunc` blocks on any machine that has
+# Octave installed, without having had it at build time.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and attach to (blank = build only)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - name: linux-aarch64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive: tar.gz
+          - name: macos-aarch64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - name: windows-x86_64
+            runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            archive: zip
+    steps:
+      # The same layout every other workflow here reproduces: this repository
+      # and its three sibling path dependencies side by side. Without it cargo
+      # cannot even read the workspace manifest.
+      - name: Check out general-simulator
+        uses: actions/checkout@v4
+        with:
+          path: general-simulator
+      - name: Check out sibling spice-lsp (general-spice-core)
+        uses: actions/checkout@v4
+        with:
+          repository: GLODI-Engineering/spice-lsp
+          path: spice-lsp
+      - name: Check out sibling general-mna
+        uses: actions/checkout@v4
+        with:
+          repository: GLODI-Engineering/general-mna
+          path: general-mna
+      - name: Check out sibling gs-waveform-measurements
+        uses: actions/checkout@v4
+        with:
+          repository: GLODI-Engineering/gs-waveform-measurements
+          path: gs-waveform-measurements
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            general-simulator/target
+          key: release-${{ matrix.target }}-${{ hashFiles('general-simulator/Cargo.toml') }}
+
+      - name: Build
+        working-directory: general-simulator
+        run: cargo build --release --locked --target ${{ matrix.target }} -p general-simulator-cli
+
+      - name: Smoke-test the binary it just built
+        working-directory: general-simulator
+        shell: bash
+        run: |
+          # A release nobody ran is a release nobody knows works. Solve a divider
+          # and check the answer, rather than only that the file exists.
+          bin="target/${{ matrix.target }}/release/general-simulator"
+          [ "${{ matrix.archive }}" = "zip" ] && bin="$bin.exe"
+          printf 'V1 in 0 1\nR1 in out 1000\nR2 out 0 1000\n' > smoke.cir
+          out=$("$bin" smoke.cir --mode dc)
+          echo "$out"
+          echo "$out" | grep -q "0.5" || { echo "divider did not give 0.5"; exit 1; }
+
+      - name: Package
+        working-directory: general-simulator
+        shell: bash
+        run: |
+          staging="general-simulator-${{ matrix.name }}"
+          mkdir -p "$staging"
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            cp "target/${{ matrix.target }}/release/general-simulator.exe" "$staging/"
+          else
+            cp "target/${{ matrix.target }}/release/general-simulator" "$staging/"
+          fi
+          cp README.md LICENSE "$staging/" 2>/dev/null || true
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a "$staging.zip" "$staging"
+          else
+            tar czf "$staging.tar.gz" "$staging"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: general-simulator-${{ matrix.name }}
+          path: general-simulator/general-simulator-${{ matrix.name }}.*
+
+  attach:
+    needs: build
+    runs-on: ubuntu-24.04
+    # Only when there is a tag to attach to.
+    if: startsWith(github.ref, 'refs/tags/') || inputs.tag != ''
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: general-simulator-*
+          merge-multiple: true
+          path: dist
+      - run: ls -la dist
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag != '' && inputs.tag || github.ref_name }}
+        run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
