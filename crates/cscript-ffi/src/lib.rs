@@ -1,5 +1,8 @@
-//! Loads a user-supplied, precompiled shared library (`.so`/`.dylib`/`.dll`) exposing three C
-//! functions and calls into it once per block instance per transient step — a dynamically-
+//! Loads a user-supplied, precompiled shared library (`.so`/`.dylib`/`.dll`) exposing a small C
+//! ABI -- two required functions, `cscript_start` and `cscript_output`, plus the optional ones
+//! documented below (`cscript_free`, `cscript_clone`, the continuous-state `xc` contract, the
+//! discrete `cscript_update`, `cscript_arity` and `cscript_next_sample_hit`) -- and calls into
+//! it once per block instance per transient step — a dynamically-
 //! loaded, stateful escape hatch for block behavior no existing `continuous-blocks` block
 //! covers, the same role a code-generation/scripting slot plays in other block-diagram
 //! simulation tools' own extensibility mechanisms, or an `ngspice` XSPICE codemodel `.cm`

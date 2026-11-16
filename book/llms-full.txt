@@ -3933,6 +3933,146 @@ validate a shared library's actual exported signatures before trying to call the
 minimal example above working first, then extend it, rather than debugging a hand-written `.c`
 file and the netlist wiring simultaneously.
 
+## Time inside a C block
+
+`cscript_output` receives `dt` — this step's size in seconds — and **not** the absolute
+simulated time. No `cscript` function ever sees `t`; that is deliberate and consistent across
+the whole contract (`cscript_next_sample_hit` likewise returns an interval relative to the call,
+not an absolute instant).
+
+Two ways to get time, depending on what you need.
+
+**Integrate `dt` yourself.** For anything that only needs elapsed time since the block started,
+accumulate it in the block's own state — the same explicit-Euler update every other stateful
+block in this project uses:
+
+```c
+typedef struct { double t; } State;
+
+void cscript_output(void *state, const double *in, int in_len,
+                    double dt, double *out, int out_len) {
+    State *s = (State *)state;
+    s->t += dt;                 /* elapsed time, maintained by the block */
+    out[0] = sin(2.0 * M_PI * 50.0 * s->t);
+}
+```
+
+Note this is *elapsed* time, which is not the same as simulated time if the block starts late or
+is skipped; and under adaptive stepping a rejected trial step is retried from a clone, so a
+counter incremented during the rejected attempt is discarded with it — see
+[Adaptive step-size control requires `cscript_clone`](#adaptive-step-size-control-requires-cscript_clone).
+
+**Feed `kind=time` in as an input.** For the authoritative simulated time, wire the block that
+does see it:
+
+```
+T  kind=time
+G1 kind=cscript lib=./carrier.so in=T
+```
+
+`in[0]` is then simulated `t`, exactly as the solver knows it, with no accumulation and no
+drift. This is the better default whenever the block's output is a function of absolute time —
+a carrier, a PWM ramp, a scheduled event. `kind=time` is the only block that sees `t` directly
+(see [Sources and math operations](sources-and-math.md)).
+
+### A carrier and a PWM comparison, end to end
+
+```c
+#include <stdlib.h>
+
+void *cscript_start(void) { return NULL; }      /* stateless: t comes in as an input */
+
+void cscript_output(void *state, const double *in, int in_len,
+                    double dt, double *out, int out_len) {
+    const double t = in[0], duty = in[1], fs = 100e3;
+    double phase = t * fs;
+    double carrier = phase - (double)(long)phase;   /* 0..1 sawtooth at fs */
+    out[0] = carrier;
+    out[1] = (duty > carrier) ? 1.0 : 0.0;          /* the gate */
+}
+```
+
+```
+T    kind=time
+D    kind=const value=0.4
+PWM1 kind=cscript lib=./pwm.so inputs=T,D outputs=carrier,gate
+```
+
+Note `inputs=` — plural — for more than one input; `in=` takes exactly one. They arrive in
+`in[0]`, `in[1]`, ... in the order written.
+
+Run at `--dt 1e-6`, that gives a 100 kHz sawtooth and a gate at 40% duty:
+
+```
+t,T,D,PWM1,gate
+0.000001,0.000001,0.4,0.09999999999999999,1
+0.000002,0.000002,0.4,0.19999999999999998,1
+0.000003,0.000003,0.4,0.3,1
+0.000004,0.000004,0.4,0.39999999999999997,1
+0.0000049999999999999996,0.0000049999999999999996,0.4,0.49999999999999994,0
+...
+0.00001,0.00001,0.4,0,1
+```
+
+One thing in that header is worth reading carefully: the columns are `PWM1` and `gate`, not
+`carrier` and `gate`. **A block's first output always appears under the block's own name**, and
+the names in `outputs=` label the *extra* outputs from `out[1]` onwards — the same convention
+[Reading the output](reading-output.md) describes for every multi-output block. So `carrier` is
+written, but the column carrying it is `PWM1`. Name the block for its first output if that
+matters to your plot scripts.
+
+Drive a switch from it the usual way, through a `sig2phys domain=voltage` — a block output
+cannot be wired to a gate directly (see [Gate bindings](gate-bindings.md)).
+
+## How `lib=` is resolved, and the one trap in it
+
+`lib=` is handed to the platform's own dynamic loader (`dlopen`), which brings two behaviours
+worth knowing before they cost an afternoon.
+
+**A bare filename is never looked for in the current directory.** `dlopen` treats a name with no
+path separator as a request to search the *library path* — `LD_LIBRARY_PATH`, the cache,
+the system directories — and nothing else. So a library sitting right next to the netlist fails:
+
+```
+G1 kind=cscript lib=gain.so in=SRC
+```
+```
+error: CScript(Load { path: "gain.so", message: "dlopen failed" })
+```
+
+while the same file with an explicit relative path loads:
+
+```
+G1 kind=cscript lib=./gain.so in=SRC
+```
+
+**Write `./` or an absolute path, always.**
+
+**A relative path resolves against the process's working directory, not the netlist's
+directory.** Running the deck above from a different directory fails the same way, because
+`./gain.so` is now a different place:
+
+```
+$ cd /tmp && general-simulator /elsewhere/deck.cir
+error: CScript(Load { path: "./gain.so", message: "dlopen failed" })
+```
+
+So either `cd` to the deck's directory before running, or make `lib=` absolute. (`kind=pyblock`'s
+`path=` behaves identically, for the same reason.)
+
+**The error does not say why.** `message: "dlopen failed"` is all that surfaces — the loader's
+own `dlerror()` text, which would distinguish "no such file" from "undefined symbol" or "wrong
+architecture", is not carried through. When the path is definitely right and the load still
+fails, reach for the loader directly:
+
+```bash
+ldd ./gain.so          # unresolved dependencies
+nm -D ./gain.so | grep cscript_    # are the required symbols exported, and unmangled?
+```
+
+A missing `cscript_output` or a C++ build that mangled the names produces exactly the same
+one-line message as a missing file.
+
 
 <!-- User Guide / The Python escape hatch -->
 
