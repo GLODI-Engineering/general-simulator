@@ -4655,6 +4655,8 @@ general-simulator <netlist> [--devices <file>] [--mode dc|transient] [--tfinal T
                    [--max-steps N]
                    [--format csv|raw] [--out <path>] [--out-every N]
                    [--checkpoint-out <file>] [--checkpoint-every T] [--resume <file>]
+general-simulator (--help | -h)
+general-simulator (--version | -V)
 ```
 
 `<netlist>` is the one required positional argument — the `.cir` file to run. Every flag below
@@ -4675,6 +4677,24 @@ is optional.
 | `--checkpoint-out <file>` | Write the run's complete state at `--tfinal` so a later run can `--resume` it. See [Checkpoint and resume](checkpoint-resume.md). |
 | `--checkpoint-every T` | With `--checkpoint-out`: also rewrite that file every `T` seconds of simulated time, so a killed run loses at most `T`. |
 | `--resume <file>` | Continue from a checkpoint instead of from $t = 0$; `--tfinal` stays absolute. Only loads into the deck it was written from. |
+| `--help`, `-h` | Print a grouped summary of every flag, with defaults and three worked invocations, to stdout and exit 0. Asking for help is not a misuse, so it does not go to stderr with a failing status the way a wrong argument does. |
+| `--version`, `-V` | Print `general-simulator <version>` to stdout and exit 0. The program name, not the crate's (`general-simulator-cli`). |
+
+Both of those are read before the positional `<netlist>`, because every argument is otherwise a
+path to this CLI: before they existed, `general-simulator --version` answered
+`error: reading --version: No such file or directory` with status 1. Anything probing the binary
+to decide whether it works read that as a broken solver — the VS Code front end's own discovery
+did, and rejected every binary it was pointed at.
+
+For the same reason a flag typed *before* the netlist now names itself rather than blaming a
+missing file:
+
+```text
+$ general-simulator --tfinal 1e-3
+error: unrecognized argument '--tfinal', or a flag given before the netlist.
+The netlist path comes first: general-simulator <netlist> [OPTIONS]
+Run `general-simulator --help` for the full list.
+```
 
 `--dt` and any of `--dt-max`/`--dt-min`/`--dt-init`/`--reltol`/`--abstol` are mutually
 exclusive — pick fixed-step or adaptive stepping, not both. Omitting `--dt` entirely selects
