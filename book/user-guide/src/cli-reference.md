@@ -3,6 +3,7 @@
 ```text
 general-simulator <netlist> [--devices <file>] [--mode dc|transient] [--tfinal T]
                    [--dt DT | --dt-max T --dt-min T --dt-init T --reltol R --abstol A]
+                   [--max-steps N]
                    [--format csv|raw] [--out <path>] [--out-every N]
                    [--checkpoint-out <file>] [--checkpoint-every T] [--resume <file>]
 ```
@@ -18,6 +19,7 @@ is optional.
 | `--dt DT` | Fixes the step size every step (deterministic, exactly reproducible). Mutually exclusive with the adaptive-stepping flags below. |
 | `--dt-max`/`--dt-min`/`--dt-init` | Override individual defaults of the adaptive step-size controller (`dae_runtime::AdaptiveConfig::from_t_final`), used when `--dt` is omitted. |
 | `--reltol`/`--abstol` | Override the adaptive controller's relative/absolute local-truncation-error tolerances. |
+| `--max-steps N` | Caps how many accepted adaptive steps one run may take (default `10,000,000`) before aborting with `DaeError::AdaptiveStepStalled`. Each accepted step holds a row in memory for the rest of the run, so a stalled controller would otherwise grow memory without limit. Adaptive stepping only — a `--dt` run takes a precomputed number of steps and cannot stall this way. See [Fixed vs. adaptive time stepping](time-stepping.md). |
 | `--format csv\|raw` | Output serialization — see below. Default: `csv`. |
 | `--out <path>` | Destination file for `--format raw`. Ignored for `--format csv` (CSV always goes to stdout). |
 | `--out-every N` | Write only every Nth resolved point. Thins the output, never the computation — see below. Default: `1`. |

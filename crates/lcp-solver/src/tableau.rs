@@ -62,8 +62,8 @@ impl Tableau {
 
         let pivot_val = self.rows[row][entering];
         debug_assert!(pivot_val.abs() > EPS, "pivoting on a near-zero element");
-        for c in 0..ncols {
-            self.rows[row][c] /= pivot_val;
+        for v in self.rows[row].iter_mut() {
+            *v /= pivot_val;
         }
 
         for r in 0..self.n {

@@ -161,3 +161,52 @@ Fixed stepping isn't automatically safe either, to be clear: the same source not
 fine enough to never miss an edge is a choice the user makes by hand, with no tool-side check —
 exactly the failure mode the adaptive-side `earliest_next_event_dt` fix above exists to close on
 the adaptive side. Neither mode is a free pass against an under-resolved step.
+
+## Sizing a long run: steps per second, and how big the CSV gets
+
+Fixed stepping makes a run's cost arithmetic rather than a guess, which is worth doing *before*
+starting a twenty-millisecond job. Two numbers set it: how fast the solver takes steps, and how
+many bytes each written row costs.
+
+**Throughput** falls with the number of PWL devices in the circuit, because every step resolves
+an LCP whose size they set. Measured on this machine (release build, fixed `--dt`, output to
+`/dev/null` so serialization is excluded):
+
+| deck | PWL devices | columns | steps/s |
+| --- | ---: | ---: | ---: |
+| inverting buck-boost | 2 | 8 | ≈ 45 000 |
+| phase-shifted full bridge | 6 | 26 | ≈ 12 000 |
+| dual active bridge | 8 | 30 | ≈ 12 000 |
+
+So the wall time of a fixed-step run is roughly
+
+$$t_{\text{wall}} \;\approx\; \frac{t_{\text{final}}}{\Delta t} \cdot \frac{1}{\text{steps/s}}$$
+
+A 20 ms run of a 100 kHz converter at `--dt 10e-9` is $2\times10^{6}$ steps — about three
+minutes at 12 000 steps/s, and proportionally worse as devices are added. Measure one short run
+and extrapolate; the relationship is linear in the step count.
+
+**Output size** is what usually bites first. A CSV row costs about 10–14 bytes per column, so
+
+$$\text{bytes} \;\approx\; \frac{t_{\text{final}}}{\Delta t \cdot N_{\text{out-every}}}
+\cdot n_{\text{columns}} \cdot 12$$
+
+The dual-active-bridge deck above measured 308 bytes per row across 30 columns. At `--dt 10e-9`
+over 20 ms that is $2\times10^{6}$ rows — **about 600 MB** — for a run whose computation takes
+three minutes. Which is the point: *the output, not the solve, is the expensive part of a long
+fixed-step run.*
+
+### What to do about it
+
+- **`--out-every N`** is the first lever, and it is free: every step is still taken and
+  `kind=measure` still sees every point, so only the file shrinks. `--out-every 100` on the run
+  above takes it from 600 MB to 6 MB with a bit-identical solution.
+- **`--format raw`** is denser than CSV for the same data.
+- **`kind=measure`** is better still when what you want is a handful of scalars. The measurement
+  reads every point regardless of `--out-every`, so an RMS or an average computed in the netlist
+  is both exact and nearly free, and the trace itself can be thinned hard or skipped.
+- **Shorten the window instead of coarsening the step.** On a switching converter the step size
+  is set by the physics you need resolved — see the discussion of under-resolved edges above —
+  so a run that is too expensive is usually one that is too *long*, not one that is too finely
+  stepped. `ic=` lets a run start at the periodic steady state rather than integrating through
+  the startup transient to reach it.

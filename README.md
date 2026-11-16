@@ -4,6 +4,66 @@
 mixed circuit/block-diagram systems that never runs Newton-Raphson on device physics, and
 therefore never needs SPICE-style voltage limiting.
 
+## Quick start
+
+```bash
+cargo build --release -p general-simulator-cli
+```
+
+The binary lands at `target/release/general-simulator`. Run a deck:
+
+```bash
+./target/release/general-simulator deck.cir --mode transient --tfinal 20e-3 --dt 10e-9 > out.csv
+```
+
+CSV goes to stdout (`--out` is for `--format raw`); the first row is the column names, one per
+circuit unknown and per declared block. See
+[Reading the output](book/user-guide/src/reading-output.md).
+
+### A runtime dependency worth knowing about
+
+The binary is dynamically linked against **`libpython3.12.so.1.0`** — the engine's `pyblock`
+support — and on most systems that library is not on the default loader path. The failure is
+early and total, on *any* deck, `pyblock` or not:
+
+```
+$ ./target/release/general-simulator deck.cir
+./target/release/general-simulator: error while loading shared libraries:
+libpython3.12.so.1.0: cannot open shared object file: No such file or directory
+$ echo $?
+127
+```
+
+The fix is to point the loader at a Python 3.12 that provides the **shared** library:
+
+```bash
+export LD_LIBRARY_PATH=/path/to/python3.12/lib      # the directory holding libpython3.12.so.1.0
+```
+
+Note that a distribution's own `python3.12` often ships only the *static* library, so
+`sysconfig`'s `LIBDIR` is frequently the wrong answer. On Debian/Ubuntu the shared one comes
+from the `libpython3.12` package; a `uv`- or `pyenv`-managed interpreter built with
+`--enable-shared` has it under its own `lib/`. To find it:
+
+```bash
+ldd target/release/general-simulator | grep python   # confirms what is missing
+find / -name 'libpython3.12.so.1.0' 2>/dev/null     # and where it is
+```
+
+### Documentation
+
+The user guide in [`book/`](book/) is the reference: the
+[netlist grammar](book/user-guide/src/netlist-grammar.md), every `kind=` block in the
+[Component Reference](book/user-guide/src/component-reference.md),
+[PWL devices](book/user-guide/src/pwl-devices.md),
+[command-line flags](book/user-guide/src/cli-reference.md),
+[fixed vs. adaptive stepping](book/user-guide/src/time-stepping.md) and
+[troubleshooting](book/user-guide/src/gotchas.md).
+
+To draw a schematic rather than write a netlist, see the sibling
+[`gsim-tools`](https://github.com/GLODI-Engineering/gsim-tools) (Python) and the VS Code editor;
+the CLI itself takes a `.cir` and nothing else.
+
 ## Why
 
 SPICE-family simulators (ngspice, Xyce) solve nonlinear device equations with Newton-Raphson,
