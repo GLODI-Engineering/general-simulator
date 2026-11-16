@@ -20,11 +20,21 @@ CSV goes to stdout (`--out` is for `--format raw`); the first row is the column 
 circuit unknown and per declared block. See
 [Reading the output](book/user-guide/src/reading-output.md).
 
-### A runtime dependency worth knowing about
+### If you build with `--features python`
 
-The binary is dynamically linked against **`libpython3.12.so.1.0`** — the engine's `pyblock`
-support — and on most systems that library is not on the default loader path. The failure is
-early and total, on *any* deck, `pyblock` or not:
+The default build depends on nothing but a Rust toolchain, and the binaries attached to each
+[release](https://github.com/GLODI-Engineering/general-simulator/releases) are default builds —
+download one and it runs.
+
+`kind=pyblock` and `kind=pyfunc` are the exception. They need PyO3's embedded interpreter, so
+they need a `--features python` build:
+
+```bash
+cargo build --release -p general-simulator-cli --features python
+```
+
+That build links against **one specific `libpython`**, and on most systems it is not on the
+default loader path. The failure is early and total, on *any* deck, `pyblock` or not:
 
 ```
 $ ./target/release/general-simulator deck.cir
@@ -34,21 +44,25 @@ $ echo $?
 127
 ```
 
-The fix is to point the loader at a Python 3.12 that provides the **shared** library:
+Point the loader at a Python that provides the **shared** library:
 
 ```bash
 export LD_LIBRARY_PATH=/path/to/python3.12/lib      # the directory holding libpython3.12.so.1.0
 ```
 
 Note that a distribution's own `python3.12` often ships only the *static* library, so
-`sysconfig`'s `LIBDIR` is frequently the wrong answer. On Debian/Ubuntu the shared one comes
-from the `libpython3.12` package; a `uv`- or `pyenv`-managed interpreter built with
-`--enable-shared` has it under its own `lib/`. To find it:
+`sysconfig`'s `LIBDIR` is frequently the wrong answer. On Debian/Ubuntu the shared one comes from
+the `libpython3.12` package; a `uv`- or `pyenv`-managed interpreter built with `--enable-shared`
+has it under its own `lib/`. To find it:
 
 ```bash
 ldd target/release/general-simulator | grep python   # confirms what is missing
 find / -name 'libpython3.12.so.1.0' 2>/dev/null     # and where it is
 ```
+
+This is why the release workflow builds the default feature set: a `--features python` binary is
+tied to one libpython, which makes it a worse download than it is a build. See
+[The Python escape hatch](book/user-guide/src/python-blocks.md).
 
 ### Documentation
 
