@@ -23,5 +23,5 @@ members = [
 edition = "2021"
 license = "AGPL-3.0-or-later"
 publish = true
-repository = "https://github.com/Elvis-codeur/general-simulator"
-homepage = "https://github.com/Elvis-codeur/general-simulator"
+repository = "https://github.com/GLODI-Engineering/general-simulator"
+homepage = "https://github.com/GLODI-Engineering/general-simulator"
