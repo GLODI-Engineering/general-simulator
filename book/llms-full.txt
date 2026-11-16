@@ -35,6 +35,29 @@ extending the simulator itself (a new device model, a new block kind, the LCP fo
 adaptive-step controller), the companion **Developer Guide** is where the math and the "why"
 live — this guide deliberately stays at the netlist-author's altitude.
 
+## Other ways to drive it
+
+This guide writes netlists by hand, which is the engine's own interface and the one
+everything else is built on. Two other front ends exist, and both produce the same
+netlists described here:
+
+- **[gsim-tools](https://github.com/GLODI-Engineering/gsim-tools)** — build a schematic
+  in Python and compile it to a netlist, instead of writing one. Validation happens as
+  you build: a wire to a port that does not exist, a signal port fed twice, a connection
+  across incompatible paradigms each raise at the line that caused them. The same package
+  reads the output back and runs the measurements of
+  [`kind=measure`](measurements.md) over non-uniformly sampled waveforms.
+- **[general-simulator-gui](https://github.com/GLODI-Engineering/general-simulator-gui)**
+  — a schematic editor and waveform viewer as a VS Code extension, for drawing a circuit
+  rather than writing one.
+
+Both sit on
+**[gsim-core](https://github.com/GLODI-Engineering/gsim-core)**, the shared Rust document
+model and compile registry — one implementation of what a valid schematic is and what it
+compiles to, rather than a separate copy per front end.
+
+Nothing in this guide depends on either of them. A netlist is still the thing that runs.
+
 ## Why this instead of ngspice or Xyce
 
 Two honest reasons, not a claim of general superiority: this project exists to sidestep voltage
@@ -230,6 +253,49 @@ that comparison against two independent readers).
   than one column holding the whole vector. Arity is fixed for the whole run once a block
   declares it — see `book/dev-guide/src/vector-signals.md`.
 
+## What time a row's values belong to
+
+**The first row is $t = \Delta t$, not $t = 0$.** The initial condition is the run's input, not
+one of its results, so it is never emitted; `--mode transient --tfinal 1e-3 --dt 1e-4` writes ten
+rows, the first stamped `0.0001`. Any measurement over the whole trace is therefore taken over
+$[\Delta t, t_\mathrm{final}]$ — which is where the ~0.01 offset in
+[Measurements](measurements.md)' hand-derived `ramp.cir` example comes from.
+
+**Every value in a row is the value at that row's own `t`** — each circuit unknown, and every
+signal-domain block that does not read the circuit. There is no global one-step offset between a
+row's stamp and its contents: a 50 Hz `SIN()` source and an equivalent `kind=sinwave` block both
+match $A\sin(2\pi f t)$ at the row's own stamp to full printed precision, and a `kind=pulsewave`
+edge lands in the first row past the edge time, not the one after it.
+
+**The one exception is `kind=phys2sig`.** A `phys2sig` column holds the circuit quantity as of
+$t - \Delta t$, and `0` in the first row. The block graph is evaluated *before* the circuit is
+solved — a block's output may decide a gate state or a source magnitude for the step about to be
+solved — so a block that reads the circuit necessarily reads the previous step's solution. That
+is this project's sampled-data coupling, documented as a deliberate choice in
+[Signals](signals.md) and `book/dev-guide/src/block-graph-descriptor.md`, and it is the same
+one-sample delay a real digital controller has.
+
+So in the same row, a `phys2sig` column and the `V(...)` column it reads disagree by one step:
+
+```text
+V1 in 0 5
+R1 in out 1k
+R2 out 0 1k
+PROBE1 kind=phys2sig node=out
+```
+
+```text
+t,V(in),V(out),I(V1),PROBE1
+0.001,5,2.5,-0.0025,0
+0.002,5,2.5,-0.0025,2.5
+0.003,5,2.5,-0.0025,2.5
+```
+
+On a settled circuit this only shows in the first row, which is why it is easy to miss. On a
+switching or oscillating quantity it is a real one-sample phase shift in whatever loop is closed
+through it. There is no flag that removes it; choose `--dt` small enough that one step's lag is
+acceptable in that loop.
+
 ## `NaN` / missing columns
 
 If a block's own output isn't resolved for a given point (a genuinely exceptional case — the
@@ -316,6 +382,44 @@ column 1 is still a full-line comment, and `;`/`$`/`//` still end a line as a co
 mid-statement, exactly as in the main netlist. (An earlier draft of this chapter claimed `#`/`;`
 as a distinct device-file comment convention; nothing in the current parser supports that — the
 grammar genuinely doesn't distinguish the two files at all.)
+
+## Number suffixes
+
+A value may be written plainly (`1000`), in exponent form (`1e3`), or with a SPICE
+suffix (`1k`). Suffixes are **case-insensitive**, which produces the one trap in
+this grammar that costs real time:
+
+| Suffix | Multiplier | Written |
+|---|---|---|
+| `T` | $10^{12}$ | `1T` |
+| `G` | $10^{9}$ | `1G` |
+| `MEG` | $10^{6}$ | `1MEG`, `1meg` |
+| `K` | $10^{3}$ | `1k`, `1K` |
+| `M` | $10^{-3}$ | `1m`, **`1M`** |
+| `U` | $10^{-6}$ | `1u`, `1U` |
+| `N` | $10^{-9}$ | `1n` |
+| `P` | $10^{-12}$ | `1p` |
+| `F` | $10^{-15}$ | `1f` |
+
+**`M` is milli, not mega.** `R1 in out 1M` is a one-milliohm resistor. Mega is the
+three-letter `MEG`, and because the parser is case-insensitive there is no spelling
+of a single `M` that means $10^{6}$:
+
+```
+R1 in out 1M        * 0.001 ohm
+R1 in out 1MEG      * 1000000 ohm
+```
+
+This is SPICE's rule rather than ours, and every SPICE-family tool shares it — but
+`M` is the obvious abbreviation for mega everywhere else an engineer works, and
+nothing in a netlist flags the difference. A deck written with `1M` for a megohm
+simulates happily, a billion times away from the circuit that was meant, and the
+symptom looks like a wrong answer rather than a wrong input. See
+[GOTCHA-003](https://github.com/GLODI-Engineering/general-simulator/blob/main/docs/gotchas/GOTCHA-003-capital-m-is-milli-not-mega.md)
+for the measured demonstration.
+
+A trailing unit is ignored, so `1kOhm`, `1kohm` and `1k` are the same value, as are
+`10uF` and `10u`. The unit is for the reader; the parser stops at the suffix.
 
 ## Blocks may reference each other in any order
 
@@ -809,6 +913,13 @@ t,V(a),V(b),I(V1),PROBE,DELAY
 
 `DELAY` reads `0` at `t=0.001` (before any step has been accepted, `prev:` is `0.0` by
 convention) and `2.5` only from `t=0.003` on — one full step behind `PROBE`'s own value.
+
+Note that `PROBE` is itself one step behind `V(b)` in the same rows, which is why `DELAY`
+ends up two steps behind the circuit rather than one. That is not `prev:` — a `phys2sig`
+always reports the previous accepted step's solution, because the block graph is evaluated
+before the circuit is solved. See [What time a row's values belong
+to](reading-output.md#what-time-a-rows-values-belong-to); `prev:` adds one more step on top
+of it.
 
 ## What happens if you write a same-step cycle anyway
 
@@ -1537,6 +1648,45 @@ R1 mid out 1000
 R2 out 0 1000
 IMEAS kind=phys2sig branch=VAMM
 ```
+
+**Implementation notes**
+
+**What a `phys2sig` reads is one step old, by construction.** The block graph is evaluated
+*before* the circuit is solved — a block's output may decide a gate state or a source
+magnitude for the step about to be solved, so it cannot depend on that step's own solution.
+A `phys2sig` therefore samples the previous accepted step's operating point: at row $t$ it
+reports the circuit quantity as of $t - \Delta t$, and `0.0` on the very first row, before
+any step has been solved.
+
+This is the project's sampled-data coupling, not an artifact of the CSV writer: every other
+column in a row — each circuit unknown, and every signal-domain block that does not read the
+circuit — is the value at that row's own $t$. A 50 Hz `SIN()` source and a `kind=sinwave`
+block both match $A\sin(2\pi f t)$ at the row's own stamp to full printed precision.
+
+Verified against a real run, a resistor divider whose node sits at a constant 2.5 V:
+
+```text
+V1 in 0 5
+R1 in out 1k
+R2 out 0 1k
+PROBE1 kind=phys2sig node=out
+```
+
+```text
+t,V(in),V(out),I(V1),PROBE1
+0.001,5,2.5,-0.0025,0      <- PROBE1 has nothing to sample yet
+0.002,5,2.5,-0.0025,2.5    <- V(out) as of t = 0.001
+0.003,5,2.5,-0.0025,2.5
+```
+
+On a circuit that settles this is invisible after the first row, which is why a
+steady-state check cannot see it — the divider `## Example` above tracks `V(out)` *exactly*
+only from its second row onward, and the ammeter example likewise. On a switching or oscillating quantity it is a real
+one-sample shift: a controller reading through a `phys2sig` sees $y(t - \Delta t)$, exactly
+as a digital controller sampling at the top of its interrupt does, and that is the
+behaviour being modelled deliberately (`book/dev-guide/src/block-graph-descriptor.md`,
+`docs/architecture.md`). Use `--dt` small enough that one step's phase lag is acceptable in
+the loop you are closing; there is no flag that removes it.
 
 ### Sig2Phys (Signal-to-Physical Converter)
 
@@ -2365,7 +2515,10 @@ resonant converter's own ZVS margin, not just bookkeeping.
 - `inputs=<freq,phase,duty>` — exactly 3, in this order: `freq` (Hz, clamped internally
   to `[f_min, f_max]`), `phase` (`[0,1)`, a phase-shift command as a fraction of one
   carrier period — *not* this block's own internal integration state, a different
-  thing), `duty` (`[0,1]`, clamped).
+  thing; applied as a **lead**: conduction begins at $(1 - \text{phase})$ of the
+  carrier period, so `0.25` starts the pulse three quarters of the way through the
+  period, not one quarter — see the user guide's gate-bindings chapter for the run that
+  shows it), `duty` (`[0,1]`, clamped).
 - `red=<f64>`, `fed=<f64>` — optional, default `0.0`; seconds, converted internally to a
   phase fraction using the current resolved frequency.
 - `outputs=<main,complement>` — optional; defaults to `<name>,<name>_comp`.
@@ -3726,10 +3879,56 @@ The three are **all-or-nothing**:
   (`doc-verify/cscript/error_partial_state_contract.cir`, against `partial_state.c`, which
   exports only the first two.)
 
+## Declaring how many inputs and outputs the block has
+
+`in_len` and `out_len` are whatever the netlist declared. If the `.c` file was written for a
+different number, nothing notices: the block indexes a buffer sized by the netlist against the
+size it expected. That is an out-of-bounds read or write — a wrong answer at best, and in
+neither case a message naming the block.
+
+A library can close that by saying what it was built for:
+
+```c
+/* Optional. Write the counts this block expects and return 0. */
+int cscript_arity(int *in_len, int *out_len) {
+    *in_len = 2;
+    *out_len = 1;
+    return 0;
+}
+```
+
+With it, a netlist that disagrees is refused before the first step:
+
+```console
+$ general-simulator circuit.cir --devices blocks.dev --mode transient --tfinal 1e-3 --dt 5e-4
+error: CScriptArityMismatch { block_name: "CG", declared_inputs: Some(2), declared_outputs: Some(1), netlist_inputs: 3, netlist_outputs: 1 }
+```
+
+Both counts are in the message, so it says which side to change rather than only that something
+is wrong.
+
+### Declining, and declaring one side
+
+Returning non-zero means "no opinion", and is treated exactly as if the symbol were absent. A
+negative count means "not declaring this side", so a block that genuinely takes any number of
+inputs can still pin its outputs:
+
+```c
+int cscript_arity(int *in_len, int *out_len) {
+    *in_len = -1;   /* any number of inputs */
+    *out_len = 1;
+    return 0;
+}
+```
+
+The symbol is optional. A `.c` file written before it existed keeps working unchanged — this is
+something a library opts into, not a new requirement.
+
 ## What isn't checked
 
-A `.so` missing a required export, or a signature mismatch, surfaces as a load-time or call-time
-failure from `cscript_ffi` itself rather than a netlist-parse-time error — there's no way to
+Input and output *counts* are checked when the library declares them — see above. Everything
+else is not: a `.so` missing a required export, or a signature mismatch, surfaces as a
+load-time or call-time failure from `cscript_ffi` itself rather than a netlist-parse-time error — there's no way to
 validate a shared library's actual exported signatures before trying to call them. Get the
 minimal example above working first, then extend it, rather than debugging a hand-written `.c`
 file and the netlist wiring simultaneously.
@@ -4313,6 +4512,7 @@ file and the netlist wiring simultaneously.
 ```text
 general-simulator <netlist> [--devices <file>] [--mode dc|transient] [--tfinal T]
                    [--dt DT | --dt-max T --dt-min T --dt-init T --reltol R --abstol A]
+                   [--max-steps N]
                    [--format csv|raw] [--out <path>] [--out-every N]
                    [--checkpoint-out <file>] [--checkpoint-every T] [--resume <file>]
 ```
@@ -4328,6 +4528,7 @@ is optional.
 | `--dt DT` | Fixes the step size every step (deterministic, exactly reproducible). Mutually exclusive with the adaptive-stepping flags below. |
 | `--dt-max`/`--dt-min`/`--dt-init` | Override individual defaults of the adaptive step-size controller (`dae_runtime::AdaptiveConfig::from_t_final`), used when `--dt` is omitted. |
 | `--reltol`/`--abstol` | Override the adaptive controller's relative/absolute local-truncation-error tolerances. |
+| `--max-steps N` | Caps how many accepted adaptive steps one run may take (default `10,000,000`) before aborting with `DaeError::AdaptiveStepStalled`. Each accepted step holds a row in memory for the rest of the run, so a stalled controller would otherwise grow memory without limit. Adaptive stepping only — a `--dt` run takes a precomputed number of steps and cannot stall this way. See [Fixed vs. adaptive time stepping](time-stepping.md). |
 | `--format csv\|raw` | Output serialization — see below. Default: `csv`. |
 | `--out <path>` | Destination file for `--format raw`. Ignored for `--format csv` (CSV always goes to stdout). |
 | `--out-every N` | Write only every Nth resolved point. Thins the output, never the computation — see below. Default: `1`. |
@@ -4582,6 +4783,55 @@ fine enough to never miss an edge is a choice the user makes by hand, with no to
 exactly the failure mode the adaptive-side `earliest_next_event_dt` fix above exists to close on
 the adaptive side. Neither mode is a free pass against an under-resolved step.
 
+## Sizing a long run: steps per second, and how big the CSV gets
+
+Fixed stepping makes a run's cost arithmetic rather than a guess, which is worth doing *before*
+starting a twenty-millisecond job. Two numbers set it: how fast the solver takes steps, and how
+many bytes each written row costs.
+
+**Throughput** falls with the number of PWL devices in the circuit, because every step resolves
+an LCP whose size they set. Measured on this machine (release build, fixed `--dt`, output to
+`/dev/null` so serialization is excluded):
+
+| deck | PWL devices | columns | steps/s |
+| --- | ---: | ---: | ---: |
+| inverting buck-boost | 2 | 8 | ≈ 45 000 |
+| phase-shifted full bridge | 6 | 26 | ≈ 12 000 |
+| dual active bridge | 8 | 30 | ≈ 12 000 |
+
+So the wall time of a fixed-step run is roughly
+
+$$t_{\text{wall}} \;\approx\; \frac{t_{\text{final}}}{\Delta t} \cdot \frac{1}{\text{steps/s}}$$
+
+A 20 ms run of a 100 kHz converter at `--dt 10e-9` is $2\times10^{6}$ steps — about three
+minutes at 12 000 steps/s, and proportionally worse as devices are added. Measure one short run
+and extrapolate; the relationship is linear in the step count.
+
+**Output size** is what usually bites first. A CSV row costs about 10–14 bytes per column, so
+
+$$\text{bytes} \;\approx\; \frac{t_{\text{final}}}{\Delta t \cdot N_{\text{out-every}}}
+\cdot n_{\text{columns}} \cdot 12$$
+
+The dual-active-bridge deck above measured 308 bytes per row across 30 columns. At `--dt 10e-9`
+over 20 ms that is $2\times10^{6}$ rows — **about 600 MB** — for a run whose computation takes
+three minutes. Which is the point: *the output, not the solve, is the expensive part of a long
+fixed-step run.*
+
+### What to do about it
+
+- **`--out-every N`** is the first lever, and it is free: every step is still taken and
+  `kind=measure` still sees every point, so only the file shrinks. `--out-every 100` on the run
+  above takes it from 600 MB to 6 MB with a bit-identical solution.
+- **`--format raw`** is denser than CSV for the same data.
+- **`kind=measure`** is better still when what you want is a handful of scalars. The measurement
+  reads every point regardless of `--out-every`, so an RMS or an average computed in the netlist
+  is both exact and nearly free, and the trace itself can be thinned hard or skipped.
+- **Shorten the window instead of coarsening the step.** On a switching converter the step size
+  is set by the physics you need resolved — see the discussion of under-resolved edges above —
+  so a run that is too expensive is usually one that is too *long*, not one that is too finely
+  stepped. `ic=` lets a run start at the periodic steady state rather than integrating through
+  the startup transient to reach it.
+
 
 <!-- User Guide / Checkpoint and resume -->
 
@@ -4722,9 +4972,35 @@ names `--format csv`/`--format raw` already print (see
 [Reading the output](reading-output.md)): `V(<node>)` for a node voltage, or a declared block's
 own name (`SIG`, `PID1`, `PWM1_ON`, `MYBLOCK[0]` for a vector element, ...) for a block output.
 There is no other way to name a signal in a `kind=measure` line — in particular, no bare node
-name and no `I(branch)` support yet (a current measurement can be added the same way once a
-concrete need for it comes up; today the trace has no branch-current columns to read from at
-all).
+name, and **no `I(branch)` support yet**.
+
+That last one needs stating precisely, because it is easy to misread. The *trace* does carry
+branch-current columns — `I(V1)`, `I(L1)` and so on, one per branch current the topology
+requires, exactly as [Reading the output](reading-output.md) describes. What is missing is
+`kind=measure`'s ability to *name* one in `out=`; a current measurement can be added the same
+way once a concrete need for it comes up.
+
+### Measuring a current today
+
+Route it through a `phys2sig` converter, which can read a branch by name, and measure the
+converter's own output column:
+
+```
+PI    kind=phys2sig branch=VIN
+P_AVG kind=measure  type=avg out=PI
+```
+
+`out=` takes one column name and not an expression, so a *product* of two physical quantities —
+instantaneous power, say — needs the product formed in the netlist as well:
+
+```
+PV    kind=phys2sig node=in
+PI    kind=phys2sig branch=VIN
+PWR   kind=product  inputs=PV,PI
+E_SRC kind=measure  type=integ out=PWR from=0 to=0.02
+```
+
+This is the pattern to reach for whenever a measurement's input is not already a single column.
 
 ## The measurement window: `from=`/`to=`/`td=`
 

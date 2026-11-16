@@ -24,9 +24,35 @@ names `--format csv`/`--format raw` already print (see
 [Reading the output](reading-output.md)): `V(<node>)` for a node voltage, or a declared block's
 own name (`SIG`, `PID1`, `PWM1_ON`, `MYBLOCK[0]` for a vector element, ...) for a block output.
 There is no other way to name a signal in a `kind=measure` line — in particular, no bare node
-name and no `I(branch)` support yet (a current measurement can be added the same way once a
-concrete need for it comes up; today the trace has no branch-current columns to read from at
-all).
+name, and **no `I(branch)` support yet**.
+
+That last one needs stating precisely, because it is easy to misread. The *trace* does carry
+branch-current columns — `I(V1)`, `I(L1)` and so on, one per branch current the topology
+requires, exactly as [Reading the output](reading-output.md) describes. What is missing is
+`kind=measure`'s ability to *name* one in `out=`; a current measurement can be added the same
+way once a concrete need for it comes up.
+
+### Measuring a current today
+
+Route it through a `phys2sig` converter, which can read a branch by name, and measure the
+converter's own output column:
+
+```
+PI    kind=phys2sig branch=VIN
+P_AVG kind=measure  type=avg out=PI
+```
+
+`out=` takes one column name and not an expression, so a *product* of two physical quantities —
+instantaneous power, say — needs the product formed in the netlist as well:
+
+```
+PV    kind=phys2sig node=in
+PI    kind=phys2sig branch=VIN
+PWR   kind=product  inputs=PV,PI
+E_SRC kind=measure  type=integ out=PWR from=0 to=0.02
+```
+
+This is the pattern to reach for whenever a measurement's input is not already a single column.
 
 ## The measurement window: `from=`/`to=`/`td=`
 
