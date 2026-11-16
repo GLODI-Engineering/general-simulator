@@ -204,3 +204,93 @@ jobs:
         run: |
           python -m pip install --upgrade pytest
           python -m pytest doc-verify -q
+
+  windows-smoke:
+    name: Windows (the released binary actually runs)
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: bash
+        working-directory: general-simulator
+    steps:
+      # Same sibling layout every other job reproduces -- see the `rust` job's own
+      # comment for why the path dependencies make it necessary.
+      - name: Check out general-simulator
+        uses: actions/checkout@v4
+        with:
+          path: general-simulator
+      - name: Check out sibling spice-lsp (general-spice-core)
+        uses: actions/checkout@v4
+        with:
+          repository: GLODI-Engineering/spice-lsp
+          path: spice-lsp
+      - name: Check out sibling general-mna
+        uses: actions/checkout@v4
+        with:
+          repository: GLODI-Engineering/general-mna
+          path: general-mna
+      - name: Check out sibling gs-waveform-measurements
+        uses: actions/checkout@v4
+        with:
+          repository: GLODI-Engineering/gs-waveform-measurements
+          path: gs-waveform-measurements
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # The default feature set, which is what `release.yml` ships: no libpython link,
+      # so the artifact a user downloads needs nothing beyond itself.
+      - name: build the CLI as the release does
+        run: cargo build --release -p general-simulator-cli
+
+      # Everything below is the Windows half of what the Linux jobs already prove. It
+      # exists because two defects reached a release that only Windows could expose: the
+      # archive contains `general-simulator.exe`, and a `--version` probe the CLI did not
+      # answer. Both were found by reasoning rather than by running, which is exactly the
+      # gap this job closes.
+      - name: the binary is where the release archive takes it from
+        run: test -f target/release/general-simulator.exe
+
+      - name: --version answers on stdout with status 0
+        run: |
+          out="$(./target/release/general-simulator.exe --version)"
+          echo "got: $out"
+          case "$out" in
+            "general-simulator "*) ;;
+            *) echo "expected a 'general-simulator <version>' line"; exit 1 ;;
+          esac
+
+      - name: --help answers on stdout with status 0
+        run: |
+          ./target/release/general-simulator.exe --help > help.txt
+          grep -q "USAGE" help.txt
+          grep -q -- "--out-every" help.txt
+
+      - name: a flag before the netlist names itself rather than a missing file
+        run: |
+          if ./target/release/general-simulator.exe --tfinal 1e-3 2> err.txt; then
+            echo "expected a failing status"; exit 1
+          fi
+          cat err.txt
+          grep -q "unrecognized argument '--tfinal'" err.txt
+          grep -q "netlist path comes first" err.txt
+          if grep -q "No such file or directory" err.txt; then
+            echo "it must not blame a missing file"; exit 1
+          fi
+
+      # A real solve, so this job proves the binary works and not merely that it starts.
+      # Same circuit as the CLI's own first fixture: 5 V across 1 k, so I(V1) = -5 mA.
+      - name: a DC solve gives the hand-checked answer
+        run: |
+          printf 'V1 a 0 5\nR1 a 0 1000\n' > smoke.cir
+          ./target/release/general-simulator.exe smoke.cir > smoke.csv
+          cat smoke.csv
+          grep -q "^t,V(a),I(V1)$" smoke.csv
+          grep -q "^0,5,-0.005$" smoke.csv
+
+      - name: a transient run writes the rows it should
+        run: |
+          printf 'V1 a 0 5\nR1 a m 1000\nC1 m 0 1e-6\n' > rc.cir
+          ./target/release/general-simulator.exe rc.cir --mode transient --tfinal 1e-3 --dt 1e-5 > rc.csv
+          rows="$(( $(wc -l < rc.csv) - 1 ))"
+          echo "rows: $rows"
+          test "$rows" -eq 100

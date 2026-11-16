@@ -352,6 +352,37 @@ fn run() -> Result<(), String> {
     if args.len() < 2 {
         return Err(usage());
     }
+    // Answered before `args[1]` is read as a path, because that is exactly what used to
+    // happen to them: every argument is a netlist path to this CLI, so `--version` came
+    // back as `error: reading --version: No such file or directory` with status 1. That
+    // broke anything probing the binary to see whether it works -- the GUI's own solver
+    // discovery among them -- and made `--help` useless to a first-time user.
+    //
+    // Both go to stdout and exit 0: asking for help is not a misuse. `usage()` stays on
+    // stderr with a failing status, for arguments that really are wrong.
+    match args[1].as_str() {
+        "--help" | "-h" => {
+            println!("{}", help());
+            return Ok(());
+        }
+        "--version" | "-V" => {
+            println!("{}", version_line());
+            return Ok(());
+        }
+        // A leading dash in first position is a mistyped flag, not a file. Without this it
+        // reached the file open and came back as
+        // `error: reading --tfinal: No such file or directory`, which names the wrong
+        // problem: the netlist is missing *and* the flag is in the wrong place. A path
+        // that genuinely starts with a dash is still reachable as `./-odd.cir`.
+        other if other.starts_with('-') => {
+            return Err(format!(
+                "unrecognized argument '{other}', or a flag given before the netlist.\n\
+                 The netlist path comes first: general-simulator <netlist> [OPTIONS]\n\
+                 Run `general-simulator --help` for the full list."
+            ));
+        }
+        _ => {}
+    }
     let netlist_path = &args[1];
     let mut devices_path: Option<String> = None;
     let mut mode = "dc".to_string();
@@ -1123,6 +1154,96 @@ struct CheckpointArgs<'a> {
     out: Option<&'a Path>,
     every: Option<f64>,
     resume: Option<&'a Path>,
+}
+
+/// `--version` output: the program name and version, one line, on stdout.
+///
+/// "general-simulator", not `CARGO_PKG_NAME` -- the crate is `general-simulator-cli` and
+/// the binary it produces is `general-simulator`. The name a user types, and the name
+/// anything looking for the binary searches for, is the latter.
+fn version_line() -> String {
+    format!("general-simulator {}", env!("CARGO_PKG_VERSION"))
+}
+
+/// `--help` output.
+///
+/// Deliberately not [`usage`]. That one is the long prose shown when an argument is
+/// *wrong*, and explains the reasoning behind each flag at length -- useful once, and a
+/// wall of text to land on after a typo. This is the scannable version: the synopsis, the
+/// flags grouped by what they decide, a default for every one that has one, and three
+/// invocations worth copying. The reasoning lives in the book, which the last line names.
+fn help() -> String {
+    format!(
+        "\
+{version}
+A piecewise-linear circuit and block-diagram simulator. Device segments are resolved as a
+linear complementarity problem rather than by Newton-Raphson, so there is no voltage limiting.
+
+USAGE
+    general-simulator <netlist> [OPTIONS]
+
+    <netlist>                 The .cir deck to run. Required, and positional: it comes
+                              first. Device and block declarations may sit in the same
+                              file or in a separate --devices file.
+
+ANALYSIS
+    --mode dc|transient       `dc` solves a single operating point; `transient` runs the
+                              resolved timestep loop. [default: dc]
+    --tfinal T                End time in seconds, under --mode transient. [default: 1.0]
+
+TIME STEPPING                 Fixed or adaptive -- these two groups are mutually exclusive.
+    --dt DT                   Fix the step size. Deterministic and exactly reproducible;
+                              the right choice while a deck is being developed.
+    --dt-max T                Adaptive bounds, used when --dt is omitted.
+    --dt-min T
+    --dt-init T
+    --reltol R                Adaptive local-truncation-error tolerances. --abstol has to
+    --abstol A                match your own circuit's signal magnitudes: a value carried
+                              over from a smaller circuit drives the step size into the
+                              ground.
+    --max-steps N             Cap on accepted adaptive steps, after which the run aborts
+                              rather than growing its in-memory trace without limit.
+                              Adaptive only. [default: 10000000]
+
+OUTPUT
+    --format csv|raw          `csv` prints to stdout; `raw` writes a binary SPICE rawfile,
+                              which ngspice and PySpice read. [default: csv]
+    --out <path>              Destination for --format raw. Ignored for csv, which always
+                              goes to stdout -- redirect it.
+    --out-every N             Write only every Nth resolved point. Thins the file, never
+                              the computation: every step is still taken and kind=measure
+                              still sees every point. [default: 1]
+
+CHECKPOINTS
+    --checkpoint-out <file>   Write the run's complete state at --tfinal, so a later run
+                              can --resume it and continue bit-identically.
+    --checkpoint-every T      Also rewrite that file every T seconds of simulated time, so
+                              a killed run loses at most T.
+    --resume <file>           Continue from a checkpoint. --tfinal stays absolute, and a
+                              checkpoint only loads into the deck it came from.
+
+OTHER
+    --devices <file>          Read PWL-device and block declarations from a second file
+                              instead of the netlist itself.
+    -h, --help                Print this help.
+    -V, --version             Print the version.
+
+EXAMPLES
+    general-simulator rc.cir --mode transient --tfinal 20e-3 --dt 10e-9 > out.csv
+
+    # A long switching run: compute every step, write a thousandth of them.
+    general-simulator conv.cir --mode transient --tfinal 20e-3 --dt 10e-9 --out-every 1000
+
+    # Same data as a binary rawfile instead of CSV.
+    general-simulator conv.cir --mode transient --tfinal 1e-3 --dt 1e-9 --format raw --out run.raw
+
+NOTES
+    kind=measure lines write their results to <netlist stem>.log, whatever --format says.
+    kind=pyblock and kind=pyfunc need a `--features python` build of this binary.
+    Full documentation is in book/user-guide/ -- start with cli-reference.md and
+    time-stepping.md.",
+        version = version_line()
+    )
 }
 
 fn usage() -> String {
