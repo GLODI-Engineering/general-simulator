@@ -37,6 +37,7 @@
 
 - [Rules and ratings: making a wrong run say so](rules-and-ratings.md)
 - [Ports and efficiency: is this a converter at all?](ports-and-efficiency.md)
+- [Losses: what a converter is really limited by](losses.md)
 
 # Post-processing measurements
 
