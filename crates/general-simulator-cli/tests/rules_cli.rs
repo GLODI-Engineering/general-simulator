@@ -618,3 +618,55 @@ fn require_commutation_rejects_a_value_that_is_not_yes_or_no() {
         "{stderr}"
     );
 }
+
+// -------------------------------------------------------------------------------------------
+// The static check, which needs no rule at all: a gate provably pinned below the threshold is
+// reported before the run starts. See #54.
+// -------------------------------------------------------------------------------------------
+
+#[test]
+fn a_gate_pinned_at_zero_is_reported_without_any_rule_being_written() {
+    // No `kind=rule` line in this deck. The point of a static check is that it costs the user
+    // nothing: the mistake is found before a transient that may take minutes.
+    let netlist = write("static_dead.cir", DEAD_GATE);
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "2e-5",
+        "--dt",
+        "1e-7",
+    ]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("can never conduct"), "{stderr}");
+    assert!(stderr.contains("fixed at 0 by 'DEAD'"), "{stderr}");
+    // A warning, not an error: a deliberately disabled leg is a legitimate deck, and refusing
+    // to run would be the wrong answer to a gate someone pinned at zero on purpose.
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a warning does not fail a run"
+    );
+}
+
+#[test]
+fn a_deck_whose_gates_are_driven_by_a_modulator_says_nothing() {
+    // The restraint half. A PWM's output is not foldable from its declaration, and a warning
+    // about something merely unproven would train its reader to ignore the ones that matter.
+    let netlist = write("static_live.cir", BUCK);
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "2e-5",
+        "--dt",
+        "1e-7",
+    ]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("can never conduct"),
+        "a working buck must be silent: {stderr}"
+    );
+}

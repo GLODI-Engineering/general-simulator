@@ -299,6 +299,7 @@
 mod measure;
 mod raw_format;
 mod rules;
+mod static_checks;
 
 use std::collections::BTreeMap;
 use std::env;
@@ -616,6 +617,14 @@ fn run() -> Result<u8, String> {
         ..
     } = general_mna::build_system(&devices_for_build, dialect)
         .map_err(|e| format!("parsing device/block declarations: {e}"))?;
+
+    // Checks that can be made from the declaration alone, before a transient that may take
+    // minutes. Warnings, not errors: a deliberately disabled leg is a legitimate deck, and a
+    // run that refused to start would be the wrong answer to a gate someone pinned at zero on
+    // purpose. See `static_checks`'s own module doc for why nothing here guesses.
+    for warning in static_checks::dead_gates(&gates, &blocks) {
+        eprintln!("{warning}");
+    }
 
     // A `kind=sig2phys` converter has no terminals: it is consumed *by name* (a V/I source's own
     // value field, or an ideal switch's `gate=`/`ctrl=`), never by a wire. Catching a converter

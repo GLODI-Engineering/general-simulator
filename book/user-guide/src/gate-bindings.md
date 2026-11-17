@@ -20,6 +20,37 @@ NAME kind=ideal_switch ... gate=block ctrl=<sig2phys_voltage_block_name>
 - `ctrl=<name>` — the name of a declared `domain=voltage` [`kind=sig2phys`](component-reference.md#sig2phys-signal-to-physical-converter)
   block. Every step, the switch reads that block's current output and is on while it's `>= 0.5`.
 
+### `v_th` is not the gate threshold
+
+This is the one thing about gate bindings worth reading twice. A `kind=ideal_switch` line
+carries a `v_th=`, and it is **not** the gate's threshold — it is the switch's **body diode's**
+forward threshold. The gate path never consults it. The gate turns on at `>= 0.5` on the
+driving signal, full stop, and that number is fixed in `GateBinding`.
+
+So writing `v_th=5` because the real device has a 5 V gate threshold does two things, neither
+of them what was intended:
+
+- the switch still commutates, exactly as it did with `v_th=0.5`, because the gate signal still
+  crosses `0.5`;
+- the body diode now has a 5 V forward drop, which silently changes how the topology
+  freewheels.
+
+The same buck, run twice with nothing but `v_th` changed, produces the same output to the digit:
+
+```text
+v_th=5     V(out) range: 2.986 .. 5.521 V
+v_th=0.5   V(out) range: 2.986 .. 5.521 V
+```
+
+To model a real gate threshold, scale the gate *signal* so that the switch's intended turn-on
+point lands at `0.5` — or, better, leave the signal logic-level and keep the gate driver's
+behaviour in the block that produces it, where it can be seen.
+
+A gate whose driving signal can never reach `0.5` is reported before the run starts, when that
+is provable from the declaration (a constant, a gain over a constant), and by
+`type=switch_timing`'s never-commutated check when it is not — see
+[Rules and ratings](rules-and-ratings.md).
+
 Why it has to be a `sig2phys` converter specifically, rather than a raw `pid`/`pwm`/`hysteresis`
 block: a circuit quantity and a signal-domain value are treated as genuinely different kinds of
 thing throughout this grammar (see [Grammar overview](netlist-grammar.md) and
