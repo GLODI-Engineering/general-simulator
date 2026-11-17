@@ -121,6 +121,24 @@ pub struct EventRecord {
     pub unit: String,
 }
 
+/// A value in a fixed-point form where that is readable, and in exponent form where it is not.
+///
+/// `{:.4}` alone is wrong at both ends. A volt-second balance is of the order of microvolt-
+/// seconds, so every finding printed as `0.0000Vs` -- the rule fired, and the report could not
+/// say what it found. A switching frequency is of the order of $10^5$, where four decimals are
+/// four digits of noise.
+///
+/// The thresholds are where fixed point stops carrying information: below `1e-3` the four
+/// decimals are mostly zeros, and at or above `1e6` they are mostly meaningless.
+pub fn format_magnitude(value: f64) -> String {
+    let magnitude = value.abs();
+    if value == 0.0 || (1e-3..1e6).contains(&magnitude) {
+        format!("{value:.4}")
+    } else {
+        format!("{value:.4e}")
+    }
+}
+
 impl EventRecord {
     /// The record as one line of `events.jsonl`.
     ///
@@ -140,13 +158,15 @@ impl EventRecord {
     ///
     /// The unit is the caller's, since this crate never learns what a quantity means.
     pub fn console_line(&self) -> String {
+        // See `format_magnitude`.
+
         let unit = self.unit.as_str();
         // A value already in seconds is read as a duration, not as a bare float.
         let quantity = |value: f64| -> String {
             if unit == "s" {
                 format_time(value)
             } else {
-                format!("{value:.4}{unit}")
+                format!("{}{unit}", format_magnitude(value))
             }
         };
         let kind = match self.kind {

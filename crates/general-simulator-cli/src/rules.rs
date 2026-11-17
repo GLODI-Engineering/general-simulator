@@ -43,7 +43,8 @@ use general_mna::block_graph::GateBinding;
 use general_spice_core::ast::{ElementInstance, Statement};
 use general_spice_core::Dialect;
 use gsim_rules::{
-    Action, Condition, EventRecord, Qualifiers, Rule, RuleSummary, Sample, Severity, Watch,
+    Action, Condition, EventRecord, PeriodBoundary, PeriodMeasure, Qualifiers, Rule, RuleSummary,
+    Sample, Severity, Watch,
 };
 
 /// Pulls every `kind=rule` card and every device-line rating out of `source`, returning the
@@ -581,6 +582,72 @@ fn parse_rule(name: &str, line: usize, fields: &BTreeMap<&str, &str>) -> Result<
                 " A".to_string(),
             )
         }
+        "per_period" => {
+            let quantity = fields
+                .get("target")
+                .copied()
+                .ok_or_else(|| ctx("missing field 'target'".into()))?
+                .to_string();
+            let measure = match fields.get("measure").copied() {
+                Some("rms") => PeriodMeasure::Rms,
+                Some("mean") => PeriodMeasure::Mean,
+                Some("abs_mean") => PeriodMeasure::AbsMean,
+                Some("integral") => PeriodMeasure::Integral,
+                None => return Err(ctx("missing field 'measure'".into())),
+                Some(other) => {
+                    return Err(ctx(format!(
+                        "unknown measure '{other}' -- one of rms, mean, abs_mean, integral"
+                    )))
+                }
+            };
+            // Exactly one boundary. Both would be a contradiction and neither leaves no period
+            // to measure over, and in both cases the deck's author meant something specific.
+            let boundary =
+                match (number_opt("period")?, fields.get("sync").copied()) {
+                    (Some(_), Some(_)) => {
+                        return Err(ctx(
+                            "'period' and 'sync' both given -- a period is either stated or taken \
+                         from a switch, not both"
+                                .into(),
+                        ))
+                    }
+                    (None, None) => return Err(ctx(
+                        "needs 'period=<seconds>' or 'sync=<switch>' to know what one period is"
+                            .into(),
+                    )),
+                    (Some(period), None) => {
+                        if period <= 0.0 {
+                            return Err(ctx(format!(
+                                "'period' must be greater than zero, not '{period}'"
+                            )));
+                        }
+                        PeriodBoundary::Fixed(period)
+                    }
+                    (None, Some(switch)) => PeriodBoundary::Sync(switch.to_string()),
+                };
+            let (min, max) = (number_opt("min")?, number_opt("max")?);
+            if min.is_none() && max.is_none() {
+                return Err(ctx(
+                    "needs 'min' or 'max' -- a measure with no bound is a measurement, and \
+                     `kind=measure` already makes those"
+                        .into(),
+                ));
+            }
+            (
+                Watch::PerPeriod {
+                    quantity: quantity.clone(),
+                    measure,
+                    boundary,
+                    min,
+                    max,
+                },
+                Condition::Above {
+                    limit: max.or(min).unwrap_or(0.0),
+                },
+                quantity,
+                fields.get("unit").copied().unwrap_or("").to_string(),
+            )
+        }
         "commutation_order" => {
             let sequence = list("sequence")?;
             if sequence.len() < 2 {
@@ -605,7 +672,7 @@ fn parse_rule(name: &str, line: usize, fields: &BTreeMap<&str, &str>) -> Result<
             return Err(ctx(format!(
                 "unknown rule type '{other}' -- one of above, below, outside, inside, \
                  forbidden_state, required_path, switch_timing, rate_of_change, body_diode, \
-                 commutation_order"
+                 commutation_order, per_period"
             )))
         }
     };

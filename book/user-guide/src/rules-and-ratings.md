@@ -71,7 +71,7 @@ R_path  kind=rule type=required_path switches=DSH,DSL current=I(L1) i_min=1
 ```
 
 `type=` is one of `above`, `below`, `outside`, `inside`, `forbidden_state`, `required_path`,
-`switch_timing`, `rate_of_change`, `body_diode` or `commutation_order`.
+`switch_timing`, `rate_of_change`, `body_diode`, `commutation_order` or `per_period`.
 The first four take a `target=` naming any column the CSV has — a node voltage `V(node)`, a
 branch current `I(element)`, a voltage across a pair `V(p,n)`, or a block output by its own name.
 
@@ -201,6 +201,58 @@ The order is cyclic, and its phase comes from the first turn-on observed rather 
 first entry of the list: a run that begins midway through a sequence has not got the order
 wrong. After a departure the rule resynchronises to what actually happened, so one mistake
 produces one finding rather than one per transition for the rest of the run.
+
+### `per_period`: the measures that only mean something over a cycle
+
+```text
+P_vs  kind=rule type=per_period target=V(p,n) measure=integral period=10u \
+      min=-1u max=1u unit=Vs
+P_rms kind=rule type=per_period target=I(L1) measure=rms sync=DSH max=60 unit=A
+```
+
+Every check above judges an instant. The quantities that actually say whether a converter is
+working are averages over a switching period, and the failure that motivated this one is a real
+one: a transformer's magnetising current drifting from 40 A to 245 A over a run, with every
+instantaneous rule passing throughout. Nothing was over a limit at any moment. What was wrong
+is that the volt-seconds applied to the winding did not sum to zero over a period, so each cycle
+left a little more flux than the last.
+
+$$\int_{t}^{t+T} v \, \mathrm{d}t \approx 0$$
+
+is the statement, and `measure=integral` with a tolerance is the rule.
+
+| `measure=` | computes |
+|---|---|
+| `integral` | $\int x \, \mathrm{d}t$ over the period — volt-seconds, for a winding |
+| `rms` | what a component is rated by, as opposed to its peak |
+| `mean` | for a DC-link current or an output voltage |
+| `abs_mean` | the mean of the magnitude, which is what a thermal estimate wants |
+
+**What a period is** must be said, one way or the other:
+
+- `period=10u` — stated outright, for an open-loop converter at a fixed frequency. The boundary
+  is *split*: the sample at the end of the period is interpolated between the two steps either
+  side of it, so the measure is over exactly one period. Closing at the step that noticed
+  instead would carry a stray step's worth of integral into the result, which for a near-zero
+  volt-second balance is not a small error.
+- `sync=DSH` — each period runs from one turn-on of that switch to the next. With a closed loop
+  the period is an outcome rather than a setting, so this is the only honest boundary. The
+  fragment before the first turn-on is not measured: it is part of a cycle that began before
+  anything was watching.
+
+**On the numbers agreeing with `kind=measure`.** These are accumulated as the run goes rather
+than computed over a stored trace — buffering a period per rule would be unbounded, and at
+10 ns steps a 50 Hz period is two million samples. The per-segment forms are
+`gs-waveform-measurements`' own, including the exact integral of a squared linear segment,
+$\frac{\Delta t}{3}(v_0^2 + v_0 v_1 + v_1^2)$, rather than a trapezoid of the square. A test
+asserts the streaming result and that library's batch result agree to twelve digits on the same
+data, so a `kind=measure` RMS and a per-period RMS over the same window do not disagree in their
+last digits by a quadrature rule nobody chose.
+
+One number worth expecting: on a sampled square wave the transition between two samples
+interpolates linearly through zero, and its contribution is exactly nothing — so a 60/40
+asymmetric square wave of ±10 V integrates to $1.9\,T$ rather than $2\,T$ volt-seconds. That
+is a property of the samples, not of the accumulator.
 
 ### Qualifiers
 

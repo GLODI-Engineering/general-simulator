@@ -931,3 +931,106 @@ fn a_rule_on_a_non_finite_run_is_not_reported_as_passed() {
         "a rule that could not read its quantity must not pass: {stderr}"
     );
 }
+
+// -------------------------------------------------------------------------------------------
+// `type=per_period`: the measures that only mean something averaged over a switching period.
+// See #60.
+// -------------------------------------------------------------------------------------------
+
+#[test]
+fn a_volt_second_imbalance_is_reported_and_decays_as_the_converter_settles() {
+    // The check this phase was asked for, and its own validation. Volt-seconds across an
+    // inductor balance only in steady state, so during a buck's start-up the integral per
+    // period is large and must shrink monotonically as the output approaches its reference.
+    // A measure that did not do that would be measuring something else.
+    let netlist = write(
+        "vs.cir",
+        &format!(
+            "{BUCK}P_vs kind=rule type=per_period target=V(sw,out) measure=integral \
+             period=10e-6 min=-2e-6 max=2e-6 unit=Vs severity=warning\n"
+        ),
+    );
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "6e-4",
+        "--dt",
+        "1e-8",
+    ]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    let found: Vec<f64> = stderr
+        .lines()
+        .filter(|line| line.contains("P_vs") && line.contains("at "))
+        .filter_map(|line| {
+            let after = line.split("at ").nth(1)?;
+            after.trim().split("Vs").next()?.trim().parse::<f64>().ok()
+        })
+        .collect();
+    assert!(found.len() >= 5, "several periods expected: {stderr}");
+    assert!(
+        found[0] > found[found.len() - 1] * 3.0,
+        "the imbalance must shrink as the converter settles: {found:?}"
+    );
+    // And it is printed in a form that can be read at this magnitude: `0.0000Vs` would be a
+    // rule that fired without saying what it found.
+    assert!(
+        stderr.contains("e-5Vs") || stderr.contains("e-6Vs"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_per_period_rms_reports_the_rms_and_not_the_peak() {
+    // The buck's inductor current ramps between roughly 2 and 4 A once running, so its RMS per
+    // period is well above a 1 A bound and well below the peak -- which is the distinction that
+    // makes RMS worth measuring for a component rating.
+    let netlist = write(
+        "prms.cir",
+        &format!(
+            "{BUCK}P_rms kind=rule type=per_period target=I(L1) measure=rms period=10e-6 \
+             max=1.0 unit=A severity=warning\n"
+        ),
+    );
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "5e-5",
+        "--dt",
+        "1e-8",
+    ]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("RMS of I(L1)"), "{stderr}");
+    assert!(stderr.contains("limit 1.0000A"), "{stderr}");
+}
+
+#[test]
+fn a_per_period_card_insists_on_knowing_what_a_period_is() {
+    for (card, expected) in [
+        (
+            "P kind=rule type=per_period target=I(L1) measure=rms max=1",
+            "needs 'period=<seconds>' or 'sync=<switch>'",
+        ),
+        (
+            "P kind=rule type=per_period target=I(L1) measure=rms period=10u sync=DSW max=1",
+            "'period' and 'sync' both given",
+        ),
+        (
+            "P kind=rule type=per_period target=I(L1) measure=rms period=10u",
+            "needs 'min' or 'max'",
+        ),
+        (
+            "P kind=rule type=per_period target=I(L1) measure=median period=10u max=1",
+            "unknown measure 'median'",
+        ),
+    ] {
+        let netlist = write("pbad.cir", &format!("{BUCK}{card}\n"));
+        let output = run(&[netlist.to_str().unwrap(), "--mode", "transient"]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(expected), "for {card}:\n{stderr}");
+    }
+}
