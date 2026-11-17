@@ -1521,3 +1521,122 @@ NO_LOSS kind=rule type=per_period target=P_cond(DSW) measure=mean period=1e-5 ma
     );
     assert_eq!(output.status.code(), Some(0), "{text}");
 }
+
+// ---------------------------------------------------------------------------
+// Was it really ZVS?
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_synchronous_leg_reports_its_hard_switching_edge_and_passes_its_soft_one() {
+    // One deck shows both answers, which is what makes it a test rather than a demonstration.
+    //
+    // At D = 0.4 with dead time, the two switches of the same leg commutate differently: DSH
+    // turns on into the full bus, because nothing has discharged the node; DSL turns on *behind
+    // its own body diode*, which has been freewheeling through the dead time, so the voltage
+    // across it is already a diode drop. That is textbook ZVS, and a rule that cannot tell the
+    // two apart is useless.
+    let netlist = write(
+        "zvs_leg.cir",
+        &format!(
+            "{SYNC_BUCK_CHANNELS}\
+             ZVS_H kind=rule type=zvs switches=DSH v_max=5 severity=error\n\
+             ZVS_L kind=rule type=zvs switches=DSL v_max=5 severity=error\n"
+        ),
+    );
+    run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "2e-4",
+        "--dt",
+        "1e-8",
+        "--out-every",
+        "1000000",
+    ]);
+    let text = fs::read_to_string(netlist.with_extension("events.txt")).expect("the text log");
+    assert!(
+        text.contains("ERROR DSH.ZVS_H") && text.contains("DSH turned on with V(in,mid)"),
+        "the high-side switch hard-switches and should be reported:\n{text}"
+    );
+    // ~12.5 V: the 12 V bus plus the freewheeling body diode's forward drop.
+    assert!(
+        text.contains("at     12.5"),
+        "the reported voltage should be the bus it switched into:\n{text}"
+    );
+    assert!(
+        text.contains("DSL.ZVS_L") && text.contains("passed"),
+        "the low-side switch commutates behind its body diode and should pass:\n{text}"
+    );
+}
+
+#[test]
+fn the_low_sides_pass_is_a_measured_diode_drop_and_not_a_skipped_measurement() {
+    // The companion to the test above, and the reason it is a separate one: "passed" could mean
+    // "measured and small" or "never measured at all", and only tightening the bound
+    // distinguishes them. At v_max = 10 mV the same edge reports 0.508 V -- the body diode's
+    // own drop, v_th = 0.5 plus i/g_on = 0.96/100, which agrees to a milli-volt.
+    let netlist = write(
+        "zvs_tight.cir",
+        &format!(
+            "{SYNC_BUCK_CHANNELS}\
+             ZVS_L kind=rule type=zvs switches=DSL v_max=0.01 severity=error\n"
+        ),
+    );
+    run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "2e-4",
+        "--dt",
+        "1e-8",
+        "--out-every",
+        "1000000",
+    ]);
+    let text = fs::read_to_string(netlist.with_extension("events.txt")).expect("the text log");
+    assert!(
+        text.contains("ERROR DSL.ZVS_L") && text.contains("at     0.50"),
+        "the low-side's turn-on voltage is its body diode's drop, and it is measured:\n{text}"
+    );
+}
+
+#[test]
+fn the_reported_voltage_is_the_one_before_the_transition_not_after_it() {
+    // The bug a first version shipped, kept as a test. At the step where the gate *becomes* on,
+    // the switch has already been stamped as an r_on resistance and the voltage across it has
+    // collapsed to i*r_on -- so reading it there reported a 400 V hard-switched leg as passing.
+    // A 400 V deck with v_max = 5 therefore distinguishes the two implementations sharply: the
+    // correct one reports ~400 V, the wrong one reports nothing at all.
+    let netlist = write(
+        "zvs_400.cir",
+        "VIN in 0 400
+DSW in mid idealswitchmodel
+DSW kind=ideal_switch r_on=0.01 g_breakdown=0 v_breakdown=-1000 g_off=0 v_th=0.5 g_on=100 gate=block ctrl=GATE
+L1 mid out 1e-3
+R1 out 0 40
+D1 0 mid idealdiodemodel
+D1 kind=ideal_diode g_breakdown=0 v_breakdown=-1000 g_off=0 v_th=0.4 g_on=100
+DUTY kind=const value=0.5
+PWM1 kind=pwm freq=20000 in=DUTY
+GATE kind=sig2phys domain=voltage in=PWM1
+ZVS kind=rule type=zvs switches=DSW v_max=5 severity=error
+",
+    );
+    run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "6e-5",
+        "--dt",
+        "1e-8",
+        "--out-every",
+        "1000000",
+    ]);
+    let text = fs::read_to_string(netlist.with_extension("events.txt")).expect("the text log");
+    assert!(
+        text.contains("ERROR DSW.ZVS") && text.contains("at     400."),
+        "the blocking voltage, not the post-commutation drop:\n{text}"
+    );
+}
