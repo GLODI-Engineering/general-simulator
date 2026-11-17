@@ -198,6 +198,10 @@ pub fn extract(source: &str, dialect: Dialect) -> Result<Extracted, String> {
     // either order, so each half is collected separately and joined at the end.
     let mut switch_nodes: BTreeMap<String, (String, String)> = BTreeMap::new();
     let mut switch_r_on: BTreeMap<String, f64> = BTreeMap::new();
+    // Rule cards are collected now and parsed after the whole deck has been walked, because a
+    // card may name a switch whose own lines come later in the file -- and `type=zvs` fills in
+    // each switch's voltage from its declared node pair rather than making the deck repeat it.
+    let mut pending: Vec<(String, usize, BTreeMap<&str, &str>)> = Vec::new();
     let mut blank_lines: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     // Rating tokens to cut, keyed by the line they sit on. A device card may span continuation
     // lines, so the token's own line is what matters, not the element's first.
@@ -247,7 +251,7 @@ pub fn extract(source: &str, dialect: Dialect) -> Result<Extracted, String> {
                     ));
                 }
             }
-            Some("rule") => rules.push(parse_rule(&bi.name, bi.span.start, &fields)?),
+            Some("rule") => pending.push((bi.name.clone(), bi.span.start, fields)),
             // Read, not stripped: the solver needs this line, and `continue` leaves it in place.
             Some("ideal_switch") => {
                 if let Some(r_on) = fields.get("r_on").and_then(|raw| parse_number(raw)) {
@@ -279,6 +283,10 @@ pub fn extract(source: &str, dialect: Dialect) -> Result<Extracted, String> {
             ))
         })
         .collect();
+
+    for (name, line, fields) in &pending {
+        rules.push(parse_rule(name, *line, fields, &switches)?);
+    }
 
     if blank_lines.is_empty() && cut_tokens.is_empty() {
         return Ok(Extracted {
@@ -567,7 +575,12 @@ fn parse_boundary(
     }
 }
 
-fn parse_rule(name: &str, line: usize, fields: &BTreeMap<&str, &str>) -> Result<Rule, String> {
+fn parse_rule(
+    name: &str,
+    line: usize,
+    fields: &BTreeMap<&str, &str>,
+    switches: &BTreeMap<String, SwitchChannel>,
+) -> Result<Rule, String> {
     let ctx = |msg: String| format!("line {line}: rule '{name}': {msg}");
     let rule_type = fields
         .get("type")
@@ -900,6 +913,44 @@ fn parse_rule(name: &str, line: usize, fields: &BTreeMap<&str, &str>) -> Result<
                 fields.get("unit").copied().unwrap_or("").to_string(),
             )
         }
+        "zvs" => {
+            let named = list("switches")?;
+            // The voltages are not a field. Each switch's node pair is already in the netlist,
+            // and asking the deck to repeat it as a parallel `voltages=` list would create two
+            // lists that can fall out of step -- the failure mode being a rule that silently
+            // reports the wrong switch's voltage.
+            let mut voltages = Vec::with_capacity(named.len());
+            for switch in &named {
+                let channel = switches.get(switch).ok_or_else(|| {
+                    ctx(format!(
+                        "'{switch}' is not a declared `kind=ideal_switch` with two nodes, so \
+                         there is no voltage across it to read at turn-on"
+                    ))
+                })?;
+                voltages.push(format!("V({},{})", channel.positive, channel.negative));
+            }
+            let v_max = number("v_max")?;
+            if v_max < 0.0 {
+                return Err(ctx(format!(
+                    "'v_max' is a magnitude and cannot be negative, not '{v_max}'"
+                )));
+            }
+            let target = fields
+                .get("name")
+                .copied()
+                .map(str::to_string)
+                .unwrap_or_else(|| named.join(","));
+            (
+                Watch::Zvs {
+                    switches: named,
+                    voltages,
+                    v_max,
+                },
+                Condition::Above { limit: v_max },
+                target,
+                fields.get("unit").copied().unwrap_or(" V").to_string(),
+            )
+        }
         "commutation_order" => {
             let sequence = list("sequence")?;
             if sequence.len() < 2 {
@@ -924,7 +975,7 @@ fn parse_rule(name: &str, line: usize, fields: &BTreeMap<&str, &str>) -> Result<
             return Err(ctx(format!(
                 "unknown rule type '{other}' -- one of above, below, outside, inside, \
                  forbidden_state, required_path, switch_timing, rate_of_change, body_diode, \
-                 commutation_order, per_period, efficiency"
+                 commutation_order, per_period, efficiency, zvs"
             )))
         }
     };
@@ -1757,5 +1808,60 @@ G kind=sig2phys domain=voltage in=D
             &ports,
         );
         assert_eq!(sample.get("P_cond(NOPE)"), None);
+    }
+
+    // ---- the zvs card ----------------------------------------------------
+
+    #[test]
+    fn a_zvs_card_fills_in_each_switchs_voltage_from_its_declared_nodes() {
+        // Not a `voltages=` field: two parallel lists in a deck can fall out of step, and the
+        // failure mode is a rule that silently reports the wrong switch's voltage.
+        let (_, rules) = ratings(&format!(
+            "{ONE_SWITCH}ZVS kind=rule type=zvs switches=DSW v_max=5\n"
+        ));
+        assert_eq!(rules.len(), 1);
+        assert_eq!(
+            rules[0].watch,
+            Watch::Zvs {
+                switches: vec!["DSW".to_string()],
+                voltages: vec!["V(in,mid)".to_string()],
+                v_max: 5.0,
+            }
+        );
+        // Volts by default, so the report carries a unit without the deck saying so.
+        assert_eq!(rules[0].unit, " V");
+    }
+
+    #[test]
+    fn a_zvs_card_naming_something_that_is_not_a_switch_is_refused_by_name() {
+        // Silently skipping it would make a typo look like a converter that commutates
+        // perfectly -- the single most misleading thing this rule could do.
+        let message = rating_error(&format!(
+            "{ONE_SWITCH}ZVS kind=rule type=zvs switches=DSW,NOPE v_max=5\n"
+        ));
+        assert!(
+            message.contains("'NOPE' is not a declared") && message.contains("turn-on"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_zvs_card_can_be_written_above_the_switch_it_names() {
+        // Rule cards are parsed after the whole deck is walked, so a card may name a switch
+        // whose own lines come later. A deck that only works when its cards are at the bottom
+        // would be a trap.
+        let (_, rules) = ratings(&format!(
+            "ZVS kind=rule type=zvs switches=DSW v_max=5\n{ONE_SWITCH}"
+        ));
+        assert_eq!(rules.len(), 1);
+        assert!(matches!(rules[0].watch, Watch::Zvs { .. }));
+    }
+
+    #[test]
+    fn a_negative_v_max_is_refused_because_the_reading_is_a_magnitude() {
+        let message = rating_error(&format!(
+            "{ONE_SWITCH}ZVS kind=rule type=zvs switches=DSW v_max=-1\n"
+        ));
+        assert!(message.contains("magnitude"), "{message}");
     }
 }

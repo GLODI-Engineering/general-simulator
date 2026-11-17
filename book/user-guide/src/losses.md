@@ -97,3 +97,81 @@ GL kind=sig2phys domain=voltage in=PWMH_comp
 
 and put a [`type=forbidden_state`](rules-and-ratings.md) rule on the leg so the deck says it for
 you.
+
+# Was it really ZVS?
+
+```text
+ZVS kind=rule type=zvs switches=DSH,DSL v_max=5 severity=error
+```
+
+At each turn-on, report the voltage that was still standing across the switch. You name only the
+switches — the voltages come from each switch's own declared node pair, because two parallel lists
+in a deck can fall out of step, and the failure mode would be a rule silently reporting the wrong
+switch's voltage.
+
+A **bound** rather than a yes-or-no, because partial ZVS is the interesting case. A converter
+commutating to 40 V on a 400 V bus is doing 1% of the hard-switching loss and is a design that
+works; one reaching 380 V will fail thermally. A boolean cannot tell those apart.
+
+## One leg, both answers
+
+A synchronous buck at $D = 0.4$ with dead time gives both results at once, which is worth running
+yourself:
+
+```text
+ERROR DSH.ZVS_H   at 12.5071 V   limit 5.0000 V   [DSH turned on with V(in,mid) still across it]
+      DSL.ZVS_L   passed
+```
+
+The two switches of the *same leg* commutate completely differently:
+
+- **DSH** turns on into the full bus. Nothing has discharged the switching node, so it sees 12 V
+  plus the freewheeling diode's drop. Hard switching.
+- **DSL** turns on *behind its own body diode*, which has been freewheeling throughout the dead
+  time, so the voltage across it is already down to a diode drop. That is textbook ZVS, and it is
+  free — it is the reason synchronous rectification with dead time soft-switches the low side
+  without any resonant element.
+
+Tightening the low side's bound to `v_max=0.01` shows the pass is a real measurement and not a
+skipped one:
+
+```text
+ERROR DSL.ZVS_L   at 0.5080 V   limit 0.0100 V
+```
+
+0.508 V is the body diode's own forward drop — $v_{th} = 0.5$ plus $i/g_{on} = 0.96/100$, agreeing
+to a millivolt.
+
+## Why there is no switching-energy rule
+
+The obvious companion to this rule would be the energy per edge:
+
+$$E_{sw} = \int_{\text{edge}} v\,i\,\mathrm{d}t$$
+
+It is not offered, because it is not measurable at a step size anyone can afford. Measured on a
+400 V hard-switched leg:
+
+| deck | `dt` | $E_{sw}$ measured |
+| --- | --- | --- |
+| no $C_{oss}$ | 1 ns | 1.592e-9 J |
+| no $C_{oss}$ | 250 ps | 3.968e-10 J |
+| 400 pF across the switch | 1 ns | 1.634e-9 J |
+| 400 pF across the switch | 250 ps | 5.681e-10 J |
+
+against $\tfrac{1}{2} C V^2 = 3.2 \times 10^{-5}$ J.
+
+Quartering the step quarters the figure, in **both** decks. Without $C_{oss}$ that is expected —
+an ideal switch commutates in a single step, so there is no interval to integrate over and the
+number is a discretisation artifact converging to zero. With $C_{oss}$ it is still proportional to
+the step and still five decades low, because the discharge time constant is
+
+$$\tau = r_{on} C_{oss} = 0.01\ \Omega \times 400\ \text{pF} = 4\ \text{ps}$$
+
+and at any step above that the discharge completes inside one step, so the dissipation is absorbed
+algebraically instead of resolved. Resolving it needs $\Delta t \ll 4$ ps — millions of steps
+across one commutation, which is exactly what the CLI's own `--out-every` help text has always
+said about verifying ZVS.
+
+So the tool reports the **voltage**, and $\tfrac{1}{2} C_{oss} V^2$ is your multiplication, with a
+$C_{oss}$ you have from a datasheet and the simulator does not have at all. That is a better
+division of labour than a number that looks like an energy and is really a step size.

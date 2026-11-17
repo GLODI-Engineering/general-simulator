@@ -253,6 +253,15 @@ struct SwitchHistory {
     since: Option<f64>,
     /// Completed transitions, either direction. A switching period is two of them.
     transitions: usize,
+    /// For [`Watch::Zvs`]: the voltage across this switch on the previous step.
+    ///
+    /// The previous step is the one that matters, and this field exists because the obvious
+    /// implementation is wrong. At the step where the gate *becomes* on, the switch has already
+    /// been stamped as an `r_on` resistance, so the voltage across it has already collapsed to
+    /// $i\,r_{on}$ -- a first version read it there and reported a hard-switched 400 V leg as
+    /// passing. The voltage the switch turned on *into* is the last sample while it was still
+    /// off.
+    blocking_voltage: Option<f64>,
 }
 
 /// Evaluates every rule once per step and reports what changed.
@@ -325,6 +334,7 @@ impl RuleEngine {
         self.check_commutation_order(index, t, step, sample, out);
         self.measure_period(index, t, step, sample, out);
         self.measure_efficiency(index, t, step, sample, out);
+        self.check_zvs(index, t, step, sample, out);
 
         let Some(observation) = self.observe_watch(index, sample) else {
             self.state[index].missing += 1;
@@ -557,6 +567,25 @@ impl RuleEngine {
                     value,
                     margin: -1.0,
                     limit: 0.0,
+                    detail: None,
+                })
+            }
+            // Every finding is an instant produced by `check_zvs`; this answers only so that a
+            // switch or a voltage the sample does not carry is reported as unreadable.
+            Watch::Zvs {
+                switches,
+                voltages,
+                v_max,
+            } => {
+                let mut worst = 0.0_f64;
+                for (switch, voltage) in switches.iter().zip(voltages.iter()) {
+                    sample.switch_on(switch)?;
+                    worst = worst.max(readable(sample.get(voltage))?.abs());
+                }
+                Some(Observation {
+                    value: worst,
+                    margin: -1.0,
+                    limit: *v_max,
                     detail: None,
                 })
             }
@@ -921,6 +950,80 @@ impl RuleEngine {
                 }
             }
         })
+    }
+
+    /// The voltage standing across each switch at the instant it is commanded on:
+    /// [`Watch::Zvs`].
+    ///
+    /// Reuses the same `timing` history as [`Self::measure_switch_timing`], so a rule that
+    /// watches a whole bridge reports the one leg that hard-switched rather than an average over
+    /// the group. The first sample of a switch establishes its state without reporting: a run
+    /// that opens with a switch already on has no transition to measure, and reporting the
+    /// opening state would report the step size rather than the circuit.
+    fn check_zvs(
+        &mut self,
+        index: usize,
+        t: f64,
+        step: usize,
+        sample: &impl Sample,
+        out: &mut Vec<EventRecord>,
+    ) {
+        let Watch::Zvs {
+            switches,
+            voltages,
+            v_max,
+        } = &self.rules[index].watch
+        else {
+            return;
+        };
+        let v_max = *v_max;
+        let pairs: Vec<(String, String)> = switches
+            .iter()
+            .cloned()
+            .zip(voltages.iter().cloned())
+            .collect();
+
+        for (switch, voltage) in pairs {
+            let Some(now) = sample.switch_on(&switch) else {
+                continue;
+            };
+            let reading = readable(sample.get(&voltage));
+            let history = self.state[index].timing.entry(switch.clone()).or_default();
+            let was = history.on;
+            history.on = Some(now);
+            // The voltage from *before* this step, kept while the switch is off. See
+            // `SwitchHistory::blocking_voltage` for why reading it at the transition is wrong.
+            let before = history.blocking_voltage;
+            if !now {
+                history.blocking_voltage = reading;
+            }
+            // Only an off-to-on transition is a turn-on. `was == None` is the first sample.
+            if was != Some(false) || !now {
+                continue;
+            }
+            let Some(across) = before else {
+                continue;
+            };
+            // The magnitude: a switch may stand off either polarity depending on how its two
+            // terminals were declared, and the design question is about how far from zero the
+            // commutation got, not which way round the node pair was written.
+            let magnitude = across.abs();
+            if magnitude <= v_max {
+                continue;
+            }
+            let unit = self.rules[index].unit.clone();
+            let record = self.instant(
+                index,
+                t,
+                step,
+                magnitude,
+                v_max,
+                &unit,
+                format!("{switch} turned on with {voltage} still across it"),
+            );
+            self.state[index].instants += 1;
+            self.emit(index, record, out);
+        }
     }
 
     /// One quantity, averaged or integrated over each period: [`Watch::PerPeriod`].

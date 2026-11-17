@@ -267,6 +267,39 @@ pub enum Watch {
         /// a converter": above it, energy is being created.
         max: Option<f64>,
     },
+    /// The voltage across each switch at the instant its gate turns it on.
+    ///
+    /// The question a soft-switched design turns on is whether the commutation actually
+    /// completed before the gate arrived, and this is the honest way to ask it: not how much
+    /// charge moved, but **what voltage was still standing across the switch when it was told to
+    /// conduct**. That is a sample, not an integral, so it is available at any step size.
+    ///
+    /// Switching *energy* is deliberately not this rule. Measured on a 400 V hard-switched leg,
+    /// $\int v\,i\,\mathrm{d}t$ across a turn-on edge came out as 1.59e-9 J at `dt` = 1 ns and
+    /// 3.97e-10 J at 250 ps -- scaling with the step, so converging to zero, because an ideal
+    /// switch commutates in a single step and there is no interval to integrate over. Adding an
+    /// explicit 400 pF across the switch did not change that: still proportional to `dt`, and
+    /// still five decades below $\tfrac{1}{2} C V^2 = 3.2\times 10^{-5}$ J, because the
+    /// discharge time constant is $r_{on} C_{oss} = 4$ ps and at any larger step the dissipation
+    /// is absorbed algebraically instead of resolved. A loss figure that needs a 4 ps step is
+    /// not a rule anyone will write.
+    ///
+    /// So this rule reports the voltage and leaves $\tfrac{1}{2} C_{oss} V^2$ to the designer,
+    /// who has a $C_{oss}$ the tool does not.
+    ///
+    /// A **bound** rather than a boolean, because partial ZVS is the interesting case: a
+    /// converter commutating to 40 V on a 400 V bus is doing 1% of the hard-switching loss and
+    /// is a design that works, while one reaching 380 V will fail thermally. A pass/fail answer
+    /// cannot tell those apart.
+    Zvs {
+        switches: Vec<String>,
+        /// The voltage across each switch, in `switches` order. Not written in the deck: the
+        /// caller fills these in from each switch's own declared node pair, so there is no
+        /// second list to keep in step with the first.
+        voltages: Vec<String>,
+        /// Report a turn-on that happens with more than this magnitude across the switch.
+        v_max: f64,
+    },
     /// The order a group of switches must turn on in.
     ///
     /// Multi-step commutation -- a current-source inverter, a matrix converter, any four-step
@@ -324,6 +357,13 @@ impl Watch {
                 PeriodBoundary::Fixed(_) => vec![quantity.as_str()],
                 PeriodBoundary::Sync(switch) => vec![quantity.as_str(), switch.as_str()],
             },
+            Watch::Zvs {
+                switches, voltages, ..
+            } => switches
+                .iter()
+                .chain(voltages.iter())
+                .map(String::as_str)
+                .collect(),
             Watch::Efficiency {
                 numerator,
                 denominator,
