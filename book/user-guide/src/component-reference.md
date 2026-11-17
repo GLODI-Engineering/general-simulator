@@ -519,8 +519,8 @@ itself allows that domain for `I`-source targets).
 
 **Netlist form**
 ```text
-NAME kind=ideal_switch r_on=<f64> g_breakdown=<f64> v_breakdown=<f64> g_off=<f64> \
-     v_th=<f64> g_on=<f64> gate=block ctrl=<sig2phys_voltage_block_name>
+NAME kind=ideal_switch r_on=<f64> body_g_breakdown=<f64> body_v_breakdown=<f64> body_g_off=<f64> \
+     body_v_f=<f64> body_g_on=<f64> gate=block ctrl=<sig2phys_voltage_block_name>
 ```
 
 **Example**
@@ -535,7 +535,7 @@ ONVAL kind=const value=1
 ONGATE kind=sig2phys domain=voltage in=ONVAL
 V1 in 0 5
 D1 in out idealswitchmodel
-D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 \
+D1 kind=ideal_switch r_on=0.1 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.5 body_g_on=5 \
      gate=block ctrl=ONGATE
 R1 out 0 1k
 ```
@@ -671,7 +671,7 @@ block's own just-computed output value into the circuit solve in that symbol's p
 Also the *only* legal target for a [`GateBinding::Block`]'s own named block, and there
 *only* the `domain=voltage` form — `dae-runtime` rejects a `GateBinding` naming anything
 else, including a `domain=current` `Sig2Phys`, with `DaeError::GateTargetNotSig2Voltage`.
-An ideal switch's gate is itself a voltage (`V_GS` against `v_th`), not a distinct
+An ideal switch's gate is itself a voltage (`V_GS` against `v_f`), not a distinct
 discrete-actuation signal domain, so there is no separate gate-only converter — one type,
 `Sig2Phys`, parameterized by [`PhysicalDomain`], is the whole Signal-to-PS boundary for
 "a signal-domain block's output drives a physical voltage or current," whether that

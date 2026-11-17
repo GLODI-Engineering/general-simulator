@@ -80,11 +80,17 @@ fn pwm_complement_is_mutually_exclusive_with_pwm_at_zero_deadtime() {
     let mut gates = BTreeMap::new();
     gates.insert(
         "D1".to_string(),
-        GateBinding::Block("MOD_MAIN_GATE".to_string()),
+        GateBinding::Block {
+            ctrl: "MOD_MAIN_GATE".to_string(),
+            v_gs_th: 0.5,
+        },
     );
     gates.insert(
         "D2".to_string(),
-        GateBinding::Block("MOD_COMP_GATE".to_string()),
+        GateBinding::Block {
+            ctrl: "MOD_COMP_GATE".to_string(),
+            v_gs_th: 0.5,
+        },
     );
 
     let trace = simulate_transient_with_blocks(
@@ -146,11 +152,17 @@ fn nonzero_deadtime_leaves_both_switches_off_during_each_gap() {
     let mut gates = BTreeMap::new();
     gates.insert(
         "D1".to_string(),
-        GateBinding::Block("MOD_MAIN_GATE".to_string()),
+        GateBinding::Block {
+            ctrl: "MOD_MAIN_GATE".to_string(),
+            v_gs_th: 0.5,
+        },
     );
     gates.insert(
         "D2".to_string(),
-        GateBinding::Block("MOD_COMP_GATE".to_string()),
+        GateBinding::Block {
+            ctrl: "MOD_COMP_GATE".to_string(),
+            v_gs_th: 0.5,
+        },
     );
 
     let trace = simulate_transient_with_blocks(

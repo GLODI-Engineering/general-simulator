@@ -35,7 +35,7 @@ use crate::IdealDiode;
 ///
 /// **Node-order convention: plain SPICE-conventional `(drain, source)`.** `body_diode` is
 /// declared the ordinary way a diode is (forward conduction — from anode to cathode — for `V =
-/// anode - cathode > v_th`), with the physical anode at the switch's own source and cathode at
+/// anode - cathode > v_f`), with the physical anode at the switch's own source and cathode at
 /// its drain — the same body-diode orientation every real N-channel MOSFET has. Since the
 /// netlist declares this device's two terminals `(drain, source)`, not `(source, drain)`, the
 /// diode as literally stamped between those two nodes needs its curve mirrored first — see
@@ -51,7 +51,7 @@ pub struct IdealSwitch {
     /// On-state channel resistance (drain-source), conducting both directions.
     pub r_on: f64,
     /// The intrinsic body diode, in its own natural terms (anode at the source, cathode at the
-    /// drain — forward conduction for `V(source) - V(drain) > v_th`). Do **not** stamp this
+    /// drain — forward conduction for `V(source) - V(drain) > v_f`). Do **not** stamp this
     /// directly against a `(drain, source)`-ordered netlist declaration — use
     /// [`IdealSwitch::body_diode_for_drain_source_stamping`] instead, which returns the curve
     /// already mirrored for that node order.
@@ -66,7 +66,7 @@ impl IdealSwitch {
     /// The body diode's curve, mirrored so that evaluating it with `V = V(drain) - V(source)`
     /// (the plain SPICE-conventional node order this crate's netlists declare this device's two
     /// terminals in) gives the physically correct result: blocks for `V > 0`, conducts for `V
-    /// < -v_th`. See [`IdealDiode::reversed`] for the derivation, and this struct's own doc
+    /// < -v_f`. See [`IdealDiode::reversed`] for the derivation, and this struct's own doc
     /// comment for why this indirection exists at all instead of just documenting a required
     /// node order.
     pub fn body_diode_for_drain_source_stamping(&self) -> IdealDiode {

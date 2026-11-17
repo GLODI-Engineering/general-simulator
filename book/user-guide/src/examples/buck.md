@@ -17,10 +17,10 @@ actively-driven switch):
 ```text
 V1 vin 0 24
 D1 vin vx idealswitchmodel
-D1 kind=ideal_switch r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 \
+D1 kind=ideal_switch r_on=0.01 body_g_breakdown=0 body_v_breakdown=-1e6 body_g_off=1e-6 body_v_f=1e6 body_g_on=0 \
      gate=block ctrl=D1_GATE
 D2 0 vx dmodel
-D2 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.6 g_on=100
+D2 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_f=0.6 g_on=100
 L1 vx vout 100u
 C1 vout 0 100u
 R1 vout 0 5
@@ -31,7 +31,7 @@ D1_GATE kind=sig2phys domain=voltage in=MOD1
 ```
 
 Line by line, against the real component docs: `D1`'s body-diode fields are set so it never
-conducts on its own (`v_th=1e6`, an unreachably high threshold — see
+conducts on its own (`v_f=1e6`, an unreachably high threshold — see
 [PWL devices](../pwl-devices.md#kindideal_switch-on-resistance-plus-body-diode)), so `D1`
 behaves like an ideal MOSFET with no body diode, and `D2` (an ordinary
 [`kind=ideal_diode`](../pwl-devices.md#kindideal_diode-the-3-segment-curve)) is the real

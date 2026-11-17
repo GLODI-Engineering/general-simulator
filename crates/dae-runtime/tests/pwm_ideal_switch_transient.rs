@@ -6,7 +6,7 @@
 //! solution derived by hand in two phases, before writing this test.
 //!
 //! Circuit: `V1 (10V) -- D1 (an ideal switch, drain=b, source=a) -- R1 (1 ohm) -- C1 (1F) -- ground`.
-//! `D1`'s body diode: `v_th=0.7`, `g_on=1` (same *diode* parameters as
+//! `D1`'s body diode: `v_f=0.7`, `g_on=1` (same *diode* parameters as
 //! `tests/transient.rs`'s `rc_charging_through_a_forward_biased_diode_matches_hand_derived_solution`
 //! — but that fixture uses a 5V source, this one 10V, so the derived constants below differ;
 //! do not copy `4.3`/`8.3` from there). Gate: off for `t < 1`, on for `t >= 1`, `r_on = 0.1`.
@@ -14,7 +14,7 @@
 //! ## Phase 1 (`t < 1`, gate off): body diode conducts
 //!
 //! Same structure as `tests/transient.rs`'s derivation but with `V0=10`:
-//! `dVc/dt = (V0 - v_th - Vc) / (C*(R+1/g_on)) = (10 - 0.7 - Vc) / 2 = (9.3 - Vc) / 2`, so
+//! `dVc/dt = (V0 - v_f - Vc) / (C*(R+1/g_on)) = (10 - 0.7 - Vc) / 2 = (9.3 - Vc) / 2`, so
 //! `Vc(t) = 9.3 * (1 - e^(-t/2))`.
 //!
 //! ## Phase 2 (`t >= 1`, gate on): plain series RC with a new time constant

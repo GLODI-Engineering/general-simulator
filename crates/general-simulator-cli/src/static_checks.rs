@@ -19,7 +19,7 @@ use general_mna::block_graph::{
 
 /// `GateBinding` turns its block's output into a switch state by thresholding it here.
 ///
-/// Not a parameter of the switch: `v_th` on a `kind=ideal_switch` line is the *body diode's*
+/// Not a parameter of the switch: `v_f` on a `kind=ideal_switch` line is the *body diode's*
 /// forward threshold and the gate path never consults it. Hard-coded in `general-mna`'s
 /// `GateBinding::resolve`, and mirrored here because this check has to agree with it.
 const GATE_THRESHOLD: f64 = 0.5;
@@ -60,7 +60,7 @@ pub fn dead_gates(gates: &BTreeMap<String, GateBinding>, blocks: &[BlockInstance
                  '{origin}'{through}, and a gate turns on at {GATE_THRESHOLD}. The run will \
                  simulate this switch as permanently open -- which still charges and still \
                  settles, so the waveform will not look wrong. If that is deliberate, leave a \
-                 comment saying so; if not, check `ctrl=` and the modulator. (`v_th` on the \
+                 comment saying so; if not, check `ctrl=` and the modulator. (`v_f` on the \
                  switch line is its body diode's threshold, not the gate's.)"
             ));
         }
@@ -157,7 +157,13 @@ mod tests {
             &[last.as_str()],
         ));
         (
-            BTreeMap::from([("DSW".to_string(), GateBinding::Block("GATE".to_string()))]),
+            BTreeMap::from([(
+                "DSW".to_string(),
+                GateBinding::Block {
+                    ctrl: "GATE".to_string(),
+                    v_gs_th: 0.5,
+                },
+            )]),
             blocks,
         )
     }
@@ -243,7 +249,13 @@ mod tests {
 
     #[test]
     fn a_gate_naming_a_block_that_does_not_exist_is_left_to_the_real_validator() {
-        let gates = BTreeMap::from([("DSW".to_string(), GateBinding::Block("NOPE".to_string()))]);
+        let gates = BTreeMap::from([(
+            "DSW".to_string(),
+            GateBinding::Block {
+                ctrl: "NOPE".to_string(),
+                v_gs_th: 0.5,
+            },
+        )]);
         assert!(dead_gates(&gates, &[]).is_empty());
     }
 }

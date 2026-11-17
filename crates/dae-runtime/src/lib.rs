@@ -21,7 +21,7 @@
 //! where `x0 = solve(A0, u0)` is the baseline operating point with every diode's `Ioff = 0`,
 //! and `w_j = solve(A0, B[:, diode j's input column])` is how much a unit "raw Ioff" on diode
 //! `j` moves every unknown. Substituting `V_k(z)` into each diode's guard equations
-//! (`w1_k = V_k - v_breakdown_k + z1_k`, `w2_k = v_th_k - V_k + z2_k`) gives exactly the LCP
+//! (`w1_k = V_k - v_breakdown_k + z1_k`, `w2_k = v_f_k - V_k + z2_k`) gives exactly the LCP
 //! `(M, q)` this crate builds and hands to `lcp_solver::solve`.
 
 mod block_graph;
@@ -1097,7 +1097,7 @@ fn fold_and_solve(
         m[row_w1][2 * k] += 1.0;
 
         let row_w2 = 2 * k + 1;
-        q[row_w2] = infos[k].canonical.v_th - v0[k];
+        q[row_w2] = infos[k].canonical.v_f - v0[k];
         for (j, info_j) in infos.iter().enumerate() {
             m[row_w2][2 * j] += gamma[k][j] * info_j.canonical.delta_br * coupling_scale;
             m[row_w2][2 * j + 1] += -gamma[k][j] * info_j.canonical.delta_on * coupling_scale;

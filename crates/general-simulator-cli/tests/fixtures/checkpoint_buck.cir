@@ -4,9 +4,9 @@
 * CSV byte for byte.
 VIN vin 0 12
 DSW vin sw idealswitchmodel
-DSW kind=ideal_switch r_on=0.05 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=block ctrl=GATE
+DSW kind=ideal_switch r_on=0.05 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.5 body_g_on=5 gate=block ctrl=GATE
 D1 0 sw dmodel
-D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.4 g_on=5
+D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_f=0.4 g_on=5
 L1 sw out 22e-6
 C1 out 0 47e-6 ic=3
 RL out 0 4
