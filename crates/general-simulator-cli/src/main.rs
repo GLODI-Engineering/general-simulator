@@ -601,6 +601,7 @@ fn run() -> Result<u8, String> {
         netlist: devices_for_build,
         rules: device_rules,
         ports: device_ports,
+        switches: device_switch_channels,
     } = rules::extract(&devices_for_build, dialect).map_err(|e| {
         format!("parsing kind=rule cards, kind=port declarations and device ratings: {e}")
     })?;
@@ -613,6 +614,7 @@ fn run() -> Result<u8, String> {
         netlist,
         rules: netlist_rules,
         ports: netlist_ports,
+        switches: netlist_switch_channels,
     } = rules::extract(&netlist, dialect).map_err(|e| {
         format!("parsing kind=rule cards, kind=port declarations and device ratings: {e}")
     })?;
@@ -634,6 +636,17 @@ fn run() -> Result<u8, String> {
         all
     } else {
         device_ports
+    };
+    // Switch channels merge the same way. With `--devices` the device line and its
+    // `kind=ideal_switch` line are normally in the same file, so a channel assembled from one
+    // file is the usual case and a half from each is simply absent -- which makes
+    // `P_cond(NAME)` unreadable rather than wrong.
+    let switch_channels = if devices_path.is_some() {
+        let mut all = netlist_switch_channels;
+        all.extend(device_switch_channels);
+        all
+    } else {
+        device_switch_channels
     };
     let general_mna::System {
         ideal_diodes: diodes,
@@ -784,6 +797,7 @@ fn run() -> Result<u8, String> {
                 &measurements,
                 declared_rules,
                 &declared_ports,
+                &switch_channels,
                 CheckpointArgs {
                     out: checkpoint_out.as_deref().map(Path::new),
                     every: checkpoint_every,
@@ -932,6 +946,7 @@ fn run_transient_streamed(
     measurements: &[measure::MeasureSpec],
     declared_rules: Vec<gsim_rules::Rule>,
     declared_ports: &BTreeMap<String, rules::Port>,
+    switch_channels: &BTreeMap<String, rules::SwitchChannel>,
     checkpoints: CheckpointArgs<'_>,
 ) -> Result<u8, String> {
     let resume_from = match checkpoints.resume {
@@ -1115,6 +1130,7 @@ fn run_transient_streamed(
                     outputs: &outputs,
                     gates: &gate_states,
                     ports: declared_ports,
+                    switches: switch_channels,
                 };
                 for event in engine.observe(steps_seen, t, &sample) {
                     reporter.record(&event).map_err(DaeError::Io)?;

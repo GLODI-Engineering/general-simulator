@@ -1329,3 +1329,195 @@ P_IN kind=port v=(in,0) i=-VIN
         "at dt=1e-7 the product should have converged into the 1% band:\n{fine}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Conduction loss
+// ---------------------------------------------------------------------------
+
+/// A synchronous buck with a real complement and a real dead time.
+///
+/// `PWMH_comp` rather than `PWM(1-d)`: a complement computed as one-minus-the-duty makes both
+/// switches conduct together on every cycle, which is what `SHOOT_THROUGH_LEG` above exists to
+/// demonstrate. Writing this deck that way first gave a conduction loss of 721 W in a 12 V
+/// converter -- correct arithmetic on a shoot-through circuit, since 12 V across two 20 mOhm
+/// channels is 300 A and `300^2 * 0.02 * 0.4` is exactly the 721 W reported.
+const SYNC_BUCK_CHANNELS: &str = "\
+VIN in 0 12
+DSH in mid idealswitchmodel
+DSH kind=ideal_switch r_on=0.02 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=100 gate=block ctrl=GH
+DSL mid 0 idealswitchmodel
+DSL kind=ideal_switch r_on=0.02 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=100 gate=block ctrl=GL
+L1 mid out 1e-3
+C1 out 0 1e-4
+R1 out 0 5
+DUTY kind=const value=0.4
+PWMH kind=pwm freq=50000 in=DUTY red=200e-9 fed=200e-9
+GH kind=sig2phys domain=voltage in=PWMH
+GL kind=sig2phys domain=voltage in=PWMH_comp
+";
+
+#[test]
+fn a_switchs_computed_current_agrees_with_a_measured_one() {
+    // The premise the whole conduction-loss path rests on, in the suite rather than only in the
+    // issue: a switch commanded on is a plain `r_on` resistance, so `(Va - Vb) / r_on` is its
+    // current exactly. Checked against a zero-volt sense source in series with it.
+    let netlist = write(
+        "i_switch.cir",
+        "VIN in 0 12
+DSW in mid idealswitchmodel
+DSW kind=ideal_switch r_on=0.01 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=100 gate=block ctrl=GATE
+VS1 mid sw 0
+D1 0 sw idealdiodemodel
+D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.4 g_on=100
+L1 sw out 1e-3
+C1 out 0 1e-4
+R1 out 0 5
+DUTY kind=const value=0.4
+PWM1 kind=pwm freq=50000 in=DUTY
+GATE kind=sig2phys domain=voltage in=PWM1
+",
+    );
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "1e-4",
+        "--dt",
+        "1e-7",
+    ]);
+    let csv = String::from_utf8_lossy(&output.stdout);
+    let mut lines = csv.lines();
+    let header: Vec<&str> = lines.next().expect("a header").split(',').collect();
+    let column = |name: &str| -> usize {
+        header
+            .iter()
+            .position(|h| *h == name)
+            .unwrap_or_else(|| panic!("no column {name} in {header:?}"))
+    };
+    let (v_in, v_mid, i_sense, gate) = (
+        column("V(in)"),
+        column("V(mid)"),
+        column("I(VS1)"),
+        column("GATE"),
+    );
+
+    let mut worst = 0.0_f64;
+    let mut checked = 0usize;
+    let mut off_rows = 0usize;
+    for line in lines {
+        let f: Vec<f64> = line
+            .split(',')
+            .map(|v| v.parse().unwrap_or(f64::NAN))
+            .collect();
+        let computed = (f[v_in] - f[v_mid]) / 0.01;
+        if f[gate] >= 0.5 {
+            let measured = f[i_sense];
+            worst = worst.max((computed - measured).abs() / measured.abs().max(1e-12));
+            checked += 1;
+        } else {
+            // While commanded off the same expression is nonsense -- the full blocking voltage
+            // over `r_on`. Counted so the test proves it exercised both states, which is what
+            // makes the gating in `conduction_power` necessary rather than decorative.
+            assert!(
+                computed.abs() > 100.0 && f[i_sense].abs() < 1e-9,
+                "off-state row should show a true 0 A and an absurd computed current: {line}"
+            );
+            off_rows += 1;
+        }
+    }
+    assert!(
+        checked > 100 && off_rows > 100,
+        "{checked} on, {off_rows} off"
+    );
+    assert!(
+        worst < 1e-7,
+        "computed and measured switch current should agree: worst relative error {worst:e}"
+    );
+}
+
+#[test]
+fn conduction_loss_follows_the_duty_split_across_a_synchronous_leg() {
+    // The sharp physical claim: at D = 0.4 the low-side switch conducts for 60% of the period
+    // and the high-side for 40%, carrying the same inductor current, so their conduction losses
+    // must be in the ratio (1-D)/D = 1.5. That ratio is what tests the attribution -- an
+    // absolute figure could be right for both switches while being assigned to the wrong one.
+    let netlist = write(
+        "cond_split.cir",
+        &format!(
+            "{SYNC_BUCK_CHANNELS}\
+             LOSS_H kind=rule type=per_period target=P_cond(DSH) measure=mean period=2e-3 max=0 severity=info\n\
+             LOSS_L kind=rule type=per_period target=P_cond(DSL) measure=mean period=2e-3 max=0 severity=info\n"
+        ),
+    );
+    run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "6e-3",
+        "--dt",
+        "1e-7",
+        "--out-every",
+        "2000000",
+    ]);
+    let text = fs::read_to_string(netlist.with_extension("events.txt")).expect("the text log");
+    let last = |rule: &str| -> f64 {
+        text.lines()
+            .rfind(|l| l.contains(rule) && l.contains(" at "))
+            .and_then(|l| {
+                let after = l.split(" at ").nth(1)?;
+                after.split_whitespace().next()?.parse().ok()
+            })
+            .unwrap_or_else(|| panic!("no finding for {rule} in:\n{text}"))
+    };
+    let (high, low) = (last("P_cond(DSH)"), last("P_cond(DSL)"));
+    // Measured 0.0069 W and 0.0105 W against the hand estimate (I_out = 0.96 A):
+    // 0.4 * 0.96^2 * 0.02 = 0.00737 W and 0.6 * 0.96^2 * 0.02 = 0.01106 W -- the deck's dead
+    // time and its conduction drops put the real figures a few percent below the ideal-duty
+    // estimate, which is why the band here is loose and the ratio below is not.
+    assert!(
+        (0.005..0.009).contains(&high) && (0.008..0.013).contains(&low),
+        "losses out of the expected range: high {high} W, low {low} W"
+    );
+    let ratio = low / high;
+    assert!(
+        (ratio - 1.5).abs() < 0.1,
+        "the low-side should carry (1-D)/D = 1.5 times the high-side's conduction loss, got {ratio}"
+    );
+}
+
+#[test]
+fn a_switch_that_is_never_commanded_on_reports_no_conduction_loss() {
+    // The failure mode the gating prevents, end to end: a permanently-off switch stands off the
+    // full bus, so an ungated `(Va - Vb)^2 / r_on` would report 7.2 kW of loss in a device that
+    // dissipates nothing.
+    let netlist = write(
+        "cond_off.cir",
+        "VIN in 0 12
+DSW in mid idealswitchmodel
+DSW kind=ideal_switch r_on=0.02 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=100 gate=block ctrl=GATE
+R1 mid 0 1e6
+OFF kind=const value=0
+GATE kind=sig2phys domain=voltage in=OFF
+NO_LOSS kind=rule type=per_period target=P_cond(DSW) measure=mean period=1e-5 max=1e-9 severity=error
+",
+    );
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "1e-4",
+        "--dt",
+        "1e-6",
+        "--out-every",
+        "100000",
+    ]);
+    let text = fs::read_to_string(netlist.with_extension("events.txt")).expect("the text log");
+    assert!(
+        text.contains("P_cond(DSW).NO_LOSS") && text.contains("passed"),
+        "a switch that never turns on dissipates nothing in its channel:\n{text}"
+    );
+    assert_eq!(output.status.code(), Some(0), "{text}");
+}

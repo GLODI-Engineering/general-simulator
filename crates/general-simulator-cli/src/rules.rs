@@ -104,6 +104,20 @@ pub struct Port {
     pub negate: bool,
 }
 
+/// A switch's channel, as a conduction loss needs it: the two nodes its voltage is across and
+/// the resistance it is stamped as while commanded on.
+///
+/// Collected from two statements that share a name -- the device line
+/// (`DSW in mid idealswitchmodel`) carries the node pair, and the `kind=ideal_switch` line
+/// carries `r_on`. Neither is restated on a rule card, because an `r_on` written twice can
+/// drift from the device's and would then report a loss the circuit does not have.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwitchChannel {
+    pub positive: String,
+    pub negative: String,
+    pub r_on: f64,
+}
+
 /// What a deck carried besides the circuit: rules, ports, and the netlist without them.
 #[derive(Debug)]
 pub struct Extracted {
@@ -112,6 +126,9 @@ pub struct Extracted {
     pub rules: Vec<Rule>,
     /// Declared ports, by name.
     pub ports: BTreeMap<String, Port>,
+    /// Every `kind=ideal_switch`'s channel, so `P_cond(NAME)` can be resolved. Read, never
+    /// stripped: the solver needs those lines.
+    pub switches: BTreeMap<String, SwitchChannel>,
 }
 
 /// Parses one `kind=port` declaration.
@@ -177,6 +194,10 @@ pub fn extract(source: &str, dialect: Dialect) -> Result<Extracted, String> {
     let statements = general_mna::parse_and_flatten(source, dialect)?;
     let mut rules = Vec::new();
     let mut ports: BTreeMap<String, Port> = BTreeMap::new();
+    // A switch's channel is assembled from two statements sharing a name, which may appear in
+    // either order, so each half is collected separately and joined at the end.
+    let mut switch_nodes: BTreeMap<String, (String, String)> = BTreeMap::new();
+    let mut switch_r_on: BTreeMap<String, f64> = BTreeMap::new();
     let mut blank_lines: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     // Rating tokens to cut, keyed by the line they sit on. A device card may span continuation
     // lines, so the token's own line is what matters, not the element's first.
@@ -184,6 +205,9 @@ pub fn extract(source: &str, dialect: Dialect) -> Result<Extracted, String> {
 
     for stmt in &statements {
         if let Statement::ElementInstance(element) = stmt {
+            if let [positive, negative] = element.nodes.as_slice() {
+                switch_nodes.insert(element.name.clone(), (positive.clone(), negative.clone()));
+            }
             let (element_rules, cuts) = ratings_of(element)?;
             rules.extend(element_rules);
             for token in cuts {
@@ -224,6 +248,13 @@ pub fn extract(source: &str, dialect: Dialect) -> Result<Extracted, String> {
                 }
             }
             Some("rule") => rules.push(parse_rule(&bi.name, bi.span.start, &fields)?),
+            // Read, not stripped: the solver needs this line, and `continue` leaves it in place.
+            Some("ideal_switch") => {
+                if let Some(r_on) = fields.get("r_on").and_then(|raw| parse_number(raw)) {
+                    switch_r_on.insert(bi.name.clone(), r_on);
+                }
+                continue;
+            }
             _ => continue,
         }
         for line in bi.span.clone() {
@@ -231,11 +262,30 @@ pub fn extract(source: &str, dialect: Dialect) -> Result<Extracted, String> {
         }
     }
 
+    // Only a name with both halves is a channel: a `kind=ideal_switch` whose device line has
+    // other than two nodes has no single voltage to be across, and a two-node element that is
+    // not a switch has no `r_on`.
+    let switches: BTreeMap<String, SwitchChannel> = switch_r_on
+        .into_iter()
+        .filter_map(|(name, r_on)| {
+            let (positive, negative) = switch_nodes.get(&name)?.clone();
+            Some((
+                name,
+                SwitchChannel {
+                    positive,
+                    negative,
+                    r_on,
+                },
+            ))
+        })
+        .collect();
+
     if blank_lines.is_empty() && cut_tokens.is_empty() {
         return Ok(Extracted {
             netlist: source.to_string(),
             rules,
             ports,
+            switches,
         });
     }
     let mut out = String::with_capacity(source.len());
@@ -253,6 +303,7 @@ pub fn extract(source: &str, dialect: Dialect) -> Result<Extracted, String> {
         netlist: out,
         rules,
         ports,
+        switches,
     })
 }
 
@@ -952,6 +1003,8 @@ pub struct StepSample<'a> {
     pub gates: &'a BTreeMap<String, GateState>,
     /// Declared [`Port`]s, whose names resolve to a power rather than to an unknown.
     pub ports: &'a BTreeMap<String, Port>,
+    /// Every switch's channel, so `P_cond(NAME)` resolves to its conduction power.
+    pub switches: &'a BTreeMap<String, SwitchChannel>,
 }
 
 impl Sample for StepSample<'_> {
@@ -962,6 +1015,16 @@ impl Sample for StepSample<'_> {
         // question from the one the rule asks.
         if let Some(port) = self.ports.get(quantity) {
             return self.port_power(port);
+        }
+        // `P_cond(NAME)`: a switch's channel conduction power. Resolved as a quantity rather
+        // than built as its own `Watch` variant, so that every existing rule type, qualifier
+        // and per-period measure applies to a loss without the engine learning anything about
+        // switches it does not already know.
+        if let Some(switch) = quantity
+            .strip_prefix("P_cond(")
+            .and_then(|rest| rest.strip_suffix(')'))
+        {
+            return self.conduction_power(switch.trim());
         }
         // The same names the waveform's own header carries, so a rule is written against what
         // the user already sees in the CSV rather than a second naming scheme.
@@ -1022,6 +1085,41 @@ impl StepSample<'_> {
     ///
     /// No hidden convention: see [`Port`] for why a built-in negation cannot serve both ends of
     /// a converter, and for the two canonical declarations.
+    /// A switch's channel conduction power, $p = (V_a - V_b)^2 / r_{on}$ while commanded on and
+    /// exactly zero while commanded off.
+    ///
+    /// ## Why the gating is the whole correctness argument
+    ///
+    /// A switch commanded on is stamped as a plain `r_on` resistance between its two declared
+    /// nodes, so its current is not an unknown but is exactly computable. Measured against a
+    /// zero-volt sense source in series with the switch of a buck, the worst relative
+    /// disagreement over a run was $2.7 \times 10^{-9}$.
+    ///
+    /// While commanded **off** the same expression is not merely imprecise, it is nonsense: the
+    /// same run gave 1240 A against a true 0 A, because the device is no longer a resistance and
+    /// the voltage across it is the full blocking voltage. So the state has to gate the
+    /// expression, and a test asserts that what happens during the off time cannot change the
+    /// reported loss.
+    ///
+    /// Zero rather than unreadable while off, because the channel genuinely dissipates nothing
+    /// then -- which also makes a per-period mean come out as the duty-weighted average without
+    /// the rule having to know the duty. Body-diode conduction is a different expression on a
+    /// different state and is deliberately not counted here.
+    fn conduction_power(&self, switch: &str) -> Option<f64> {
+        let channel = self.switches.get(switch)?;
+        if !self.switch_on(switch)? {
+            return Some(0.0);
+        }
+        let node = |name: &str| -> Option<f64> {
+            if name == "0" {
+                return Some(0.0);
+            }
+            self.point.value(&format!("V({name})"))
+        };
+        let across = node(&channel.positive)? - node(&channel.negative)?;
+        Some(across * across / channel.r_on)
+    }
+
     fn port_power(&self, port: &Port) -> Option<f64> {
         let node = |name: &str| -> Option<f64> {
             if name == "0" {
@@ -1496,5 +1594,168 @@ mod tests {
              ETA kind=rule type=efficiency in=P_IN out=P_OUT max=1\n",
         );
         assert!(neither.contains("what one period is"), "{neither}");
+    }
+
+    // ---- a switch's channel, and its conduction power --------------------
+
+    /// The channels `source` declares.
+    fn channels(source: &str) -> BTreeMap<String, SwitchChannel> {
+        extract(source, Dialect::Ngspice)
+            .expect("the deck parses")
+            .switches
+    }
+
+    const ONE_SWITCH: &str = "\
+VIN in 0 12
+DSW in mid idealswitchmodel
+DSW kind=ideal_switch r_on=0.02 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=100 gate=block ctrl=G
+R1 mid 0 5
+D kind=const value=1
+G kind=sig2phys domain=voltage in=D
+";
+
+    #[test]
+    fn a_switch_channel_is_assembled_from_the_two_lines_that_share_its_name() {
+        // The device line carries the nodes, the `kind=ideal_switch` line carries `r_on`, and
+        // neither is restated on a rule card.
+        let channels = channels(ONE_SWITCH);
+        assert_eq!(channels.len(), 1);
+        let channel = &channels["DSW"];
+        assert_eq!(channel.positive, "in");
+        assert_eq!(channel.negative, "mid");
+        assert_eq!(channel.r_on, 0.02);
+    }
+
+    #[test]
+    fn the_ideal_switch_line_stays_in_the_netlist_after_extraction() {
+        // Read, not stripped -- unlike a rule card or a port. The solver needs it.
+        let (netlist, _) = ratings(ONE_SWITCH);
+        assert!(
+            netlist.contains("kind=ideal_switch"),
+            "the solver still needs this line:\n{netlist}"
+        );
+    }
+
+    /// A `StepSample` over hand-written node voltages, for asserting the formula itself.
+    fn sample_with<'a>(
+        unknowns: &[&str],
+        x: &[f64],
+        gates: &'a BTreeMap<String, GateState>,
+        switches: &'a BTreeMap<String, SwitchChannel>,
+        point: &'a mut OperatingPoint,
+        outputs: &'a BTreeMap<String, SignalValue>,
+        ports: &'a BTreeMap<String, Port>,
+    ) -> StepSample<'a> {
+        point.unknowns = unknowns.iter().map(|s| s.to_string()).collect();
+        point.x = x.to_vec();
+        StepSample {
+            point,
+            outputs,
+            gates,
+            ports,
+            switches,
+        }
+    }
+
+    #[test]
+    fn a_commanded_on_switch_dissipates_the_square_of_its_drop_over_r_on() {
+        let switches = BTreeMap::from([(
+            "DSW".to_string(),
+            SwitchChannel {
+                positive: "in".to_string(),
+                negative: "mid".to_string(),
+                r_on: 0.02,
+            },
+        )]);
+        let gates = BTreeMap::from([("DSW".to_string(), GateState::On)]);
+        let (outputs, ports) = (BTreeMap::new(), BTreeMap::new());
+        let mut point = OperatingPoint {
+            unknowns: Vec::new(),
+            x: Vec::new(),
+            diode_names: Vec::new(),
+            diode_z: Vec::new(),
+            diode_raw_ioff: Vec::new(),
+        };
+        // A 0.02 V drop across 0.02 ohm is 1 A, so 0.02 W.
+        let sample = sample_with(
+            &["V(in)", "V(mid)"],
+            &[12.0, 11.98],
+            &gates,
+            &switches,
+            &mut point,
+            &outputs,
+            &ports,
+        );
+        let power = sample.get("P_cond(DSW)").expect("a commanded-on switch");
+        assert!(
+            (power - 0.02).abs() < 1e-12,
+            "(0.02 V)^2 / 0.02 ohm = 0.02 W, got {power}"
+        );
+    }
+
+    #[test]
+    fn a_commanded_off_switch_dissipates_exactly_zero_whatever_is_across_it() {
+        // The expression is not merely imprecise while off, it is nonsense: on a real run the
+        // same arithmetic gave 1240 A against a true 0 A, because the device is no longer a
+        // resistance and the voltage across it is the full blocking voltage. The gating on the
+        // commanded state is the whole correctness argument, so it is asserted directly.
+        let switches = BTreeMap::from([(
+            "DSW".to_string(),
+            SwitchChannel {
+                positive: "in".to_string(),
+                negative: "mid".to_string(),
+                r_on: 0.02,
+            },
+        )]);
+        let gates = BTreeMap::from([("DSW".to_string(), GateState::Off)]);
+        let (outputs, ports) = (BTreeMap::new(), BTreeMap::new());
+        let mut point = OperatingPoint {
+            unknowns: Vec::new(),
+            x: Vec::new(),
+            diode_names: Vec::new(),
+            diode_z: Vec::new(),
+            diode_raw_ioff: Vec::new(),
+        };
+        // The full bus across it: 12^2 / 0.02 would be 7200 W if the state were ignored.
+        let sample = sample_with(
+            &["V(in)", "V(mid)"],
+            &[12.0, 0.0],
+            &gates,
+            &switches,
+            &mut point,
+            &outputs,
+            &ports,
+        );
+        assert_eq!(sample.get("P_cond(DSW)"), Some(0.0));
+    }
+
+    #[test]
+    fn an_undeclared_switch_has_no_conduction_power_rather_than_zero() {
+        // Unreadable, not zero: a rule naming a switch the netlist does not have must report as
+        // unanswerable, exactly as every other missing quantity does. Zero would make a typo in
+        // a switch name look like a lossless device.
+        let (switches, gates, outputs, ports) = (
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        );
+        let mut point = OperatingPoint {
+            unknowns: Vec::new(),
+            x: Vec::new(),
+            diode_names: Vec::new(),
+            diode_z: Vec::new(),
+            diode_raw_ioff: Vec::new(),
+        };
+        let sample = sample_with(
+            &["V(in)"],
+            &[12.0],
+            &gates,
+            &switches,
+            &mut point,
+            &outputs,
+            &ports,
+        );
+        assert_eq!(sample.get("P_cond(NOPE)"), None);
     }
 }
