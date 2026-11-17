@@ -92,6 +92,15 @@ pub enum DaeError {
     /// Carries the formatted underlying `std::io::Error` as a string rather than the error type
     /// itself, since `DaeError` derives `PartialEq` and `io::Error` doesn't implement it.
     Io(String),
+    /// A streaming `on_step` callback asked the run to end here, and not because anything
+    /// failed.
+    ///
+    /// The loop treats it as the end of the run rather than as an error: it finishes the
+    /// current step, leaves the loop normally and still builds the final checkpoint, so a run
+    /// a rule stopped can be resumed from exactly where it stopped once the rule is adjusted.
+    /// Returning any other error aborts, which loses that state -- correctly, since a genuine
+    /// failure leaves state nobody should continue from.
+    StopRequested,
     Build(BuildError),
     /// The netlist declares `ic=` initial conditions that could not be assigned — see
     /// [`general_mna::MnaSystem::initial_state`], whose own error explains the two ways that
