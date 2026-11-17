@@ -63,8 +63,8 @@ measure it with a `phys2sig` converter and write a card against that signal.
 A card can watch anything the waveform carries, and can express the conditions a rating cannot:
 
 ```text
-R_ileg  kind=rule type=above  target=I(L1) limit=60 unit=A severity=error
-R_bus   kind=rule type=outside low=390 high=410 target=V(bus) unit=V after=5m
+R_ileg  kind=rule type=above  target=I(L1) max=60 unit=A severity=error
+R_bus   kind=rule type=outside min=390 max=410 target=V(bus) unit=V after=5m
 R_leg   kind=rule type=forbidden_state switches=DSH,DSL action=stop severity=fatal
 R_dead  kind=rule type=forbidden_state switches=DSH,DSL min_deadtime=200n
 R_path  kind=rule type=required_path switches=DSH,DSL current=I(L1) i_min=1
@@ -268,6 +268,69 @@ Available on any card, and `hold` on a rating:
 
 `hold` is the one to reach for first. A switch model can produce a 20 ns numerical spike that is
 not a real overload, and a rule that reports it trains its reader to ignore the log.
+
+## How a bound is named
+
+There is one rule, and every rule type follows it:
+
+> **A bound on whatever `target=` names is `min` or `max`. A bound on a quantity the card does
+> not name in `target=` carries that quantity's prefix.**
+
+So:
+
+| rule type | `target=` names | its bounds |
+| --- | --- | --- |
+| `above`, `below` | the quantity | `max`, `min` |
+| `outside`, `inside` | the quantity | `min` and `max` |
+| `per_period`, `efficiency` | the quantity | `min` and `max` |
+| `switch_timing` | switches | `f_min`, `f_max`, `t_min` ... |
+| `body_diode` | switches | `i_min` |
+| `zvs` | switches | `v_max` |
+| `rate_of_change` | the quantity | `max_slope` |
+
+The prefixed names are not inconsistencies. A card whose `target=` names *switches* cannot
+write a bare `max=5`, because nothing would say which quantity — a frequency, a current, a
+voltage — or which unit that 5 is in. `rate_of_change` is the subtle case: its `target=` is a
+quantity, but the bound is on the **derivative** of that quantity, so `max_slope` earns its
+prefix by naming something different from the target.
+
+`limit=`, `low=` and `high=` used to exist and are now errors that name their replacement:
+
+```text
+error: line 12: rule 'EXPECT': field 'low' no longer exists -- write 'min'. Every bound on a
+rule's own target is 'min' or 'max', on every rule type
+```
+
+They were removed rather than kept as aliases because three names for one concept is how
+somebody writes the obvious thing and gets a parse error from a feature that otherwise works
+perfectly.
+
+## A deck is its own regression test
+
+A rule whose bound is an *expectation* rather than a limit turns a deck into a test, because a
+violated rule at `error` severity exits non-zero:
+
+```text
+EXPECT kind=rule type=outside target=V(out) min=4.0 max=5.0 after=3e-3 severity=error
+```
+
+On a buck that settles to 4.8 V:
+
+```text
+  V(out).EXPECT                passed
+1 rule(s): 0 violated, 1 passed          → exit 0
+```
+
+With the expectation wrong on purpose (`min=9.0 max=10.0`):
+
+```text
+  V(out).EXPECT   ERROR  1 time(s), 2.0000 ms total, worst 4.4834 at 4.1838 ms
+1 rule(s): 1 violated, 0 passed          → exit 2
+```
+
+`general-simulator deck.cir` in CI needs no wrapper script and no separate assertion file.
+`after=` supplies the "after 5 ms" part of *"the bus is between 390 and 410 V after 5 ms"*, and
+`hold=` is there for an assertion that should tolerate a brief excursion.
 
 ## The one check you do not have to ask for
 

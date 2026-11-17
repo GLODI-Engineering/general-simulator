@@ -66,9 +66,7 @@ GL kind=sig2phys domain=voltage in=PWML
 fn a_violated_rule_logs_edges_and_reports_through_the_exit_code() {
     let netlist = write(
         "edges.cir",
-        &format!(
-            "{BUCK}\nR_isat kind=rule type=above target=I(L1) limit=3 unit=A severity=error\n"
-        ),
+        &format!("{BUCK}\nR_isat kind=rule type=above target=I(L1) max=3 unit=A severity=error\n"),
     );
     let output = run(&[
         netlist.to_str().unwrap(),
@@ -183,7 +181,7 @@ fn a_run_a_rule_stopped_resumes_after_the_rule_is_adjusted() {
     let stopping = write(
         "stop.cir",
         &format!(
-            "{BUCK}\nR_isat kind=rule type=above target=I(L1) limit=3 unit=A severity=fatal action=stop\n"
+            "{BUCK}\nR_isat kind=rule type=above target=I(L1) max=3 unit=A severity=fatal action=stop\n"
         ),
     );
     let checkpoint = scratch("stop.ckpt");
@@ -213,7 +211,7 @@ fn a_run_a_rule_stopped_resumes_after_the_rule_is_adjusted() {
     let relaxed = write(
         "relaxed.cir",
         &format!(
-            "{BUCK}\nR_isat kind=rule type=above target=I(L1) limit=50 unit=A severity=warning\n"
+            "{BUCK}\nR_isat kind=rule type=above target=I(L1) max=50 unit=A severity=warning\n"
         ),
     );
     let second = run(&[
@@ -914,7 +912,7 @@ fn a_rule_on_a_non_finite_run_is_not_reported_as_passed() {
         "nan_rule.cir",
         "VIN vin 0 12\nR1 vin a 1\nL1 a 0 22e-6\nNEG kind=const value=-1\n\
          BAD kind=sqrt in=NEG\n\
-         R_bad kind=rule type=above target=BAD limit=1 severity=error\n",
+         R_bad kind=rule type=above target=BAD max=1 severity=error\n",
     );
     let output = run(&[
         netlist.to_str().unwrap(),
@@ -1736,4 +1734,69 @@ GATE kind=sig2phys domain=voltage in=ONE
         );
         assert_ne!(output.status.code(), Some(0), "{stderr}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// A deck as its own regression test
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_expectation_decides_the_exit_code_so_a_deck_is_its_own_regression_test() {
+    // Phase 6 asked for "expected-result assertions so a circuit carries its own regression
+    // test". No new rule type was needed -- an ordinary `type=outside` with `after=` is the
+    // assertion, and the exit code is what makes it usable from CI with no wrapper script.
+    //
+    // That property is the whole feature, so it is pinned here rather than left incidental:
+    // the same deck, differing only in whether the expectation is true, must exit 0 and 2.
+    let deck = |low: &str, high: &str| {
+        format!(
+            "VIN in 0 12
+DSW in sw idealswitchmodel
+DSW kind=ideal_switch r_on=0.01 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 \
+body_v_f=0.5 body_g_on=100 gate=block ctrl=GATE
+D1 0 sw idealdiodemodel
+D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_f=0.4 g_on=100
+L1 sw out 1e-3
+C1 out 0 1e-4
+R1 out 0 5
+DUTY kind=const value=0.4
+PWM1 kind=pwm freq=50000 in=DUTY
+GATE kind=sig2phys domain=voltage in=PWM1
+EXPECT kind=rule type=outside target=V(out) min={low} max={high} after=3e-3 severity=error
+"
+        )
+    };
+    let at = |name: &str, low: &str, high: &str| {
+        let netlist = write(name, &deck(low, high));
+        let output = run(&[
+            netlist.to_str().unwrap(),
+            "--mode",
+            "transient",
+            "--tfinal",
+            "5e-3",
+            "--dt",
+            "2e-7",
+            "--out-every",
+            "1000000",
+        ]);
+        let log = fs::read_to_string(netlist.with_extension("events.txt")).expect("the text log");
+        (output.status.code(), log)
+    };
+
+    // The buck settles to about 4.8 V, so [4, 5] is a true expectation.
+    let (code, log) = at("expect_true.cir", "4.0", "5.0");
+    assert_eq!(code, Some(0), "a met expectation must exit 0:\n{log}");
+    assert!(
+        log.contains("V(out).EXPECT") && log.contains("passed"),
+        "{log}"
+    );
+
+    // The same deck with an expectation it cannot meet.
+    let (code, log) = at("expect_false.cir", "9.0", "10.0");
+    assert_eq!(code, Some(2), "a failed expectation must exit 2:\n{log}");
+    // And it has to say what it actually saw, or the CI failure is unactionable.
+    assert!(
+        log.contains("ERROR V(out).EXPECT") && log.contains("worst"),
+        "the report should carry the worst value and when it happened:\n{log}"
+    );
 }

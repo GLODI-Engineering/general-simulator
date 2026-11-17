@@ -658,20 +658,41 @@ fn parse_rule(
                 .copied()
                 .ok_or_else(|| ctx("missing field 'target'".into()))?
                 .to_string();
+            // One vocabulary for a bound: `min` and `max`, whichever end the rule type uses.
+            // The old spellings -- `limit` on a one-sided type, `low`/`high` on a band -- are
+            // refused rather than accepted, because three names for one concept is how someone
+            // writes the obvious thing and gets "missing field 'low'" from a feature that
+            // otherwise works. See #72 for the rule the whole grammar follows: a bound on
+            // whatever `target=` names is `min`/`max`, and a bound on a quantity the card does
+            // *not* name in `target=` carries that quantity's prefix (`f_min`, `i_min`,
+            // `v_max`, `max_slope`) because there would otherwise be nothing to say which
+            // quantity, or which unit, it is.
+            for (gone, replacement) in [
+                ("limit", if rule_type == "below" { "min" } else { "max" }),
+                ("low", "min"),
+                ("high", "max"),
+            ] {
+                if fields.contains_key(gone) {
+                    return Err(ctx(format!(
+                        "field '{gone}' no longer exists -- write '{replacement}'. Every bound \
+                         on a rule's own target is 'min' or 'max', on every rule type"
+                    )));
+                }
+            }
             let condition = match rule_type {
                 "above" => Condition::Above {
-                    limit: number("limit")?,
+                    limit: number("max")?,
                 },
                 "below" => Condition::Below {
-                    limit: number("limit")?,
+                    limit: number("min")?,
                 },
                 "outside" => Condition::Outside {
-                    low: number("low")?,
-                    high: number("high")?,
+                    low: number("min")?,
+                    high: number("max")?,
                 },
                 _ => Condition::Inside {
-                    low: number("low")?,
-                    high: number("high")?,
+                    low: number("min")?,
+                    high: number("max")?,
                 },
             };
             let unit = fields.get("unit").copied().unwrap_or("").to_string();
@@ -1863,5 +1884,99 @@ G kind=sig2phys domain=voltage in=D
             "{ONE_SWITCH}ZVS kind=rule type=zvs switches=DSW v_max=-1\n"
         ));
         assert!(message.contains("magnitude"), "{message}");
+    }
+
+    // ---- one name for a bound --------------------------------------------
+
+    #[test]
+    fn every_bound_on_a_rules_own_target_is_min_or_max() {
+        let (_, rules) = ratings(
+            "V1 a 0 10\nL1 a 0 36u\n\
+             HI kind=rule type=above target=I(L1) max=3\n\
+             LO kind=rule type=below target=V(a) min=1\n\
+             BAND kind=rule type=outside target=V(a) min=9 max=11\n\
+             FORBID kind=rule type=inside target=V(a) min=4 max=6\n",
+        );
+        let by = |name: &str| {
+            rules
+                .iter()
+                .find(|r| r.name == name)
+                .unwrap_or_else(|| panic!("no rule {name}"))
+        };
+        assert_eq!(by("HI").condition, Condition::Above { limit: 3.0 });
+        assert_eq!(by("LO").condition, Condition::Below { limit: 1.0 });
+        assert_eq!(
+            by("BAND").condition,
+            Condition::Outside {
+                low: 9.0,
+                high: 11.0
+            }
+        );
+        assert_eq!(
+            by("FORBID").condition,
+            Condition::Inside {
+                low: 4.0,
+                high: 6.0
+            }
+        );
+    }
+
+    #[test]
+    fn the_old_bound_spellings_are_refused_with_the_right_end_named() {
+        // `limit` maps to a different name depending on which end the rule type bounds, so the
+        // message has to name the right one rather than offer both and let the reader guess.
+        for (card, gone, replacement) in [
+            (
+                "R kind=rule type=above target=I(L1) limit=3",
+                "limit",
+                "'max'",
+            ),
+            (
+                "R kind=rule type=below target=I(L1) limit=3",
+                "limit",
+                "'min'",
+            ),
+            (
+                "R kind=rule type=outside target=I(L1) low=1 max=3",
+                "low",
+                "'min'",
+            ),
+            (
+                "R kind=rule type=inside target=I(L1) min=1 high=3",
+                "high",
+                "'max'",
+            ),
+        ] {
+            let message = rating_error(&format!("V1 a 0 10\nL1 a 0 36u\n{card}\n"));
+            assert!(
+                message.contains(&format!("field '{gone}' no longer exists"))
+                    && message.contains(replacement),
+                "'{gone}' on this card should be refused and name {replacement}: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_prefixed_bound_is_left_alone_because_its_prefix_names_a_quantity() {
+        // `f_min`/`f_max`, `i_min`, `v_max` and `max_slope` are *not* inconsistencies. Each
+        // belongs to a rule whose `target=` names switches rather than a quantity, or bounds a
+        // different quantity from the target -- so a bare `max=` would leave nothing to say
+        // which quantity, or which unit, the number is.
+        let (_, rules) = ratings(
+            "V1 a 0 10\nL1 a 0 36u\n\
+             DSW a 0 idealswitchmodel\n\
+             DSW kind=ideal_switch r_on=0.02 body_g_breakdown=0 body_v_breakdown=-100 \
+             body_g_off=0 body_v_f=0.5 body_g_on=100 gate=block ctrl=G\n\
+             ONE kind=const value=1\n\
+             G kind=sig2phys domain=voltage in=ONE\n\
+             T kind=rule type=switch_timing switches=DSW f_min=1000 f_max=100000\n\
+             Z kind=rule type=zvs switches=DSW v_max=5\n\
+             S kind=rule type=rate_of_change target=I(L1) max_slope=1e6\n",
+        );
+        assert_eq!(
+            rules.len(),
+            3,
+            "all three prefixed-bound cards should parse"
+        );
     }
 }

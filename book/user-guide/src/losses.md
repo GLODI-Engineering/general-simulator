@@ -21,7 +21,7 @@ An instantaneous bound works the same way, and is a different question — peak 
 than average:
 
 ```text
-PEAK_H kind=rule type=above target=P_cond(DSH) limit=200 unit=W severity=error
+PEAK_H kind=rule type=above target=P_cond(DSH) max=200 unit=W severity=error
 ```
 
 ## Nothing has to be declared, and nothing is restated
