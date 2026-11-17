@@ -2742,7 +2742,16 @@ pub fn simulate_transient_with_blocks_checkpointed(
                 x_prev_prev = Some(std::mem::replace(&mut x_prev, point.x.clone()));
                 point_prev = point.clone();
                 prev_outputs = outputs.clone();
-                on_step(t, point, outputs)?;
+                match on_step(t, point, outputs) {
+                    Ok(()) => {}
+                    // A cooperative stop: leave the loop the ordinary way so the final
+                    // checkpoint below is still built from this step's state.
+                    Err(DaeError::StopRequested) => {
+                        step_index += 1;
+                        break;
+                    }
+                    Err(other) => return Err(other),
+                }
                 step_index += 1;
                 if let (Some(every), Some(on_checkpoint)) =
                     (checkpoints.every, checkpoints.on_checkpoint.as_deref_mut())
@@ -2862,7 +2871,15 @@ pub fn simulate_transient_with_blocks_checkpointed(
                         .collect();
                     x_prev_prev = Some(std::mem::replace(&mut x_prev, attempt.point.x.clone()));
                     point_prev = attempt.point.clone();
-                    on_step(t, attempt.point, outputs)?;
+                    match on_step(t, attempt.point, outputs) {
+                        Ok(()) => {}
+                        Err(DaeError::StopRequested) => {
+                            accepted_steps += 1;
+                            step_index += 1;
+                            break;
+                        }
+                        Err(other) => return Err(other),
+                    }
                     accepted_steps += 1;
                     step_index += 1;
                     if accepted_steps > max_adaptive_steps {

@@ -1,0 +1,17 @@
+[package]
+name = "gsim-rules"
+version = "0.5.1"
+description = "Rules a simulation checks while it runs: a rule watches a quantity, a condition decides when it is violated, and the engine reports each violation as a pair of edge events -- one when it starts, one when it ends, carrying the duration and the worst value reached. Observes only; the single exception is the stop action ending the run."
+edition.workspace = true
+license.workspace = true
+readme = "README.md"
+publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/gsim-rules"
+keywords = ["simulation", "assertions", "diagnostics", "power-electronics"]
+categories = ["science", "simulation"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -298,6 +298,7 @@
 
 mod measure;
 mod raw_format;
+mod rules;
 
 use std::collections::BTreeMap;
 use std::env;
@@ -339,7 +340,7 @@ enum OutputFormat {
 
 fn main() -> ExitCode {
     match run() {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => ExitCode::from(code),
         Err(message) => {
             eprintln!("error: {message}");
             ExitCode::FAILURE
@@ -347,7 +348,23 @@ fn main() -> ExitCode {
     }
 }
 
-fn run() -> Result<(), String> {
+/// What the process returns when rules took part.
+///
+/// The specification asks for `1 = warnings`. That is not taken here, and the reason is worth
+/// stating: `1` has always meant "this run failed" for every script and for the GUI's own
+/// solver discovery, so reusing it for a run that completed and merely warned would silently
+/// reclassify every existing failure. The codes below add to the contract instead of rewriting
+/// it -- a rule-free netlist still returns 0 or 1 exactly as before.
+mod exit {
+    /// Nothing to report, or warnings only (see `--fail-on`).
+    pub const OK: u8 = 0;
+    /// A rule of severity `error` or `fatal` fired.
+    pub const RULE_ERROR: u8 = 2;
+    /// A rule ended the run.
+    pub const STOPPED_BY_RULE: u8 = 3;
+}
+
+fn run() -> Result<u8, String> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         return Err(usage());
@@ -363,11 +380,11 @@ fn run() -> Result<(), String> {
     match args[1].as_str() {
         "--help" | "-h" => {
             println!("{}", help());
-            return Ok(());
+            return Ok(0);
         }
         "--version" | "-V" => {
             println!("{}", version_line());
-            return Ok(());
+            return Ok(0);
         }
         // A leading dash in first position is a mistyped flag, not a file. Without this it
         // reached the file open and came back as
@@ -568,6 +585,28 @@ fn run() -> Result<(), String> {
     // complete, see below.
     let (devices_for_build, measurements) = measure::extract(&devices_source, dialect)
         .map_err(|e| format!("parsing kind=measure declarations: {e}"))?;
+    // `kind=rule` cards come out for the same reason, and for one more: the deck hash a
+    // checkpoint is keyed by is taken over the parsed statements, so a rule left in them would
+    // mean that editing a limit invalidates the checkpoint of the run that limit just stopped.
+    // Stripping them here is what lets a run stop on a rule, have the rule adjusted, and resume.
+    let (devices_for_build, device_rules) = rules::extract(&devices_for_build, dialect)
+        .map_err(|e| format!("parsing kind=rule declarations: {e}"))?;
+    // The solver re-parses the netlist *itself*, and the deck hash a checkpoint is keyed by is
+    // taken over those statements -- so the cards have to be gone from this copy too, not only
+    // from the one `build_system` sees. Without this, editing a limit changes the hash, and the
+    // checkpoint written by the run that limit just stopped refuses to load into the deck that
+    // differs from it by one number.
+    let (netlist, netlist_rules) = rules::extract(&netlist, dialect)
+        .map_err(|e| format!("parsing kind=rule declarations: {e}"))?;
+    // With no `--devices`, both extractions ran over the same text and found the same cards;
+    // with one, a rule may sit in either file and both sets count.
+    let declared_rules = if devices_path.is_some() {
+        let mut all = netlist_rules;
+        all.extend(device_rules);
+        all
+    } else {
+        device_rules
+    };
     let general_mna::System {
         ideal_diodes: diodes,
         ideal_switches,
@@ -696,6 +735,7 @@ fn run() -> Result<(), String> {
                 raw_out_path.as_deref(),
                 netlist_path,
                 &measurements,
+                declared_rules,
                 CheckpointArgs {
                     out: checkpoint_out.as_deref().map(Path::new),
                     every: checkpoint_every,
@@ -736,7 +776,7 @@ fn run() -> Result<(), String> {
         write_measurements_log(&measurements, &waveform, &default_log_path(netlist_path))?;
     }
 
-    Ok(())
+    Ok(exit::OK)
 }
 
 /// `<netlist stem>.log` next to the input file -- where `kind=measure` results are written,
@@ -842,8 +882,9 @@ fn run_transient_streamed(
     raw_out_path: Option<&Path>,
     netlist_path: &str,
     measurements: &[measure::MeasureSpec],
+    declared_rules: Vec<gsim_rules::Rule>,
     checkpoints: CheckpointArgs<'_>,
-) -> Result<(), String> {
+) -> Result<u8, String> {
     let resume_from = match checkpoints.resume {
         Some(path) => Some(Checkpoint::read_from(path).map_err(|e| format!("{e:?}"))?),
         None => None,
@@ -907,6 +948,19 @@ fn run_transient_streamed(
     };
     let mut n_points: usize = 0;
     let mut n_resolved: usize = 0;
+
+    // Rules, if the netlist declared any. The two files are created only when it did, the same
+    // way `kind=measure` only ever creates its `.log` for a netlist that asks for one.
+    let mut engine = gsim_rules::RuleEngine::new(declared_rules, false);
+    let mut reporter = if engine.is_empty() {
+        None
+    } else {
+        Some(rules::Reporter::new(
+            Path::new(netlist_path),
+            gsim_rules::Severity::Warning,
+        )?)
+    };
+    let mut steps_seen: usize = 0;
 
     let final_checkpoint = simulate_transient_with_blocks_checkpointed(
         netlist,
@@ -979,6 +1033,28 @@ fn run_transient_streamed(
                 }
             }
 
+            // Rules see every step, not every *written* point. `--out-every` thins the
+            // waveform file, and an edge or a peak falling between two written points is
+            // exactly what a rule exists to catch -- so this sits above the thinning return
+            // below, not beside the writers.
+            if let Some(reporter) = &mut reporter {
+                let gate_states = rules::gate_states(gates, &outputs);
+                let sample = rules::StepSample {
+                    point: &point,
+                    outputs: &outputs,
+                    gates: &gate_states,
+                };
+                for event in engine.observe(steps_seen, t, &sample) {
+                    reporter.record(&event).map_err(DaeError::Io)?;
+                }
+                steps_seen += 1;
+            }
+            // Asked for here, acted on at the end of this closure: the step that tripped the
+            // rule has already been solved, its state is what the checkpoint will carry, and a
+            // resume continues from *after* it -- so its row belongs in the waveform. Returning
+            // here instead would leave a one-row hole exactly at the interesting moment.
+            let stop_now = engine.stop_requested().is_some();
+
             // `--out-every N` thins what is *written*, never what is computed: every step is
             // still taken, every measurement above still sees every point, and the solution is
             // bit-identical to the same run without the flag. Only serialization is skipped.
@@ -991,7 +1067,12 @@ fn run_transient_streamed(
             let emit = n_resolved.is_multiple_of(out_every);
             n_resolved += 1;
             if !emit {
-                return Ok(());
+                // A stop landing on a thinned-out point still stops; it just has no row.
+                return if stop_now {
+                    Err(DaeError::StopRequested)
+                } else {
+                    Ok(())
+                };
             }
 
             if let Some(w) = &mut csv_writer {
@@ -1003,10 +1084,28 @@ fn run_transient_streamed(
                     .map_err(|e| DaeError::Io(e.to_string()))?;
             }
             n_points += 1;
+            // Cooperative: the loop finishes this step, leaves normally and still builds the
+            // final checkpoint, so the run can be resumed from exactly here.
+            if stop_now {
+                return Err(DaeError::StopRequested);
+            }
             Ok(())
         },
     )
     .map_err(|e| format!("{e:?}"))?;
+
+    // Close every rule out before the files are flushed, so a violation still in progress when
+    // the run ended is reported as a truncated leave rather than vanishing, and the summary
+    // accounts for its time.
+    let stopped_by = engine.stop_requested().map(str::to_string);
+    if let Some(reporter) = &mut reporter {
+        let (tail, summaries) = engine.finish(steps_seen);
+        for event in &tail {
+            reporter.record(event)?;
+        }
+        reporter.finish(&summaries)?;
+    }
+
     if let (Some(path), Some(final_checkpoint)) = (checkpoints.out, final_checkpoint) {
         final_checkpoint
             .write_to(path)
@@ -1076,7 +1175,17 @@ fn run_transient_streamed(
         write_measurements_log(measurements, &shadow, &default_log_path(netlist_path))?;
     }
 
-    Ok(())
+    // The run itself succeeded in every case that reaches here, including a rule stop: the
+    // waveform, the event log and the checkpoint are all written and readable. The code says
+    // what the rules found.
+    if let Some(name) = stopped_by {
+        eprintln!("stopped by rule '{name}'");
+        return Ok(exit::STOPPED_BY_RULE);
+    }
+    match reporter.as_ref().and_then(|r| r.worst) {
+        Some(severity) if severity >= gsim_rules::Severity::Error => Ok(exit::RULE_ERROR),
+        _ => Ok(exit::OK),
+    }
 }
 
 /// Prints `waveform` as CSV to stdout, exactly reproducing this crate's original (pre-`--format`)

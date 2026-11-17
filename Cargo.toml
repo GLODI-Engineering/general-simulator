@@ -9,6 +9,11 @@ members = [
     # post-processing pass over a completed transient trace (see
     # crates/general-simulator-cli/src/measure.rs and book/dev-guide/src/measurements.md for why
     # this is a CLI-level concern, not a dae-runtime/general-mna block-graph one).
+    # gsim-rules observes a run and never changes it (the one exception being the `stop`
+    # action ending it), so it is deliberately its own crate rather than a module of
+    # dae-runtime: nothing in the solver depends on it, and it builds and is tested without a
+    # solver at all -- it reads named quantities through a trait the caller implements.
+    "crates/gsim-rules",
     "crates/lcp-solver",
     "crates/pwl-devices",
     "crates/dae-runtime",
