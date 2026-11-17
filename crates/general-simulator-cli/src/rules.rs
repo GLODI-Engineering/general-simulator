@@ -488,10 +488,48 @@ fn parse_rule(name: &str, line: usize, fields: &BTreeMap<&str, &str>) -> Result<
                 fields.get("unit").copied().unwrap_or(" A").to_string(),
             )
         }
+        "switch_timing" => {
+            let switches = list("switches")?;
+            let target = fields
+                .get("name")
+                .copied()
+                .map(str::to_string)
+                .unwrap_or_else(|| switches.join("+"));
+            // Defaults to on, and not only because it is the cheapest of the three checks: a
+            // switch that never commutated cannot have produced a measurable on-time or
+            // frequency either, so a rule that asked for those and stayed quiet would be
+            // reporting a pass it never established.
+            let require_commutation = match fields.get("require_commutation").copied() {
+                None | Some("yes") | Some("true") | Some("1") => true,
+                Some("no") | Some("false") | Some("0") => false,
+                Some(other) => {
+                    return Err(ctx(format!(
+                        "require_commutation must be yes or no, not '{other}'"
+                    )))
+                }
+            };
+            let watch = Watch::SwitchTiming {
+                switches,
+                min_on: number_opt("min_on")?,
+                min_off: number_opt("min_off")?,
+                f_min: number_opt("f_min")?,
+                f_max: number_opt("f_max")?,
+                require_commutation,
+            };
+            (
+                watch,
+                // Every finding a timing rule makes is an instant carrying its own value,
+                // limit and unit, so the interval machinery this condition drives is never
+                // reached. It is here because `Rule` requires one.
+                Condition::Above { limit: 0.0 },
+                target,
+                String::new(),
+            )
+        }
         other => {
             return Err(ctx(format!(
                 "unknown rule type '{other}' -- one of above, below, outside, inside, \
-                 forbidden_state, required_path"
+                 forbidden_state, required_path, switch_timing"
             )))
         }
     };

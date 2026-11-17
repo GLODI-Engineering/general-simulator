@@ -457,3 +457,216 @@ fn a_shoot_through_is_not_counted_as_a_handover() {
         "an overlap is not a dead time of zero -- there was no handover to measure"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// `Watch::SwitchTiming`: when a switch changes, rather than what state it is in. See #52.
+// ---------------------------------------------------------------------------------------------
+
+fn timing(min_on: Option<f64>, min_off: Option<f64>, require_commutation: bool) -> Rule {
+    Rule {
+        name: "T_sw".into(),
+        target: "S1".into(),
+        watch: Watch::SwitchTiming {
+            switches: vec!["S1".into()],
+            min_on,
+            min_off,
+            f_min: None,
+            f_max: None,
+            require_commutation,
+        },
+        unit: String::new(),
+        condition: Condition::Above { limit: 0.0 },
+        qualifiers: Default::default(),
+        severity: Severity::Warning,
+        action: Action::Log,
+    }
+}
+
+fn frequency(f_min: Option<f64>, f_max: Option<f64>) -> Rule {
+    Rule {
+        name: "T_f".into(),
+        target: "S1".into(),
+        watch: Watch::SwitchTiming {
+            switches: vec!["S1".into()],
+            min_on: None,
+            min_off: None,
+            f_min,
+            f_max,
+            require_commutation: false,
+        },
+        unit: String::new(),
+        condition: Condition::Above { limit: 0.0 },
+        qualifiers: Default::default(),
+        severity: Severity::Warning,
+        action: Action::Log,
+    }
+}
+
+fn switch_at(on: bool) -> Step {
+    Step {
+        values: BTreeMap::new(),
+        switches: BTreeMap::from([("S1".to_string(), on)]),
+    }
+}
+
+/// Drives one switch through `pattern`, one step per entry, `dt` apart.
+fn drive(engine: &mut RuleEngine, pattern: &[bool], dt: f64) -> Vec<EventKind> {
+    let mut kinds = Vec::new();
+    for (step, on) in pattern.iter().enumerate() {
+        for record in engine.observe(step, step as f64 * dt, &switch_at(*on)) {
+            kinds.push(record.kind);
+        }
+    }
+    kinds
+}
+
+#[test]
+fn an_on_pulse_shorter_than_the_device_allows_is_reported_with_its_length() {
+    let mut engine = RuleEngine::new(vec![timing(Some(3e-6), None, false)], false);
+    // off, on for two steps (2 us), off again: a 2 us pulse against a 3 us minimum.
+    let records: Vec<_> = {
+        let mut all = Vec::new();
+        for (step, on) in [false, true, true, false].iter().enumerate() {
+            all.extend(engine.observe(step, step as f64 * 1e-6, &switch_at(*on)));
+        }
+        all
+    };
+    assert_eq!(records.len(), 1, "one finding, got {records:?}");
+    let record = &records[0];
+    assert_eq!(record.kind, EventKind::Instant, "a pulse has no interval");
+    assert!((record.value - 2e-6).abs() < 1e-12, "{}", record.value);
+    assert_eq!(record.limit, 3e-6);
+    assert_eq!(record.unit, "s");
+    let detail = record.detail.as_deref().unwrap_or_default();
+    assert!(detail.contains("S1 was on for"), "{detail}");
+}
+
+#[test]
+fn a_pulse_long_enough_is_not_reported() {
+    // Without this the test above would pass for a check that fires on every transition.
+    let mut engine = RuleEngine::new(vec![timing(Some(1e-6), None, false)], false);
+    let kinds = drive(&mut engine, &[false, true, true, true, false], 1e-6);
+    assert!(kinds.is_empty(), "a 3 us pulse against a 1 us minimum");
+}
+
+#[test]
+fn a_short_off_interval_is_reported_too() {
+    let mut engine = RuleEngine::new(vec![timing(None, Some(3e-6), false)], false);
+    let records: Vec<_> = {
+        let mut all = Vec::new();
+        for (step, on) in [true, false, true].iter().enumerate() {
+            all.extend(engine.observe(step, step as f64 * 1e-6, &switch_at(*on)));
+        }
+        all
+    };
+    assert_eq!(records.len(), 1);
+    let detail = records[0].detail.as_deref().unwrap_or_default();
+    assert!(detail.contains("S1 was off for"), "{detail}");
+}
+
+#[test]
+fn the_interval_in_progress_at_the_first_step_is_not_judged() {
+    // Its start is unknown -- it began before anything was watching -- so its length is not a
+    // measurement. Reporting it would make every run that starts mid-pulse produce a finding
+    // whose number means nothing.
+    let mut engine = RuleEngine::new(vec![timing(Some(1.0), None, false)], false);
+    let kinds = drive(&mut engine, &[true, false], 1e-6);
+    assert!(
+        kinds.is_empty(),
+        "the first interval has no measurable start"
+    );
+}
+
+#[test]
+fn a_switch_that_never_commutated_is_reported_at_the_end_of_the_run() {
+    // The deck whose waveform looks reasonable: the gate never reaches the switch, so the run
+    // simulates a converter with a permanently open switch, which still charges and settles.
+    let mut engine = RuleEngine::new(vec![timing(None, None, true)], false);
+    let during = drive(&mut engine, &[false, false, false, false], 1e-6);
+    assert!(during.is_empty(), "nothing is knowable until the run ends");
+
+    let (records, summaries) = engine.finish(4);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].kind, EventKind::Instant);
+    let detail = records[0].detail.as_deref().unwrap_or_default();
+    assert!(detail.contains("never commutated"), "{detail}");
+    assert!(detail.contains("stayed open"), "{detail}");
+    assert_eq!(summaries[0].instants, 1);
+    assert!(!summaries[0].passed(), "a finding is not a pass");
+}
+
+#[test]
+fn a_switch_that_did_commutate_raises_nothing() {
+    let mut engine = RuleEngine::new(vec![timing(None, None, true)], false);
+    drive(&mut engine, &[false, true, false], 1e-6);
+    let (records, summaries) = engine.finish(3);
+    assert!(records.is_empty(), "{records:?}");
+    assert!(summaries[0].passed());
+}
+
+#[test]
+fn require_commutation_can_be_turned_off() {
+    let mut engine = RuleEngine::new(vec![timing(None, None, false)], false);
+    drive(&mut engine, &[false, false, false], 1e-6);
+    let (records, _) = engine.finish(3);
+    assert!(records.is_empty());
+}
+
+#[test]
+fn a_frequency_is_measured_over_the_window_that_was_observed() {
+    // Ten transitions -- five periods -- across 10 us is 500 kHz. Two transitions per period,
+    // which is why this is not a count of completed cycles.
+    let mut engine = RuleEngine::new(vec![frequency(None, Some(400e3))], false);
+    let pattern: Vec<bool> = (0..11).map(|i| i % 2 == 1).collect();
+    drive(&mut engine, &pattern, 1e-6);
+    let (records, _) = engine.finish(11);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert!(
+        (records[0].value - 500e3).abs() < 1e3,
+        "measured {} Hz",
+        records[0].value
+    );
+    assert_eq!(records[0].unit, " Hz");
+    assert!(records[0]
+        .detail
+        .as_deref()
+        .unwrap_or_default()
+        .contains("above"));
+}
+
+#[test]
+fn a_frequency_inside_its_band_raises_nothing() {
+    let mut engine = RuleEngine::new(vec![frequency(Some(400e3), Some(600e3))], false);
+    let pattern: Vec<bool> = (0..11).map(|i| i % 2 == 1).collect();
+    drive(&mut engine, &pattern, 1e-6);
+    let (records, _) = engine.finish(11);
+    assert!(records.is_empty(), "500 kHz is inside 400-600 kHz");
+}
+
+#[test]
+fn a_frequency_below_its_band_is_reported() {
+    let mut engine = RuleEngine::new(vec![frequency(Some(600e3), None)], false);
+    let pattern: Vec<bool> = (0..11).map(|i| i % 2 == 1).collect();
+    drive(&mut engine, &pattern, 1e-6);
+    let (records, _) = engine.finish(11);
+    assert_eq!(records.len(), 1);
+    assert!(records[0]
+        .detail
+        .as_deref()
+        .unwrap_or_default()
+        .contains("below"));
+}
+
+#[test]
+fn a_timing_rule_whose_switch_does_not_exist_says_so_rather_than_passing() {
+    // The same discipline the quantity rules follow: a rule that could not look is not a rule
+    // that found nothing.
+    let mut engine = RuleEngine::new(vec![timing(Some(1e-6), None, true)], false);
+    for step in 0..3 {
+        engine.observe(step, step as f64 * 1e-6, &scalar("i", 1.0));
+    }
+    let (records, summaries) = engine.finish(3);
+    assert!(records.is_empty());
+    assert_eq!(summaries[0].missing_samples, 3);
+    assert!(!summaries[0].passed(), "unreadable is not passed");
+}

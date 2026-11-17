@@ -142,6 +142,39 @@ pub enum Watch {
         /// Below this magnitude there is nothing to strand, so the rule stays quiet.
         i_min: f64,
     },
+    /// When a group of switches changes state, rather than what state it is in.
+    ///
+    /// Three questions with one answer, which is why they are one watch: all three are read
+    /// off the same record of resolved transitions, and anyone who asks one usually wants the
+    /// others.
+    ///
+    /// A waveform hides every one of them. A 50 ns pulse and a 500 ns pulse are the same
+    /// vertical line at any scale a person plots; a gate that never moves looks like a gate
+    /// that was never meant to; and a switching frequency that drifted under load looks
+    /// exactly like the frequency that was asked for.
+    SwitchTiming {
+        switches: Vec<String>,
+        /// Report a conducting interval shorter than this. A real device has a minimum
+        /// on-time -- driver propagation, bootstrap charging, current-sense blanking -- and a
+        /// modulator asking for less does not get a short pulse, it gets an unpredictable one.
+        min_on: Option<f64>,
+        /// Report a non-conducting interval shorter than this, for the same reasons.
+        min_off: Option<f64>,
+        /// Report a measured switching frequency below this. With a closed loop the frequency
+        /// is an outcome rather than a setting, and the magnetics, the losses and the filter
+        /// were all designed for a number nobody checked afterwards.
+        f_min: Option<f64>,
+        /// Report a measured switching frequency above this.
+        f_max: Option<f64>,
+        /// Report a switch that held one state for the whole run.
+        ///
+        /// The most common cause of a converter simulation that produces a plausible wrong
+        /// answer: the modulator never reaches the gate, a `ctrl=` names the wrong block, the
+        /// signal never crosses the gate binding's threshold. What then runs is a different
+        /// circuit -- usually one with a permanently open switch, which still charges and
+        /// still settles.
+        require_commutation: bool,
+    },
 }
 
 impl Watch {
@@ -150,6 +183,7 @@ impl Watch {
         match self {
             Watch::Quantity { quantity } => vec![quantity.as_str()],
             Watch::ForbiddenState { switches, .. } => switches.iter().map(String::as_str).collect(),
+            Watch::SwitchTiming { switches, .. } => switches.iter().map(String::as_str).collect(),
             Watch::RequiredPath {
                 switches, current, ..
             } => switches
