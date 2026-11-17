@@ -99,6 +99,26 @@ struct RuleState {
     prev_on: Vec<String>,
     /// Shortest gap measured between one switch opening and the next closing.
     shortest_deadtime: Option<f64>,
+    /// For [`Watch::SwitchTiming`]: each switch's state on the previous step, when it entered
+    /// that state, and how many transitions it has made. Keyed by switch name, so one rule can
+    /// watch a whole bridge and report the one leg that misbehaved.
+    timing: BTreeMap<String, SwitchHistory>,
+    /// The first time any switch of a timing group was readable, so a frequency is measured
+    /// over the interval actually observed rather than over `[0, t_end]`.
+    timing_since: Option<f64>,
+}
+
+/// One switch's transition history, for [`Watch::SwitchTiming`].
+#[derive(Debug, Clone, Default)]
+struct SwitchHistory {
+    /// Its state on the previous step, or `None` before the first.
+    on: Option<bool>,
+    /// When it entered that state. Not the first step's time for a state it was already in:
+    /// an interval that began before the run started has an unknown length and must not be
+    /// reported as a short pulse.
+    since: Option<f64>,
+    /// Completed transitions, either direction. A switching period is two of them.
+    transitions: usize,
 }
 
 /// Evaluates every rule once per step and reports what changed.
@@ -167,6 +187,7 @@ impl RuleEngine {
         }
 
         self.measure_deadtime(index, t, step, sample, out);
+        self.measure_switch_timing(index, t, step, sample, out);
 
         let Some(observation) = self.observe_watch(index, sample) else {
             self.state[index].missing += 1;
@@ -299,6 +320,20 @@ impl RuleEngine {
                     detail: (count > *max_on).then(|| on.join(", ")),
                 })
             }
+            // A timing rule has no interval of its own: every finding it makes is an instant
+            // produced by `measure_switch_timing` or by `finish`. It still has to answer here,
+            // because returning `None` is how a sample says it cannot read the switches, and
+            // that is what marks a rule NOT EVALUATED. A margin that never violates keeps the
+            // interval machinery idle while still recording that the rule was evaluated.
+            Watch::SwitchTiming { switches, .. } => {
+                let on = conducting(sample, switches)?;
+                Some(Observation {
+                    value: on.len() as f64,
+                    margin: -1.0,
+                    limit: 0.0,
+                    detail: None,
+                })
+            }
             Watch::RequiredPath {
                 switches,
                 current,
@@ -412,6 +447,196 @@ impl RuleEngine {
         }
     }
 
+    /// Record each switch's transitions, and report a pulse shorter than the device allows.
+    ///
+    /// Measured from the resolved states rather than from the modulator's intent, for the same
+    /// reason dead time is: what the device did is the only thing that can be too short.
+    fn measure_switch_timing(
+        &mut self,
+        index: usize,
+        t: f64,
+        step: usize,
+        sample: &impl Sample,
+        out: &mut Vec<EventRecord>,
+    ) {
+        let Watch::SwitchTiming {
+            switches,
+            min_on,
+            min_off,
+            ..
+        } = &self.rules[index].watch
+        else {
+            return;
+        };
+        let (min_on, min_off) = (*min_on, *min_off);
+        let switches = switches.clone();
+
+        // Each switch separately: a bridge's four switches are one rule, and the report has to
+        // name the one that produced the short pulse.
+        let mut findings: Vec<(String, bool, f64, f64)> = Vec::new();
+        for switch in &switches {
+            let Some(now) = sample.switch_on(switch) else {
+                continue;
+            };
+            if self.state[index].timing_since.is_none() {
+                self.state[index].timing_since = Some(t);
+            }
+            let history = self.state[index].timing.entry(switch.clone()).or_default();
+            match history.on {
+                // First sight of this switch. Its current interval began before the run was
+                // watching, so its length is unknown and cannot be judged -- only intervals
+                // that both start and end under observation are measured.
+                None => {
+                    history.on = Some(now);
+                    history.since = None;
+                }
+                Some(was) if was == now => {}
+                Some(was) => {
+                    history.transitions += 1;
+                    if let Some(started) = history.since {
+                        let length = t - started;
+                        let limit = if was { min_on } else { min_off };
+                        if let Some(limit) = limit {
+                            if length < limit {
+                                findings.push((switch.clone(), was, length, limit));
+                            }
+                        }
+                    }
+                    history.on = Some(now);
+                    history.since = Some(t);
+                }
+            }
+        }
+
+        for (switch, was_on, length, limit) in findings {
+            let what = if was_on { "on" } else { "off" };
+            let record = self.instant(
+                index,
+                t,
+                step,
+                length,
+                limit,
+                "s",
+                format!("{switch} was {what} for {length:.4e} s, {limit:.4e} s required"),
+            );
+            self.state[index].instants += 1;
+            self.emit(index, record, out);
+        }
+    }
+
+    /// An [`EventKind::Instant`] finding: something measured at a transition, with no interval.
+    #[allow(clippy::too_many_arguments)]
+    fn instant(
+        &self,
+        index: usize,
+        t: f64,
+        step: usize,
+        value: f64,
+        limit: f64,
+        unit: &str,
+        detail: String,
+    ) -> EventRecord {
+        let rule = &self.rules[index];
+        EventRecord {
+            time: t,
+            step,
+            step_time: t,
+            rule: rule.name.clone(),
+            target: rule.target.clone(),
+            kind: EventKind::Instant,
+            severity: rule.severity,
+            action: taken(rule.action, self.interactive),
+            value,
+            limit,
+            duration: None,
+            peak: None,
+            peak_time: None,
+            truncated: false,
+            detail: Some(detail),
+            unit: unit.to_string(),
+        }
+    }
+
+    /// The end-of-run half of [`Watch::SwitchTiming`]: a frequency is only known once the run
+    /// is over, and a switch that never commutated can only be reported then.
+    fn finish_switch_timing(&mut self, index: usize, step: usize, out: &mut Vec<EventRecord>) {
+        let Watch::SwitchTiming {
+            switches,
+            f_min,
+            f_max,
+            require_commutation,
+            ..
+        } = &self.rules[index].watch
+        else {
+            return;
+        };
+        let (f_min, f_max, require_commutation) = (*f_min, *f_max, *require_commutation);
+        let switches = switches.clone();
+        let t = self.last_time;
+        let span = match self.state[index].timing_since {
+            Some(since) if t > since => t - since,
+            // Nothing was observed, or one step was: a frequency over a zero-length window is
+            // not a measurement, and reporting one would be inventing it.
+            _ => 0.0,
+        };
+
+        let mut findings: Vec<(f64, f64, String)> = Vec::new();
+        for switch in &switches {
+            let Some(history) = self.state[index].timing.get(switch) else {
+                continue;
+            };
+            let transitions = history.transitions;
+            if require_commutation && transitions == 0 {
+                let held = match history.on {
+                    Some(true) => "conducting",
+                    Some(false) => "open",
+                    None => "unreadable",
+                };
+                findings.push((
+                    0.0,
+                    1.0,
+                    format!("{switch} never commutated -- it stayed {held} for the whole run"),
+                ));
+                continue;
+            }
+            if span == 0.0 || transitions == 0 {
+                continue;
+            }
+            // Two transitions per period. A half-cycle at the end of the run contributes its
+            // half, which is why this is not an integer count of completed periods.
+            let frequency = transitions as f64 / 2.0 / span;
+            if let Some(limit) = f_min {
+                if frequency < limit {
+                    findings.push((
+                        frequency,
+                        limit,
+                        format!("{switch} switched at {frequency:.4e} Hz, below {limit:.4e} Hz"),
+                    ));
+                }
+            }
+            if let Some(limit) = f_max {
+                if frequency > limit {
+                    findings.push((
+                        frequency,
+                        limit,
+                        format!("{switch} switched at {frequency:.4e} Hz, above {limit:.4e} Hz"),
+                    ));
+                }
+            }
+        }
+
+        for (value, limit, detail) in findings {
+            let unit = if detail.contains("never commutated") {
+                " transition(s)"
+            } else {
+                " Hz"
+            };
+            let record = self.instant(index, t, step, value, limit, unit, detail);
+            self.state[index].instants += 1;
+            self.emit(index, record, out);
+        }
+    }
+
     /// Fold a finished interval into the totals and emit its leave.
     #[allow(clippy::too_many_arguments)]
     fn close_interval(
@@ -496,6 +721,7 @@ impl RuleEngine {
                 }
                 self.close_interval(index, &active, t, step, t, true, &mut out);
             }
+            self.finish_switch_timing(index, step, &mut out);
         }
         let summaries = self
             .rules

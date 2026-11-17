@@ -70,7 +70,8 @@ R_dead  kind=rule type=forbidden_state switches=DSH,DSL min_deadtime=200n
 R_path  kind=rule type=required_path switches=DSH,DSL current=I(L1) i_min=1
 ```
 
-`type=` is one of `above`, `below`, `outside`, `inside`, `forbidden_state` or `required_path`.
+`type=` is one of `above`, `below`, `outside`, `inside`, `forbidden_state`, `required_path` or
+`switch_timing`.
 The first four take a `target=` naming any column the CSV has — a node voltage `V(node)`, a
 branch current `I(element)`, a voltage across a pair `V(p,n)`, or a block output by its own name.
 
@@ -86,6 +87,59 @@ branch current `I(element)`, a voltage across a pair `V(p,n)`, or a block output
   itself.
 - `required_path switches=D1,D2 current=I(L1) i_min=1` reports the opposite mistake: a current
   of at least 1 A with no device left to carry it.
+
+### `switch_timing`: when a switch changes, not what state it is in
+
+```text
+T_sh kind=rule type=switch_timing switches=DSH,DSL min_on=300n min_off=300n \
+     f_min=18k f_max=22k
+```
+
+Three questions with one answer, because all three are read off the same record of resolved
+transitions:
+
+| field | reports |
+|---|---|
+| `min_on` | a conducting interval shorter than this |
+| `min_off` | a non-conducting interval shorter than this |
+| `f_min`, `f_max` | a measured switching frequency outside the band |
+| `require_commutation` | a switch that held one state for the whole run (default: yes) |
+
+**`require_commutation` defaults to yes**, and is the one to leave on. A gate that never
+reaches its switch is the most common cause of a converter simulation that produces a plausible
+wrong answer — a `ctrl=` naming the wrong block, a modulator whose output never crosses the
+gate's threshold, a constant left at zero during debugging. What then runs is a different
+circuit, usually one with a permanently open switch, which still charges and still settles. The
+waveform of such a run looks entirely reasonable:
+
+```text
+[100.0000 us] ERROR DSW.T_sw  at 0.0000 transition(s)  limit 1.0000 transition(s)
+              [DSW never commutated -- it stayed open for the whole run]
+```
+
+It also guards the other two checks: a switch that never commutated cannot have produced a
+measurable on-time or frequency either, so a rule that asked for those and stayed quiet would
+be reporting a pass it never established.
+
+**Minimum on and off times** are about the device rather than the circuit. A real switch needs
+driver propagation, bootstrap charging and current-sense blanking; a modulator asking for a
+50 ns on-pulse from a device that needs 300 ns does not get a short pulse, it gets an
+unpredictable one, and the duty cycle the simulation settled on describes a converter nobody
+can build. The report carries the pulse that was actually delivered:
+
+```text
+[14.4000 us] WARN DSW.T_sw  at 4.4000 us  limit 6.0000 us
+             [DSW was on for 4.4000e-6 s, 6.0000e-6 s required]
+```
+
+An interval already in progress at the first step is not judged — it began before anything was
+watching, so its length is not a measurement.
+
+**The switching frequency** is measured from the transitions, not read from the modulator's
+`freq=`. With a closed loop it is an outcome rather than a setting: a hysteretic or
+current-mode loop can double its frequency under one load and halve it under another, and the
+magnetics, the losses and the EMI filter were all designed for a number nobody checked
+afterwards. Two transitions make a period, and the window is the interval actually observed.
 
 ### Qualifiers
 

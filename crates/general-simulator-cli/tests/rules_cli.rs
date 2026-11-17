@@ -456,3 +456,165 @@ fn raising_a_rating_still_loads_the_checkpoint_of_the_run_it_stopped() {
         "stopping on a rating and resuming must reproduce the uninterrupted run exactly"
     );
 }
+
+// -------------------------------------------------------------------------------------------
+// `type=switch_timing`: never commutated, minimum on/off time, switching frequency. See #52.
+// -------------------------------------------------------------------------------------------
+
+/// The buck with its gate wired to a constant 0, so the switch never turns on. The converter
+/// still charges through the diode and still settles: the waveform of this deck is the reason
+/// the check has to exist, because nothing about it looks wrong.
+const DEAD_GATE: &str = "\
+VIN vin 0 12
+DSW vin sw idealswitchmodel
+DSW kind=ideal_switch r_on=0.05 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=block ctrl=GATE
+D1 0 sw dmodel
+D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.4 g_on=5
+L1 sw out 22e-6
+C1 out 0 47e-6 ic=3
+RL out 0 4
+DEAD kind=const value=0
+GATE kind=sig2phys domain=voltage in=DEAD
+";
+
+#[test]
+fn a_switch_that_never_commutated_is_reported() {
+    let netlist = write(
+        "dead_gate.cir",
+        &format!("{DEAD_GATE}T_sw kind=rule type=switch_timing switches=DSW severity=error\n"),
+    );
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "1e-4",
+        "--dt",
+        "1e-7",
+    ]);
+    assert_eq!(output.status.code(), Some(2), "a dead gate is an error");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("never commutated"), "{stderr}");
+    assert!(stderr.contains("stayed open"), "{stderr}");
+}
+
+#[test]
+fn a_switch_that_does_commutate_passes_the_same_rule() {
+    // The same rule on the working buck. Without this, the test above would pass for a check
+    // that reports every switch it is pointed at.
+    let netlist = write(
+        "live_gate.cir",
+        &format!("{BUCK}T_sw kind=rule type=switch_timing switches=DSW severity=error\n"),
+    );
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "1e-4",
+        "--dt",
+        "1e-7",
+    ]);
+    assert_eq!(output.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("0 violated, 1 passed"), "{stderr}");
+}
+
+#[test]
+fn an_on_pulse_shorter_than_the_device_allows_is_reported_with_its_length() {
+    // The buck's duty is about 0.44 at 100 kHz, so the on-time is roughly 4.4 us. Demanding
+    // 6 us reports it; the number in the log is the pulse that was actually delivered.
+    let netlist = write(
+        "min_on.cir",
+        &format!(
+            "{BUCK}T_sw kind=rule type=switch_timing switches=DSW min_on=6u severity=warning\n"
+        ),
+    );
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "5e-5",
+        "--dt",
+        "1e-7",
+    ]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("DSW was on for"), "{stderr}");
+    assert!(stderr.contains("6.0000e-6 s required"), "{stderr}");
+
+    let events = fs::read_to_string(netlist.with_extension("events.jsonl")).expect("the log");
+    assert!(events.contains("\"kind\":\"instant\""), "{events}");
+    assert!(events.contains("\"unit\":\"s\""), "{events}");
+}
+
+#[test]
+fn a_switching_frequency_is_measured_and_held_to_its_band() {
+    // The modulator is a 100 kHz PWM. Measured from the resolved transitions, which is the
+    // point: with a closed loop the frequency is an outcome, not a setting.
+    let netlist = write(
+        "freq.cir",
+        &format!(
+            "{BUCK}T_f kind=rule type=switch_timing switches=DSW f_min=200k \
+             require_commutation=no severity=warning\n"
+        ),
+    );
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "3e-4",
+        "--dt",
+        "1e-7",
+    ]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("below 2.0000e5 Hz"), "{stderr}");
+    // 100 kHz asked for, 100 kHz measured: the figure has to be trustworthy or the band is
+    // meaningless. A 1 kHz window on a 100 kHz measurement is a 1% tolerance.
+    assert!(
+        stderr.contains("1.0003e5 Hz") || stderr.contains("1.0000e5 Hz"),
+        "{stderr}"
+    );
+
+    // And inside a band that contains it, the same deck passes.
+    let ok = write(
+        "freq_ok.cir",
+        &format!(
+            "{BUCK}T_f kind=rule type=switch_timing switches=DSW f_min=90k f_max=110k \
+             severity=warning\n"
+        ),
+    );
+    let output = run(&[
+        ok.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "3e-4",
+        "--dt",
+        "1e-7",
+    ]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("0 violated, 1 passed"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn require_commutation_rejects_a_value_that_is_not_yes_or_no() {
+    let netlist = write(
+        "bad_flag.cir",
+        &format!(
+            "{BUCK}T_sw kind=rule type=switch_timing switches=DSW require_commutation=maybe\n"
+        ),
+    );
+    let output = run(&[netlist.to_str().unwrap(), "--mode", "transient"]);
+    assert_ne!(output.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("require_commutation must be yes or no"),
+        "{stderr}"
+    );
+}
