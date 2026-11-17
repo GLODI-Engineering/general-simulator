@@ -526,10 +526,86 @@ fn parse_rule(name: &str, line: usize, fields: &BTreeMap<&str, &str>) -> Result<
                 String::new(),
             )
         }
+        "rate_of_change" => {
+            let quantity = fields
+                .get("target")
+                .copied()
+                .ok_or_else(|| ctx("missing field 'target'".into()))?
+                .to_string();
+            let max_slope = number("max_slope")?;
+            if max_slope <= 0.0 {
+                return Err(ctx(format!(
+                    "'max_slope' must be greater than zero, not '{max_slope}' -- it bounds a \
+                     magnitude"
+                )));
+            }
+            (
+                Watch::RateOfChange {
+                    quantity: quantity.clone(),
+                    max_slope,
+                },
+                Condition::Above { limit: max_slope },
+                quantity,
+                fields
+                    .get("unit")
+                    .copied()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| " /s".to_string()),
+            )
+        }
+        "body_diode" => {
+            let switches = list("switches")?;
+            let currents = list("currents")?;
+            if currents.len() != switches.len() {
+                return Err(ctx(format!(
+                    "'currents' lists {} name(s) for {} switch(es) -- a switch's own current \
+                     is not an MNA unknown, so each one has to be named",
+                    currents.len(),
+                    switches.len()
+                )));
+            }
+            let i_min = number("i_min")?;
+            let target = fields
+                .get("name")
+                .copied()
+                .map(str::to_string)
+                .unwrap_or_else(|| switches.join("+"));
+            (
+                Watch::BodyDiode {
+                    switches,
+                    i_min,
+                    currents,
+                },
+                Condition::Above { limit: i_min },
+                target,
+                " A".to_string(),
+            )
+        }
+        "commutation_order" => {
+            let sequence = list("sequence")?;
+            if sequence.len() < 2 {
+                return Err(ctx(
+                    "'sequence' needs at least two switches -- an order of one is not an order"
+                        .into(),
+                ));
+            }
+            let target = fields
+                .get("name")
+                .copied()
+                .map(str::to_string)
+                .unwrap_or_else(|| sequence.join("->"));
+            (
+                Watch::CommutationOrder { sequence },
+                Condition::Above { limit: 0.0 },
+                target,
+                String::new(),
+            )
+        }
         other => {
             return Err(ctx(format!(
                 "unknown rule type '{other}' -- one of above, below, outside, inside, \
-                 forbidden_state, required_path, switch_timing"
+                 forbidden_state, required_path, switch_timing, rate_of_change, body_diode, \
+                 commutation_order"
             )))
         }
     };
@@ -648,6 +724,19 @@ impl Sample for StepSample<'_> {
 
     fn switch_on(&self, switch: &str) -> Option<bool> {
         self.gates.get(switch).map(|state| *state == GateState::On)
+    }
+
+    fn body_diode_on(&self, switch: &str) -> Option<bool> {
+        // A switch appears in the step's segment list only while it is commanded off: an on
+        // switch is stamped as a plain `r_on` resistance, with no segment to resolve. So
+        // `None` here means "commanded on, or not a switch", and `Some(false)` means
+        // "commanded off and blocking" -- the distinction the rule depends on.
+        let position = self.point.diode_names.iter().position(|n| n == switch)?;
+        let (breakdown, forward) = self.point.diode_z.get(position)?;
+        // `z1 > 0` is the breakdown segment and `z2 > 0` the forward one; both at zero is the
+        // blocking segment between them. A body diode conducting in either direction carries
+        // current, which is what the rule asks about.
+        Some(*breakdown > 0.0 || *forward > 0.0)
     }
 }
 

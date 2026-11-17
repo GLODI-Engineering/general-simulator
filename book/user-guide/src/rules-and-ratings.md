@@ -70,8 +70,8 @@ R_dead  kind=rule type=forbidden_state switches=DSH,DSL min_deadtime=200n
 R_path  kind=rule type=required_path switches=DSH,DSL current=I(L1) i_min=1
 ```
 
-`type=` is one of `above`, `below`, `outside`, `inside`, `forbidden_state`, `required_path` or
-`switch_timing`.
+`type=` is one of `above`, `below`, `outside`, `inside`, `forbidden_state`, `required_path`,
+`switch_timing`, `rate_of_change`, `body_diode` or `commutation_order`.
 The first four take a `target=` naming any column the CSV has — a node voltage `V(node)`, a
 branch current `I(element)`, a voltage across a pair `V(p,n)`, or a block output by its own name.
 
@@ -140,6 +140,67 @@ watching, so its length is not a measurement.
 current-mode loop can double its frequency under one load and halve it under another, and the
 magnetics, the losses and the EMI filter were all designed for a number nobody checked
 afterwards. Two transitions make a period, and the window is the interval actually observed.
+
+### `rate_of_change`: how fast a quantity may change
+
+```text
+R_cut kind=rule type=rate_of_change target=I(L1) max_slope=1e7 unit=A/s
+```
+
+The general form of the cut-current check. Open every switch in an inductor's path and the
+current has nowhere to go; the solver answers with whatever voltage the stamp implies rather
+than with an error, and the result is the enormous spike everyone has seen and that is
+routinely blamed on the solver rather than on the netlist.
+
+`required_path` catches that case when the switches that should have been conducting can be
+named. This catches it from the other side, off the solution: a current step through an
+inductance implies $v = L \, \mathrm{d}i/\mathrm{d}t$, so a bound on the slope is a bound on
+that voltage. It is judged on magnitude, because a cut current collapses as violently as it
+surges.
+
+Pick the bound from the circuit, not from taste. A buck inductor with 9 V across 22 µH slews at
+$9/22\,\mu \approx 4.1 \times 10^5$ A/s, so a bound of $10^7$ A/s leaves ordinary operation
+alone and still catches a cut.
+
+### `body_diode`: a switch that is off and conducting anyway
+
+```text
+B_dsl kind=rule type=body_diode switches=DSL currents=I(VSL) i_min=10
+```
+
+Not a fault by itself — it is exactly how a synchronous bridge freewheels during dead time, and
+how every unsynchronised commutation is survived. It becomes a finding when the current is
+large, because then it is either a sync FET whose channel was never turned on (so the losses
+are the diode's, several times what the design assumed) or a path nobody intended.
+
+`currents=` names one current per switch, in the same order, because **a switch's own current is
+not an MNA unknown**. Only `V`, `L`, `E` and `H` carry one. The way to observe a switch current
+is the standard one, and the engine suggests it when asked for such a current directly: put a
+0 V source in series with the device and probe that.
+
+```text
+VSL mid sl 0
+DSL sl 0 idealswitchmodel
+```
+
+Only a commanded-*off* switch can produce this finding, and that is not a limitation of the
+rule but of what the question means: a switch commanded on is stamped as a plain resistance
+conducting in both directions, so it cannot fail to conduct.
+
+### `commutation_order`: the order switches take over the current in
+
+```text
+C_ord kind=rule type=commutation_order sequence=S1,S2,S3,S4
+```
+
+Multi-step commutation — a current-source inverter, a matrix converter, any four-step sequence
+— is correct only if the transitions happen in the stated order. Out of order it still
+simulates, and the answer is wrong in a way nothing in the waveform reveals.
+
+The order is cyclic, and its phase comes from the first turn-on observed rather than from the
+first entry of the list: a run that begins midway through a sequence has not got the order
+wrong. After a departure the rule resynchronises to what actually happened, so one mistake
+produces one finding rather than one per transition for the rest of the run.
 
 ### Qualifiers
 

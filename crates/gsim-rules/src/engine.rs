@@ -40,6 +40,13 @@ pub trait Sample {
     fn switch_on(&self, _switch: &str) -> Option<bool> {
         None
     }
+
+    /// Whether a commanded-off switch's body diode is carrying current, or `None` when this
+    /// sample cannot say -- which includes every commanded-*on* switch, because an on switch
+    /// is stamped as a plain resistance and has no body-diode segment to resolve.
+    fn body_diode_on(&self, _switch: &str) -> Option<bool> {
+        None
+    }
 }
 
 impl Sample for BTreeMap<String, f64> {
@@ -106,6 +113,13 @@ struct RuleState {
     /// The first time any switch of a timing group was readable, so a frequency is measured
     /// over the interval actually observed rather than over `[0, t_end]`.
     timing_since: Option<f64>,
+    /// For [`Watch::RateOfChange`]: the quantity's value on the previous step, which is what a
+    /// slope is measured from.
+    prev_value: Option<f64>,
+    /// For [`Watch::CommutationOrder`]: which entry of the sequence should turn on next. Set
+    /// by the first turn-on seen rather than starting at zero, so a run that begins midway
+    /// through a sequence is not reported for it.
+    expected_index: Option<usize>,
 }
 
 /// One switch's transition history, for [`Watch::SwitchTiming`].
@@ -188,6 +202,7 @@ impl RuleEngine {
 
         self.measure_deadtime(index, t, step, sample, out);
         self.measure_switch_timing(index, t, step, sample, out);
+        self.check_commutation_order(index, t, step, sample, out);
 
         let Some(observation) = self.observe_watch(index, sample) else {
             self.state[index].missing += 1;
@@ -265,6 +280,11 @@ impl RuleEngine {
 
         self.state[index].prev_time = Some(t);
         self.state[index].prev_margin = Some(margin);
+        if let Watch::RateOfChange { quantity, .. } = &self.rules[index].watch {
+            // The quantity itself, not the margin: the margin is already a slope, and
+            // differentiating it would measure an acceleration.
+            self.state[index].prev_value = sample.get(quantity);
+        }
     }
 
     /// Emit the enter once the hold time is satisfied (or there is none).
@@ -327,6 +347,83 @@ impl RuleEngine {
             // interval machinery idle while still recording that the rule was evaluated.
             Watch::SwitchTiming { switches, .. } => {
                 let on = conducting(sample, switches)?;
+                Some(Observation {
+                    value: on.len() as f64,
+                    margin: -1.0,
+                    limit: 0.0,
+                    detail: None,
+                })
+            }
+            Watch::RateOfChange {
+                quantity,
+                max_slope,
+            } => {
+                let value = sample.get(quantity)?;
+                let state = &self.state[index];
+                let slope = match (state.prev_value, state.prev_time) {
+                    (Some(previous), Some(then)) if self.last_time > then => {
+                        (value - previous) / (self.last_time - then)
+                    }
+                    // The first step, or two samples at the same instant. There is no slope
+                    // yet, and reporting `None` would count the step as unreadable and leave
+                    // every rate rule marked NOT EVALUATED for the one step it could never
+                    // have answered.
+                    _ => 0.0,
+                };
+                Some(Observation {
+                    value: slope,
+                    margin: slope.abs() - *max_slope,
+                    limit: *max_slope,
+                    detail: None,
+                })
+            }
+            Watch::BodyDiode {
+                switches,
+                i_min,
+                currents,
+            } => {
+                // A switch commanded *on* is a plain resistance with no segment to resolve, so
+                // `body_diode_on` says nothing about it -- which is the right answer, not a
+                // missing sample. Only a switch that is both off and conducting counts.
+                let mut known = false;
+                let mut worst = 0.0f64;
+                let mut offenders = Vec::new();
+                for (position, switch) in switches.iter().enumerate() {
+                    let Some(off) = sample.switch_on(switch).map(|on| !on) else {
+                        continue;
+                    };
+                    known = true;
+                    if !off || sample.body_diode_on(switch) != Some(true) {
+                        continue;
+                    }
+                    let Some(name) = currents.get(position) else {
+                        continue;
+                    };
+                    let Some(current) = sample.get(name) else {
+                        continue;
+                    };
+                    if current.abs() > worst {
+                        worst = current.abs();
+                    }
+                    if current.abs() >= *i_min {
+                        offenders.push(switch.as_str());
+                    }
+                }
+                if !known {
+                    return None;
+                }
+                Some(Observation {
+                    value: worst,
+                    margin: worst - *i_min,
+                    limit: *i_min,
+                    detail: (!offenders.is_empty())
+                        .then(|| format!("body diode conducting in {}", offenders.join(", "))),
+                })
+            }
+            // Every finding is an instant produced by `check_commutation_order`; this answers
+            // only so that an unreadable switch is reported as unreadable.
+            Watch::CommutationOrder { sequence } => {
+                let on = conducting(sample, sequence)?;
                 Some(Observation {
                     value: on.len() as f64,
                     margin: -1.0,
@@ -521,6 +618,72 @@ impl RuleEngine {
             );
             self.state[index].instants += 1;
             self.emit(index, record, out);
+        }
+    }
+
+    /// Report a turn-on that happened out of the stated order.
+    ///
+    /// The phase is set by the first turn-on observed rather than assumed to be the first
+    /// entry of the sequence: a run that begins midway through a commutation is not a run that
+    /// got the order wrong, and reporting it would be an artefact of where the window opened.
+    fn check_commutation_order(
+        &mut self,
+        index: usize,
+        t: f64,
+        step: usize,
+        sample: &impl Sample,
+        out: &mut Vec<EventRecord>,
+    ) {
+        let Watch::CommutationOrder { sequence } = &self.rules[index].watch else {
+            return;
+        };
+        let sequence = sequence.clone();
+        if sequence.is_empty() {
+            return;
+        }
+
+        // Turn-ons only. A sequence states the order devices take over the current in, and a
+        // turn-off is the consequence of the next one taking it.
+        let mut turned_on: Vec<(usize, String)> = Vec::new();
+        for (position, switch) in sequence.iter().enumerate() {
+            let Some(now) = sample.switch_on(switch) else {
+                continue;
+            };
+            let history = self.state[index].timing.entry(switch.clone()).or_default();
+            let was = history.on;
+            history.on = Some(now);
+            if was == Some(false) && now {
+                turned_on.push((position, switch.clone()));
+            }
+        }
+
+        for (position, switch) in turned_on {
+            match self.state[index].expected_index {
+                None => {}
+                Some(expected) if expected == position => {}
+                Some(expected) => {
+                    let wanted = &sequence[expected];
+                    let record = self.instant(
+                        index,
+                        t,
+                        step,
+                        position as f64,
+                        expected as f64,
+                        "",
+                        format!(
+                            "{switch} turned on out of order -- {wanted} was expected next in \
+                             {}",
+                            sequence.join(" -> ")
+                        ),
+                    );
+                    self.state[index].instants += 1;
+                    self.emit(index, record, out);
+                }
+            }
+            // Resynchronised to what actually happened, not to what was wanted: otherwise one
+            // departure reports again on every later transition, and a log with a thousand
+            // lines in it hides the one that mattered.
+            self.state[index].expected_index = Some((position + 1) % sequence.len());
         }
     }
 
