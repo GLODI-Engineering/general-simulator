@@ -88,8 +88,8 @@ impl RuleSummary {
         );
         if let (Some(value), Some(time)) = (self.worst_value, self.worst_time) {
             line.push_str(&format!(
-                ", worst {:.4}{} at {}",
-                value,
+                ", worst {}{} at {}",
+                crate::format_magnitude(value),
                 self.unit,
                 format_time(time)
             ));

@@ -213,6 +213,23 @@ pub enum Watch {
         /// because a switch's own current is not an MNA unknown.
         currents: Vec<String>,
     },
+    /// A quantity averaged over one switching period, rather than at an instant.
+    ///
+    /// The quantities that say whether a converter is working are averages over a period, and
+    /// no instantaneous check can express them. The motivating case is a real one: a
+    /// transformer's magnetising current drifting from 40 A to 245 A over a run, while every
+    /// instantaneous rule passes throughout. Nothing is over a limit at any moment. What is
+    /// wrong is that the volt-seconds applied to the winding do not sum to zero over a period,
+    /// so each cycle leaves a little more flux than the last.
+    PerPeriod {
+        quantity: String,
+        measure: PeriodMeasure,
+        boundary: PeriodBoundary,
+        /// Report a period whose measure falls below this.
+        min: Option<f64>,
+        /// Report a period whose measure rises above this.
+        max: Option<f64>,
+    },
     /// The order a group of switches must turn on in.
     ///
     /// Multi-step commutation -- a current-source inverter, a matrix converter, any four-step
@@ -222,6 +239,36 @@ pub enum Watch {
         /// The cyclic order of turn-ons. After the last, the next expected is the first again.
         sequence: Vec<String>,
     },
+}
+
+/// What to compute over one period.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeriodMeasure {
+    /// Root mean square -- what a component is rated by, as opposed to its peak.
+    Rms,
+    /// The plain average, for a DC-link current or an output voltage.
+    Mean,
+    /// The average of the magnitude, which is what a thermal estimate wants.
+    AbsMean,
+    /// The integral over the period: $\int_t^{t+T} x \, \mathrm{d}t$.
+    ///
+    /// For a winding voltage this is the volt-second balance, and it should be zero. A bound on
+    /// how far from zero it may be is the check that catches a flux walk-away.
+    Integral,
+}
+
+/// Where one period ends and the next begins.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeriodBoundary {
+    /// A stated period, for an open-loop converter at a fixed frequency.
+    Fixed(f64),
+    /// Each interval between successive turn-ons of a named switch.
+    ///
+    /// With a closed loop the period is an outcome rather than a setting, so the only honest
+    /// boundary is the one the circuit actually produced.
+    Sync(String),
 }
 
 impl Watch {
@@ -234,6 +281,12 @@ impl Watch {
             Watch::RateOfChange { quantity, .. } => vec![quantity.as_str()],
             Watch::BodyDiode { switches, .. } => switches.iter().map(String::as_str).collect(),
             Watch::CommutationOrder { sequence } => sequence.iter().map(String::as_str).collect(),
+            Watch::PerPeriod {
+                quantity, boundary, ..
+            } => match boundary {
+                PeriodBoundary::Fixed(_) => vec![quantity.as_str()],
+                PeriodBoundary::Sync(switch) => vec![quantity.as_str(), switch.as_str()],
+            },
             Watch::RequiredPath {
                 switches, current, ..
             } => switches

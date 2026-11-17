@@ -20,7 +20,7 @@
 use std::collections::BTreeMap;
 
 use crate::event::{Action, EventKind, EventRecord, Severity};
-use crate::rule::{Rule, Watch};
+use crate::rule::{PeriodBoundary, PeriodMeasure, Rule, Watch};
 use crate::summary::RuleSummary;
 
 /// What the engine reads each step.
@@ -120,6 +120,93 @@ struct RuleState {
     /// by the first turn-on seen rather than starting at zero, so a run that begins midway
     /// through a sequence is not reported for it.
     expected_index: Option<usize>,
+    /// For [`Watch::PerPeriod`]: the period being accumulated.
+    period: Option<Accumulator>,
+    /// Whether a sync boundary has been seen, so the fragment before the first one is not
+    /// mistaken for a period.
+    period_started: bool,
+}
+
+/// One period's running integrals, for [`Watch::PerPeriod`].
+///
+/// Streaming rather than buffered. `gs-waveform-measurements` computes these over a complete
+/// slice, and buffering a period per rule is unbounded -- at 10 ns steps a 50 Hz period is two
+/// million samples. The per-segment forms below are that crate's own, so a `kind=measure` RMS
+/// and a per-period RMS over the same window agree rather than differing in the last digits by
+/// a quadrature rule nobody chose.
+#[derive(Debug, Clone)]
+struct Accumulator {
+    /// When this period began.
+    started: f64,
+    /// The sample at the previous step: the left end of the segment being integrated.
+    previous: Option<(f64, f64)>,
+    /// $\int x \, \mathrm{d}t$.
+    integral: f64,
+    /// $\int x^2 \, \mathrm{d}t$.
+    integral_squared: f64,
+    /// $\int |x| \, \mathrm{d}t$.
+    integral_abs: f64,
+}
+
+impl Accumulator {
+    fn new(started: f64) -> Accumulator {
+        Accumulator {
+            started,
+            previous: None,
+            integral: 0.0,
+            integral_squared: 0.0,
+            integral_abs: 0.0,
+        }
+    }
+
+    /// Fold the segment from the previous sample to `(t, value)` into the integrals.
+    fn extend(&mut self, t: f64, value: f64) {
+        if let Some((then, before)) = self.previous {
+            let dt = t - then;
+            if dt > 0.0 {
+                // Trapezoid, which is exact for the linear segment between two samples.
+                self.integral += dt * 0.5 * (before + value);
+                // The exact integral of the square of that same linear segment -- not
+                // `dt/2 * (a^2 + b^2)`, which is the trapezoid of the square and a different
+                // number. This is the form `gs_waveform_measurements::rms` uses.
+                self.integral_squared +=
+                    dt / 3.0 * (before * before + before * value + value * value);
+                self.integral_abs += integral_of_abs(dt, before, value);
+            }
+        }
+        self.previous = Some((t, value));
+    }
+
+    /// The measure over `[started, ended]`, or `None` for a period of no length.
+    fn measure(&self, measure: PeriodMeasure, ended: f64) -> Option<f64> {
+        let span = ended - self.started;
+        if span <= 0.0 {
+            return None;
+        }
+        Some(match measure {
+            PeriodMeasure::Rms => (self.integral_squared / span).sqrt(),
+            PeriodMeasure::Mean => self.integral / span,
+            PeriodMeasure::AbsMean => self.integral_abs / span,
+            PeriodMeasure::Integral => self.integral,
+        })
+    }
+}
+
+/// $\int_0^{\Delta t} |x| \, \mathrm{d}t$ for the linear segment from `a` to `b`.
+///
+/// Split at the zero crossing when the segment changes sign, because the magnitude of a line
+/// that crosses zero is not a line: taking `|a + b| / 2` there would report a cancellation that
+/// does not happen, and a symmetric current -- a transformer's, say -- would come out near zero
+/// when its mean magnitude is what a thermal estimate needs.
+fn integral_of_abs(dt: f64, a: f64, b: f64) -> f64 {
+    if (a >= 0.0) == (b >= 0.0) {
+        return dt * 0.5 * (a.abs() + b.abs());
+    }
+    // Where the line crosses zero, as a fraction of the segment.
+    let crossing = a.abs() / (a.abs() + b.abs());
+    let first = dt * crossing * 0.5 * a.abs();
+    let second = dt * (1.0 - crossing) * 0.5 * b.abs();
+    first + second
 }
 
 /// One switch's transition history, for [`Watch::SwitchTiming`].
@@ -203,6 +290,7 @@ impl RuleEngine {
         self.measure_deadtime(index, t, step, sample, out);
         self.measure_switch_timing(index, t, step, sample, out);
         self.check_commutation_order(index, t, step, sample, out);
+        self.measure_period(index, t, step, sample, out);
 
         let Some(observation) = self.observe_watch(index, sample) else {
             self.state[index].missing += 1;
@@ -418,6 +506,24 @@ impl RuleEngine {
                     limit: *i_min,
                     detail: (!offenders.is_empty())
                         .then(|| format!("body diode conducting in {}", offenders.join(", "))),
+                })
+            }
+            // Every finding is an instant produced by `measure_period`; this answers only so
+            // that a quantity the sample does not carry is reported as unreadable.
+            Watch::PerPeriod {
+                quantity, boundary, ..
+            } => {
+                let value = readable(sample.get(quantity))?;
+                if let PeriodBoundary::Sync(switch) = boundary {
+                    // A sync switch the netlist does not have makes the rule unanswerable, not
+                    // merely quiet: without a boundary no period ever closes.
+                    sample.switch_on(switch)?;
+                }
+                Some(Observation {
+                    value,
+                    margin: -1.0,
+                    limit: 0.0,
+                    detail: None,
                 })
             }
             // Every finding is an instant produced by `check_commutation_order`; this answers
@@ -687,6 +793,142 @@ impl RuleEngine {
         }
     }
 
+    /// Accumulate the current period and report one that falls outside its bounds.
+    ///
+    /// A fixed period closes by *splitting* the step that crosses the boundary: the sample at
+    /// the boundary is interpolated between the two steps either side of it, the part before
+    /// belongs to the period that is closing, and the part after opens the next. Closing at the
+    /// step that noticed instead would measure one period plus however much of a step the
+    /// stepping happened to leave, and for volt-second balance that is not a small error -- the
+    /// quantity being bounded is near zero, so a stray step's worth of volt-seconds is not
+    /// small compared with it.
+    fn measure_period(
+        &mut self,
+        index: usize,
+        t: f64,
+        step: usize,
+        sample: &impl Sample,
+        out: &mut Vec<EventRecord>,
+    ) {
+        let Watch::PerPeriod {
+            quantity,
+            measure,
+            boundary,
+            min,
+            max,
+        } = &self.rules[index].watch
+        else {
+            return;
+        };
+        let (measure, min, max) = (*measure, *min, *max);
+        let boundary = boundary.clone();
+        let quantity = quantity.clone();
+        let Some(value) = readable(sample.get(&quantity)) else {
+            return;
+        };
+
+        // A sync boundary has to see the switch transition whether or not a period is open, so
+        // the transition is recorded first and its answer used below.
+        let synced = match &boundary {
+            PeriodBoundary::Sync(switch) => {
+                let Some(now) = sample.switch_on(switch) else {
+                    return;
+                };
+                let history = self.state[index].timing.entry(switch.clone()).or_default();
+                let was = history.on;
+                history.on = Some(now);
+                was == Some(false) && now
+            }
+            PeriodBoundary::Fixed(period) if *period <= 0.0 => return,
+            PeriodBoundary::Fixed(_) => false,
+        };
+
+        // With a sync boundary the first turn-on does not close a period, it establishes where
+        // the first one starts: the interval from the run's beginning to that turn-on is a
+        // fragment of a period that began before anything was watching, and measuring it would
+        // report a volt-second balance over whatever fraction of a cycle the run happened to
+        // open in. Same discipline as the first switch interval in `measure_switch_timing`.
+        if synced && !self.state[index].period_started {
+            self.state[index].period_started = true;
+            let mut first = Accumulator::new(t);
+            first.extend(t, value);
+            self.state[index].period = Some(first);
+            return;
+        }
+
+        // The first sample opens the first period. Nothing before it is judged: a period that
+        // began before the run was watching has no measurable start.
+        let Some(open) = self.state[index].period.as_mut() else {
+            let mut first = Accumulator::new(t);
+            first.extend(t, value);
+            self.state[index].period = Some(first);
+            return;
+        };
+
+        // Where this period ends, and the sample there.
+        let ending = match &boundary {
+            PeriodBoundary::Sync(_) => synced.then_some((t, value)),
+            PeriodBoundary::Fixed(period) => {
+                let ends_at = open.started + *period;
+                (t >= ends_at).then(|| {
+                    let at_boundary = match open.previous {
+                        Some((then, before)) if t > then => {
+                            before + (value - before) * (ends_at - then) / (t - then)
+                        }
+                        // Nothing to interpolate from, or two samples at one instant.
+                        _ => value,
+                    };
+                    (ends_at, at_boundary)
+                })
+            }
+        };
+
+        let Some((ends_at, at_boundary)) = ending else {
+            open.extend(t, value);
+            return;
+        };
+
+        // Close the period at the boundary, not at this step.
+        open.extend(ends_at, at_boundary);
+        let result = open.measure(measure, ends_at);
+        let started = open.started;
+
+        // Open the next period at the boundary, carrying the boundary sample as its left end so
+        // the segment straddling two periods is split between them rather than dropped.
+        let mut next = Accumulator::new(ends_at);
+        next.extend(ends_at, at_boundary);
+        if t > ends_at {
+            next.extend(t, value);
+        }
+        self.state[index].period = Some(next);
+
+        let Some(result) = result else {
+            return;
+        };
+        let outside = match (min, max) {
+            (Some(low), _) if result < low => Some(low),
+            (_, Some(high)) if result > high => Some(high),
+            _ => None,
+        };
+        if let Some(limit) = outside {
+            let unit = self.rules[index].unit.clone();
+            let record = self.instant(
+                index,
+                ends_at,
+                step,
+                result,
+                limit,
+                &unit,
+                format!(
+                    "{} over the period {started:e} s .. {ends_at:e} s",
+                    describe_measure(measure, &quantity)
+                ),
+            );
+            self.state[index].instants += 1;
+            self.emit(index, record, out);
+        }
+    }
+
     /// An [`EventKind::Instant`] finding: something measured at a transition, with no interval.
     #[allow(clippy::too_many_arguments)]
     fn instant(
@@ -907,6 +1149,16 @@ impl RuleEngine {
             })
             .collect();
         (out, summaries)
+    }
+}
+
+/// How to name a per-period measure in a report.
+fn describe_measure(measure: PeriodMeasure, quantity: &str) -> String {
+    match measure {
+        PeriodMeasure::Rms => format!("RMS of {quantity}"),
+        PeriodMeasure::Mean => format!("mean of {quantity}"),
+        PeriodMeasure::AbsMean => format!("mean |{quantity}|"),
+        PeriodMeasure::Integral => format!("integral of {quantity}"),
     }
 }
 

@@ -118,6 +118,7 @@ version = "0.1.0"
 name = "gsim-rules"
 version = "0.5.1"
 dependencies = [
+ "gs-waveform-measurements",
  "serde",
  "serde_json",
 ]

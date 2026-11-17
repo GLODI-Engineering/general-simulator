@@ -47,6 +47,6 @@ mod rule;
 mod summary;
 
 pub use engine::{worst_severity, RuleEngine, Sample};
-pub use event::{format_time, Action, EventKind, EventRecord, Severity};
-pub use rule::{Condition, Qualifiers, Rule, Watch};
+pub use event::{format_magnitude, format_time, Action, EventKind, EventRecord, Severity};
+pub use rule::{Condition, PeriodBoundary, PeriodMeasure, Qualifiers, Rule, Watch};
 pub use summary::RuleSummary;
