@@ -83,7 +83,10 @@ fn phase_shift_pwm_gate_matches_hand_computed_switching_instants() {
     let mut gates = BTreeMap::new();
     gates.insert(
         "D1".to_string(),
-        GateBinding::Block("MOD_MAIN_GATE".to_string()),
+        GateBinding::Block {
+            ctrl: "MOD_MAIN_GATE".to_string(),
+            v_gs_th: 0.5,
+        },
     );
 
     let trace = simulate_transient_with_blocks(

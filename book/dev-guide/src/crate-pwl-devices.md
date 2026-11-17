@@ -9,10 +9,10 @@ voltage/current; folding a set of devices into a whole circuit's `(M, q)` LCP is
 ## `IdealDiode`: the 3-segment curve
 
 `src/ideal_diode.rs`. Reverse-breakdown conduction below `v_breakdown`, near-zero leakage
-(`g_off`) between `v_breakdown` and `v_th`, forward conduction (`g_on`) above `v_th` — five
+(`g_off`) between `v_breakdown` and `v_f`, forward conduction (`g_on`) above `v_f` — five
 parameters, continuous at both breakpoints by construction (each segment's offset anchors it
 to the leakage segment at the shared boundary). `IdealDiode::new` asserts
-`v_breakdown < v_th` (a reversed ordering would silently swap the curve's meaning).
+`v_breakdown < v_f` (a reversed ordering would silently swap the curve's meaning).
 
 Two independent evaluations of the same curve, and the crate keeps both deliberately:
 
@@ -25,7 +25,7 @@ z_1 = \max(0,\, v_{breakdown} - v), \qquad z_2 = \max(0,\, v - v_{th})$$
 
   with `delta_on = g_on - g_off`, `delta_br = g_breakdown - g_off`. The `max(0, ...)` terms
   are exactly the LCP `z` variables this diode contributes, each complementary to a guard
-  slack (`w1 = v - v_breakdown + z1`, `w2 = v_th - v + z2`); `docs/architecture.md` derives
+  slack (`w1 = v - v_breakdown + z1`, `w2 = v_f - v + z2`); `docs/architecture.md` derives
   why that is equivalent to "exactly one segment active," and `lcp-formulation.md` carries the
   fold into `(M, q)` — not re-derived here. The two formulas agreeing at many sample points
   (the `canonical_matches_direct_piecewise_evaluation` test, including both breakpoints
@@ -40,8 +40,8 @@ $$\mathrm{reversed}()\mathrm{.current}(v) = -\mathrm{self.current}(-v) \quad \te
 Derived by substituting `u = -v` into each of the three segments and negating — the result is
 a new 3-segment curve with the same shape but mirrored breakpoints and swapped slopes, which
 is exactly what `IdealDiode::new` already builds, just called with
-`(g_on, -v_th, g_off, -v_breakdown, g_breakdown)`. The invariant `v_breakdown < v_th`
-guarantees the reversed curve's own `-v_th < -v_breakdown`, so it is automatically valid.
+`(g_on, -v_f, g_off, -v_breakdown, g_breakdown)`. The invariant `v_breakdown < v_f`
+guarantees the reversed curve's own `-v_f < -v_breakdown`, so it is automatically valid.
 
 Why it exists: every PWL device in this crate defines its curve in terms of
 `V = V(n1) - V(n2)`, but the *caller's* terminal-order convention can be the mirror image. The
@@ -89,7 +89,7 @@ a genuinely self-triggering switch is tracked in `open-questions.md`.
 
 The netlist declares the device's two terminals **`(drain, source)`** — plain SPICE
 convention. The `body_diode` field is declared in its own natural terms (forward conduction
-for `V(source) - V(drain) > v_th`), which means the curve as literally stamped between
+for `V(source) - V(drain) > v_f`), which means the curve as literally stamped between
 `(drain, source)`-ordered nodes needs mirroring first. Hence
 `IdealSwitch::body_diode_for_drain_source_stamping()`, which returns
 `body_diode.reversed()`: every caller stamping the off-state should go through it, never

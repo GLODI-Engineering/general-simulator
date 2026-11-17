@@ -29,9 +29,9 @@ fn run(args: &[&str]) -> std::process::Output {
 const BUCK: &str = "\
 VIN vin 0 12
 DSW vin sw idealswitchmodel
-DSW kind=ideal_switch r_on=0.05 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=block ctrl=GATE
+DSW kind=ideal_switch r_on=0.05 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.5 body_g_on=5 gate=block ctrl=GATE
 D1 0 sw dmodel
-D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.4 g_on=5
+D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_f=0.4 g_on=5
 L1 sw out 22e-6
 C1 out 0 47e-6 ic=3
 RL out 0 4
@@ -48,9 +48,9 @@ GATE kind=sig2phys domain=voltage in=PWM1
 const SHOOT_THROUGH_LEG: &str = "\
 VIN vin 0 400
 DSH vin mid idealswitchmodel
-DSH kind=ideal_switch r_on=0.01 g_breakdown=0 v_breakdown=-1000 g_off=0 v_th=0.5 g_on=100 gate=block ctrl=GH
+DSH kind=ideal_switch r_on=0.01 body_g_breakdown=0 body_v_breakdown=-1000 body_g_off=0 body_v_f=0.5 body_g_on=100 gate=block ctrl=GH
 DSL mid 0 idealswitchmodel
-DSL kind=ideal_switch r_on=0.01 g_breakdown=0 v_breakdown=-1000 g_off=0 v_th=0.5 g_on=100 gate=block ctrl=GL
+DSL kind=ideal_switch r_on=0.01 body_g_breakdown=0 body_v_breakdown=-1000 body_g_off=0 body_v_f=0.5 body_g_on=100 gate=block ctrl=GL
 L1 mid out 1e-3
 R1 out 0 10
 DUTY kind=const value=0.4
@@ -467,9 +467,9 @@ fn raising_a_rating_still_loads_the_checkpoint_of_the_run_it_stopped() {
 const DEAD_GATE: &str = "\
 VIN vin 0 12
 DSW vin sw idealswitchmodel
-DSW kind=ideal_switch r_on=0.05 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 gate=block ctrl=GATE
+DSW kind=ideal_switch r_on=0.05 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.5 body_g_on=5 gate=block ctrl=GATE
 D1 0 sw dmodel
-D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.4 g_on=5
+D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_f=0.4 g_on=5
 L1 sw out 22e-6
 C1 out 0 47e-6 ic=3
 RL out 0 4
@@ -685,10 +685,10 @@ const SYNC_BUCK: &str = "\
 VIN vin 0 12
 VSH vin sh 0
 DSH sh mid idealswitchmodel
-DSH kind=ideal_switch r_on=0.02 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.4 g_on=50 gate=block ctrl=GH
+DSH kind=ideal_switch r_on=0.02 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.4 body_g_on=50 gate=block ctrl=GH
 VSL mid sl 0
 DSL sl 0 idealswitchmodel
-DSL kind=ideal_switch r_on=0.02 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.4 g_on=50 gate=block ctrl=GL
+DSL kind=ideal_switch r_on=0.02 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.4 body_g_on=50 gate=block ctrl=GL
 L1 mid out 22e-6
 C1 out 0 47e-6 ic=5
 RL out 0 4
@@ -1049,9 +1049,9 @@ fn a_per_period_card_insists_on_knowing_what_a_period_is() {
 const BUCK_WITH_PORTS: &str = "\
 VIN in 0 12
 DSW in sw idealswitchmodel
-DSW kind=ideal_switch r_on=0.01 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=100 gate=block ctrl=GATE
+DSW kind=ideal_switch r_on=0.01 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.5 body_g_on=100 gate=block ctrl=GATE
 D1 0 sw idealdiodemodel
-D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.4 g_on=100
+D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_f=0.4 g_on=100
 L1 sw out 1e-3
 C1 out 0 1e-4
 VSENSE out load 0
@@ -1278,9 +1278,9 @@ fn a_port_power_converges_to_the_product_the_netlist_can_compute() {
     let deck = "\
 VIN in 0 12
 DSW in sw idealswitchmodel
-DSW kind=ideal_switch r_on=0.01 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=100 gate=block ctrl=GATE
+DSW kind=ideal_switch r_on=0.01 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.5 body_g_on=100 gate=block ctrl=GATE
 D1 0 sw idealdiodemodel
-D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.4 g_on=100
+D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_f=0.4 g_on=100
 L1 sw out 1e-3
 C1 out 0 1e-4
 R1 out 0 5
@@ -1344,9 +1344,9 @@ P_IN kind=port v=(in,0) i=-VIN
 const SYNC_BUCK_CHANNELS: &str = "\
 VIN in 0 12
 DSH in mid idealswitchmodel
-DSH kind=ideal_switch r_on=0.02 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=100 gate=block ctrl=GH
+DSH kind=ideal_switch r_on=0.02 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.5 body_g_on=100 gate=block ctrl=GH
 DSL mid 0 idealswitchmodel
-DSL kind=ideal_switch r_on=0.02 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=100 gate=block ctrl=GL
+DSL kind=ideal_switch r_on=0.02 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.5 body_g_on=100 gate=block ctrl=GL
 L1 mid out 1e-3
 C1 out 0 1e-4
 R1 out 0 5
@@ -1365,10 +1365,10 @@ fn a_switchs_computed_current_agrees_with_a_measured_one() {
         "i_switch.cir",
         "VIN in 0 12
 DSW in mid idealswitchmodel
-DSW kind=ideal_switch r_on=0.01 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=100 gate=block ctrl=GATE
+DSW kind=ideal_switch r_on=0.01 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.5 body_g_on=100 gate=block ctrl=GATE
 VS1 mid sw 0
 D1 0 sw idealdiodemodel
-D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.4 g_on=100
+D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_f=0.4 g_on=100
 L1 sw out 1e-3
 C1 out 0 1e-4
 R1 out 0 5
@@ -1496,7 +1496,7 @@ fn a_switch_that_is_never_commanded_on_reports_no_conduction_loss() {
         "cond_off.cir",
         "VIN in 0 12
 DSW in mid idealswitchmodel
-DSW kind=ideal_switch r_on=0.02 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=100 gate=block ctrl=GATE
+DSW kind=ideal_switch r_on=0.02 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.5 body_g_on=100 gate=block ctrl=GATE
 R1 mid 0 1e6
 OFF kind=const value=0
 GATE kind=sig2phys domain=voltage in=OFF
@@ -1575,7 +1575,7 @@ fn the_low_sides_pass_is_a_measured_diode_drop_and_not_a_skipped_measurement() {
     // The companion to the test above, and the reason it is a separate one: "passed" could mean
     // "measured and small" or "never measured at all", and only tightening the bound
     // distinguishes them. At v_max = 10 mV the same edge reports 0.508 V -- the body diode's
-    // own drop, v_th = 0.5 plus i/g_on = 0.96/100, which agrees to a milli-volt.
+    // own drop, v_f = 0.5 plus i/g_on = 0.96/100, which agrees to a milli-volt.
     let netlist = write(
         "zvs_tight.cir",
         &format!(
@@ -1612,11 +1612,11 @@ fn the_reported_voltage_is_the_one_before_the_transition_not_after_it() {
         "zvs_400.cir",
         "VIN in 0 400
 DSW in mid idealswitchmodel
-DSW kind=ideal_switch r_on=0.01 g_breakdown=0 v_breakdown=-1000 g_off=0 v_th=0.5 g_on=100 gate=block ctrl=GATE
+DSW kind=ideal_switch r_on=0.01 body_g_breakdown=0 body_v_breakdown=-1000 body_g_off=0 body_v_f=0.5 body_g_on=100 gate=block ctrl=GATE
 L1 mid out 1e-3
 R1 out 0 40
 D1 0 mid idealdiodemodel
-D1 kind=ideal_diode g_breakdown=0 v_breakdown=-1000 g_off=0 v_th=0.4 g_on=100
+D1 kind=ideal_diode g_breakdown=0 v_breakdown=-1000 g_off=0 v_f=0.4 g_on=100
 DUTY kind=const value=0.5
 PWM1 kind=pwm freq=20000 in=DUTY
 GATE kind=sig2phys domain=voltage in=PWM1
@@ -1639,4 +1639,101 @@ ZVS kind=rule type=zvs switches=DSW v_max=5 severity=error
         text.contains("ERROR DSW.ZVS") && text.contains("at     400."),
         "the blocking voltage, not the post-commutation drop:\n{text}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The device-parameter vocabulary
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_gate_threshold_above_the_signal_keeps_the_switch_off_through_the_whole_run() {
+    // `v_gs_th` has to *do* something end to end, or it is a second trap rather than the cure
+    // for the first one. A logic-level gate signal reaching 1 cannot turn on a switch whose
+    // threshold is 5, so the switch never commutates -- which `type=switch_timing` reports.
+    let deck = |v_gs_th: &str| {
+        format!(
+            "VIN in 0 12
+DSW in mid idealswitchmodel
+DSW kind=ideal_switch r_on=0.02 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 \
+body_v_f=0.5 body_g_on=100 gate=block ctrl=GATE{v_gs_th}
+R1 mid 0 5
+DUTY kind=const value=0.5
+PWM1 kind=pwm freq=50000 in=DUTY
+GATE kind=sig2phys domain=voltage in=PWM1
+TIMING kind=rule type=switch_timing switches=DSW f_min=1000 f_max=100000 severity=error
+"
+        )
+    };
+    // Default threshold: the switch commutates at 50 kHz and the rule passes.
+    let normal = write("vgsth_default.cir", &deck(""));
+    run(&[
+        normal.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "5e-4",
+        "--dt",
+        "1e-7",
+        "--out-every",
+        "100000",
+    ]);
+    let text = fs::read_to_string(normal.with_extension("events.txt")).expect("the text log");
+    assert!(
+        text.contains("DSW.TIMING") && text.contains("passed"),
+        "with the default threshold the switch should commutate:\n{text}"
+    );
+
+    // A 5 V threshold against a logic-level signal: never on.
+    let high = write("vgsth_five.cir", &deck(" v_gs_th=5"));
+    run(&[
+        high.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "5e-4",
+        "--dt",
+        "1e-7",
+        "--out-every",
+        "100000",
+    ]);
+    let text = fs::read_to_string(high.with_extension("events.txt")).expect("the text log");
+    assert!(
+        text.contains("ERROR DSW.TIMING"),
+        "a 5 V gate threshold must keep a logic-level-driven switch off:\n{text}"
+    );
+}
+
+#[test]
+fn the_old_device_field_names_are_refused_with_the_replacement_named() {
+    // Hard errors rather than accepted aliases: an alias is how a double meaning survives a
+    // rename, and this one silently changed how a converter freewheeled.
+    let cases: [(&str, &str, &str); 3] = [
+        // (what the deck writes, the field refused, what the message must offer)
+        ("body_v_f=0.5", "v_th=0.5", "v_gs_th"),
+        ("body_g_on=100", "g_on=100", "body_g_on"),
+        (
+            "body_v_breakdown=-100",
+            "v_breakdown=-100",
+            "body_v_breakdown",
+        ),
+    ];
+    for (correct, old, expected) in cases {
+        let deck = "VIN in 0 12
+DSW in mid idealswitchmodel
+DSW kind=ideal_switch r_on=0.02 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 \
+body_v_f=0.5 body_g_on=100 gate=block ctrl=GATE
+R1 mid 0 5
+ONE kind=const value=1
+GATE kind=sig2phys domain=voltage in=ONE
+"
+        .replace(correct, old);
+        let netlist = write("old_vocab.cir", &deck);
+        let output = run(&[netlist.to_str().unwrap(), "--mode", "dc"]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("no longer exists") && stderr.contains(expected),
+            "writing '{old}' should be refused and should name '{expected}':\n{stderr}"
+        );
+        assert_ne!(output.status.code(), Some(0), "{stderr}");
+    }
 }

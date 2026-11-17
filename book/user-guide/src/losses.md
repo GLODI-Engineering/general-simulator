@@ -28,7 +28,7 @@ PEAK_H kind=rule type=above target=P_cond(DSH) limit=200 unit=W severity=error
 
 ```text
 DSH in mid idealswitchmodel
-DSH kind=ideal_switch r_on=0.02 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=100 gate=block ctrl=GH
+DSH kind=ideal_switch r_on=0.02 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.5 body_g_on=100 gate=block ctrl=GH
 ```
 
 Those two lines are all `P_cond(DSH)` needs. The device line gives the node pair, the

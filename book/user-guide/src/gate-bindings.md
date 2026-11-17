@@ -20,44 +20,82 @@ NAME kind=ideal_switch ... gate=block ctrl=<sig2phys_voltage_block_name>
 - `ctrl=<name>` — the name of a declared `domain=voltage` [`kind=sig2phys`](component-reference.md#sig2phys-signal-to-physical-converter)
   block. Every step, the switch reads that block's current output and is on while it's `>= 0.5`.
 
-### `v_th` is not the gate threshold
+### The gate threshold is `v_gs_th`, and the body diode's is `body_v_f`
 
-This is the one thing about gate bindings worth reading twice. A `kind=ideal_switch` line
-carries a `v_th=`, and it is **not** the gate's threshold — it is the switch's **body diode's**
-forward threshold. The gate path never consults it. The gate turns on at `>= 0.5` on the
-driving signal, full stop, and that number is fixed in `GateBinding`.
+A `kind=ideal_switch` line describes **two devices**: a channel and a body diode. Every field
+that belongs to the diode says so:
 
-So writing `v_th=5` because the real device has a 5 V gate threshold does two things, neither
-of them what was intended:
+```text
+DSW in mid idealswitchmodel
+DSW kind=ideal_switch r_on=0.02 \
+    body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.5 body_g_on=100 \
+    gate=block ctrl=GH v_gs_th=0.5
+```
 
-- the switch still commutates, exactly as it did with `v_th=0.5`, because the gate signal still
-  crosses `0.5`;
-- the body diode now has a 5 V forward drop, which silently changes how the topology
-  freewheels.
+- `r_on` — the channel. The switch's own, so it carries no prefix.
+- `body_*` — the intrinsic body diode's curve, in its own terms.
+- `v_gs_th` — the **gate** threshold, datasheet $V_{GS(th)}$. Optional, default `0.5`. The gate
+  turns the switch on while its driving signal is at or above this value.
 
-The same buck, run twice with nothing but `v_th` changed, produces the same output to the digit:
+#### Why the names are this careful
+
+Until this was fixed, the body diode's forward threshold was spelled `v_th`, exactly as on a
+standalone diode — and `v_th` means $V_{GS(th)}$, the gate threshold, on every MOSFET datasheet
+there is. There was also no field at all for a real gate threshold, so anyone modelling a 5 V
+gate wrote the only plausible-looking thing:
+
+```text
+DSW kind=ideal_switch r_on=0.02 ... v_th=5 ...      # accepted, and wrong twice over
+```
+
+and got a switch that **still turned on at 0.5** *and* a body diode with a 5 V forward drop,
+silently changing how the converter freewheeled. The deck was valid, the run completed, and the
+numbers were wrong. The same buck run twice with nothing but that field changed produced output
+identical to the digit:
 
 ```text
 v_th=5     V(out) range: 2.986 .. 5.521 V
 v_th=0.5   V(out) range: 2.986 .. 5.521 V
 ```
 
-To model a real gate threshold, scale the gate *signal* so that the switch's intended turn-on
-point lands at `0.5` — or, better, leave the signal logic-level and keep the gate driver's
-behaviour in the block that produces it, where it can be seen.
+`v_th` no longer exists anywhere in the language. Writing it is an error that names the
+replacement, and on a switch it names *both* candidates, because only you know which you meant:
 
-A gate whose driving signal can never reach `0.5` is reported before the run starts, when that
-is provable from the declaration (a constant, a gain over a constant), and by
+```text
+error: line 7: device 'DSW' field 'v_th' no longer exists -- write 'body_v_f'. On a switch
+this field was never the gate threshold: it is the body diode's forward voltage, and the gate
+path never read it. If you meant the gate threshold, that is 'v_gs_th' and it defaults to 0.5.
+```
+
+The rule behind the vocabulary: **a field name says which device owns the parameter, and uses
+that device's own datasheet word for the quantity.** A diode's forward threshold is `v_f`
+($V_F$), never `v_th`; a gate's is `v_gs_th`. The two cannot be confused because no datasheet
+uses either word for the other.
+
+#### Using a real gate threshold
+
+`v_gs_th` is honoured, so a logic-level signal no longer has to be scaled to match:
+
+```text
+DSW kind=ideal_switch r_on=0.02 ... gate=block ctrl=GH v_gs_th=5
+```
+
+That switch stays off until its gate signal reaches 5. If your gate signal is logic-level (0 or
+1), leave `v_gs_th` alone — the `0.5` default is the midpoint, and keeping the gate driver's real
+behaviour in the block that produces the signal is clearer than encoding it in a threshold.
+
+A gate whose driving signal can never reach `v_gs_th` is reported before the run starts, when
+that is provable from the declaration (a constant, a gain over a constant), and by
 `type=switch_timing`'s never-commutated check when it is not — see
 [Rules and ratings](rules-and-ratings.md).
 
-Why it has to be a `sig2phys` converter specifically, rather than a raw `pid`/`pwm`/`hysteresis`
-block: a circuit quantity and a signal-domain value are treated as genuinely different kinds of
-thing throughout this grammar (see [Grammar overview](netlist-grammar.md) and
-[Component Reference: Sig2Phys](component-reference.md#sig2phys-signal-to-physical-converter)) —
-an ideal switch's gate is itself a voltage ($V_{GS}$ against $v_{th}$), not a distinct
-discrete-actuation signal domain, so it shares the same write-direction converter a `V`-source's
-own magnitude uses, not a dedicated gate-only type.
+Why the gate has to be a `sig2phys` converter specifically, rather than a raw `pid`/`pwm`/
+`hysteresis` block: a circuit quantity and a signal-domain value are treated as genuinely
+different kinds of thing throughout this grammar (see [Grammar overview](netlist-grammar.md) and
+[Component Reference: Sig2Phys](component-reference.md#sig2phys-signal-to-physical-converter)).
+An ideal switch's gate is itself a voltage — $V_{GS}$, compared against `v_gs_th` — not a
+distinct discrete-actuation signal domain, so it shares the same write-direction converter a
+`V`-source's own magnitude uses rather than a dedicated gate-only type.
 
 ## A "fixed" gate is just a `const` wired through `sig2phys`
 
@@ -69,7 +107,7 @@ ONVAL kind=const value=1
 ONGATE kind=sig2phys domain=voltage in=ONVAL
 V1 in 0 5
 D1 in out idealswitchmodel
-D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 \
+D1 kind=ideal_switch r_on=0.1 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.5 body_g_on=5 \
      gate=block ctrl=ONGATE
 R1 out 0 1k
 ```

@@ -45,7 +45,7 @@ fn cscript_gain_reproduces_a_hand_known_result_every_step() {
     let devices = write_devices_file(&format!(
         "OFFVAL kind=const value=0\n\
          OFFGATE kind=sig2phys domain=voltage in=OFFVAL\n\
-         D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
+         D1 kind=ideal_switch r_on=0.1 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.7 body_g_on=1 gate=block ctrl=OFFGATE\n\
          SRC kind=const value=5\n\
          CG kind=cscript lib={} in=SRC\n",
         lib.display()
@@ -83,7 +83,7 @@ fn cscript_sample_time_holds_between_samples_zero_order() {
     let devices = write_devices_file(&format!(
         "OFFVAL kind=const value=0\n\
          OFFGATE kind=sig2phys domain=voltage in=OFFVAL\n\
-         D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
+         D1 kind=ideal_switch r_on=0.1 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.7 body_g_on=1 gate=block ctrl=OFFGATE\n\
          SRC kind=const value=0\n\
          CNT kind=cscript lib={} in=SRC ts=0.0005\n",
         lib.display()
@@ -163,7 +163,7 @@ fn cscript_xc_matches_the_closed_form_step_response() {
     let devices = write_devices_file(&format!(
         "OFFVAL kind=const value=0\n\
          OFFGATE kind=sig2phys domain=voltage in=OFFVAL\n\
-         D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
+         D1 kind=ideal_switch r_on=0.1 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.7 body_g_on=1 gate=block ctrl=OFFGATE\n\
          SRC kind=const value=10\n\
          CG kind=cscript lib={} in=SRC xc_count=1\n",
         lib.display()
@@ -211,7 +211,7 @@ fn cscript_without_clone_is_rejected_under_adaptive_step_not_silently_wrong() {
     let devices = write_devices_file(&format!(
         "OFFVAL kind=const value=0\n\
          OFFGATE kind=sig2phys domain=voltage in=OFFVAL\n\
-         D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
+         D1 kind=ideal_switch r_on=0.1 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.7 body_g_on=1 gate=block ctrl=OFFGATE\n\
          SRC kind=const value=5\n\
          CG kind=cscript lib={} in=SRC\n",
         lib.display()
@@ -248,7 +248,7 @@ fn a_netlist_that_disagrees_with_a_declared_arity_is_rejected_before_the_first_s
     let devices = write_devices_file(&format!(
         "OFFVAL kind=const value=0\n\
          OFFGATE kind=sig2phys domain=voltage in=OFFVAL\n\
-         D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
+         D1 kind=ideal_switch r_on=0.1 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.7 body_g_on=1 gate=block ctrl=OFFGATE\n\
          A kind=const value=1\n\
          B kind=const value=2\n\
          C kind=const value=3\n\
@@ -290,7 +290,7 @@ fn a_netlist_that_matches_a_declared_arity_runs() {
     let devices = write_devices_file(&format!(
         "OFFVAL kind=const value=0\n\
          OFFGATE kind=sig2phys domain=voltage in=OFFVAL\n\
-         D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
+         D1 kind=ideal_switch r_on=0.1 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.7 body_g_on=1 gate=block ctrl=OFFGATE\n\
          A kind=const value=1\n\
          B kind=const value=2\n\
          CG kind=cscript lib={} inputs=A,B\n",

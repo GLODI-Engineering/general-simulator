@@ -84,12 +84,12 @@ fn rc_charging_matches_closed_form_exponential() {
     }
 }
 
-/// V1 (5V step) -> D1 (v_th=0.7, g_on=1, forward: anode at a) -> R1 (1 ohm) -> C1 (1F) ->
+/// V1 (5V step) -> D1 (v_f=0.7, g_on=1, forward: anode at a) -> R1 (1 ohm) -> C1 (1F) ->
 /// ground. Single series loop, so one current I(t) = C*dVc/dt flows through everything.
 ///
-/// KVL: 5 = V_diode_drop + I*R + Vc, and V_diode_drop = v_th + I/g_on (from the diode's
-/// forward segment, I = g_on*(V_diode - v_th)).
-/// => 5 = v_th + I*(1/g_on + R) + Vc = 0.7 + I*(1+1) + Vc = 0.7 + 2*I + Vc
+/// KVL: 5 = V_diode_drop + I*R + Vc, and V_diode_drop = v_f + I/g_on (from the diode's
+/// forward segment, I = g_on*(V_diode - v_f)).
+/// => 5 = v_f + I*(1/g_on + R) + Vc = 0.7 + I*(1+1) + Vc = 0.7 + 2*I + Vc
 /// => I = (4.3 - Vc) / 2, and I = C*dVc/dt = dVc/dt (C=1)
 /// => dVc/dt = (4.3 - Vc) / 2, Vc(0)=0  =>  Vc(t) = 4.3*(1 - e^(-t/2))
 ///

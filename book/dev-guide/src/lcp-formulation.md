@@ -8,7 +8,7 @@ already internalized it, and to work one small example by hand.
 ## The canonical decomposition, one diode at a time
 
 `pwl_devices::IdealDiode` models a three-segment diode — reverse breakdown below `v_breakdown`,
-near-zero leakage between `v_breakdown` and `v_th`, forward conduction above `v_th`
+near-zero leakage between `v_breakdown` and `v_f`, forward conduction above `v_f`
 (`crates/pwl-devices/src/ideal_diode.rs:1-21`). The direct piecewise formula (`IdealDiode::current`,
 `ideal_diode.rs:42-52`) evaluates whichever segment `v` falls into. That's the physically obvious
 representation, but it's useless for circuit assembly: which formula applies depends on `v`,
@@ -107,13 +107,13 @@ Sandia PCNR paper this project's own "why not Newton-Raphson" motivation cites (
 PWL ones:
 
 ```text
-  e1 (source, 5V) --+-- D1 (v_th=1V) --+
+  e1 (source, 5V) --+-- D1 (v_f=1V) --+
                      |                  |
-                     +-- D2 (v_th=2V) --+-- e2 --[ R=1ohm ]-- ground
+                     +-- D2 (v_f=2V) --+-- e2 --[ R=1ohm ]-- ground
 ```
 
 Both diodes are anode-at-`e1`, ideal (`g_breakdown = g_off = 0`), `g_on = 1`, differing only in
-threshold: `v_th1 = 1V`, `v_th2 = 2V`. There's only one non-source node, `e2`, and both diodes
+threshold: `v_f1 = 1V`, `v_f2 = 2V`. There's only one non-source node, `e2`, and both diodes
 see the same voltage `V = e1 - e2`, so KCL at `e2` is `I_D1(V) + I_D2(V) = e2/R = (e1-V)/R`.
 
 **By hand** (`two_ideal_diode_circuit.rs:16-27`): guess both diodes end up forward-conducting

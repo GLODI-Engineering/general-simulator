@@ -1659,7 +1659,7 @@ mod tests {
     const ONE_SWITCH: &str = "\
 VIN in 0 12
 DSW in mid idealswitchmodel
-DSW kind=ideal_switch r_on=0.02 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=100 gate=block ctrl=G
+DSW kind=ideal_switch r_on=0.02 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.5 body_g_on=100 gate=block ctrl=G
 R1 mid 0 5
 D kind=const value=1
 G kind=sig2phys domain=voltage in=D

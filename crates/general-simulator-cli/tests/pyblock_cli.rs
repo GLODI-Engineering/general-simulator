@@ -45,7 +45,7 @@ fn pyblock_gain_reproduces_a_hand_known_result_every_step() {
     let devices = write_devices_file(&format!(
         "OFFVAL kind=const value=0\n\
          OFFGATE kind=sig2phys domain=voltage in=OFFVAL\n\
-         D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1 gate=block ctrl=OFFGATE\n\
+         D1 kind=ideal_switch r_on=0.1 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.7 body_g_on=1 gate=block ctrl=OFFGATE\n\
          SRC kind=const value=5\n\
          PG kind=pyblock path={} in=SRC\n",
         py_path.display()

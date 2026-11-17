@@ -45,7 +45,7 @@ fn gated_on_ideal_switch_behaves_as_plain_on_resistance() {
 
 /// Gated off, body diode forward-conducting ("natural" commutation): declared (drain=a,
 /// source=b) so V_body = Vb - Va. Vb fixed at 5V by an ideal source; Ra=1 from node a to
-/// ground. Body diode: v_th=0.7, g_on=1.
+/// ground. Body diode: v_f=0.7, g_on=1.
 ///
 /// KCL at a: I_diode(Vb - Va) = Va / Ra.
 /// (5 - Va - 0.7) = Va  =>  4.3 = 2*Va  =>  Va = 2.15.

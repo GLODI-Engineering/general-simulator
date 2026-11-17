@@ -15,16 +15,16 @@ construction (`crates/pwl-devices/src/ideal_diode.rs`):
 ```text
            g_breakdown          g_off (leakage)         g_on (forward)
   <---------------------|------------------------|-------------------->
-                    v_breakdown                 v_th
+                    v_breakdown                 v_f
 ```
 
 - **`v <= v_breakdown`**: reverse-breakdown conduction, slope `g_breakdown`.
-- **`v_breakdown < v < v_th`**: near-zero leakage, slope `g_off`.
-- **`v >= v_th`**: forward conduction, slope `g_on`.
+- **`v_breakdown < v < v_f`**: near-zero leakage, slope `g_off`.
+- **`v >= v_f`**: forward conduction, slope `g_on`.
 
 Both breakpoints are anchored so each segment meets its neighbor exactly, and `v_breakdown` must
-be strictly below `v_th` (`IdealDiode::new` asserts this — see [Your first netlist](first-netlist.md)
-for the example deck already using `g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1`).
+be strictly below `v_f` (`IdealDiode::new` asserts this — see [Your first netlist](first-netlist.md)
+for the example deck already using `g_breakdown=0 v_breakdown=-100 g_off=0 v_f=0.7 g_on=1`).
 `v` is the diode's own $V = V_{\text{anode}} - V_{\text{cathode}}$, in netlist terms $V(n_1) -
 V(n_2)$ for `D1 n1 n2 ...`.
 
@@ -34,7 +34,7 @@ A real silicon diode's datasheet gives you roughly two numbers directly: a forwa
 `V_F` at some rated current, and a reverse breakdown/withstand voltage `V_R`. Mapping them onto
 this model:
 
-- `v_th = V_F` — the point where forward conduction begins.
+- `v_f = V_F` — the point where forward conduction begins.
 - `g_on` — pick so that the model's current at your circuit's typical forward current matches
   the datasheet at that same current:
 
@@ -80,7 +80,7 @@ step — never something an LCP resolves as part of the switch's own physics.
 Parameters combine the same 5 body-diode fields as `kind=ideal_diode` with one more:
 
 - `r_on` — on-state channel resistance, drain-source, conducting both directions.
-- `g_breakdown`, `v_breakdown`, `g_off`, `v_th`, `g_on` — the body diode's own curve, in its
+- `g_breakdown`, `v_breakdown`, `g_off`, `v_f`, `g_on` — the body diode's own curve, in its
   natural terms (forward conduction for $V(\text{source}) - V(\text{drain}) > v_{th}$).
 - `gate=`/`ctrl=` — how the gate state is resolved; see [Gate bindings](gate-bindings.md) for
   the full detail.

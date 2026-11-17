@@ -17,7 +17,7 @@
 //!
 //! Diodes: `g_breakdown = 0`, `v_breakdown = -100` (irrelevant at these operating points, kept
 //! nonzero-width only for the model to be well-formed), `g_off = 0` (ideal, zero leakage),
-//! `g_on = 1` for both; `v_th1 = 1 V`, `v_th2 = 2 V`. Source `e1 = 5 V`, `R = 1 ohm`.
+//! `g_on = 1` for both; `v_f1 = 1 V`, `v_f2 = 2 V`. Source `e1 = 5 V`, `R = 1 ohm`.
 //!
 //! With `g_off = 0` everywhere, KCL at `e2` is `I_D1(V) + I_D2(V) = e2 / R = (e1 - V) / R`.
 //! Guessing both diodes end up forward-conducting (checked after the fact):
@@ -59,7 +59,7 @@ fn build_lcp(diodes: &[IdealDiode], e1: f64, r: f64) -> (Vec<Vec<f64>>, Vec<f64>
         coupling[2 * k + 1] = -c.delta_on / denom;
     }
 
-    // w1_k = V - v_breakdown_k + z1_k, w2_k = v_th_k - V + z2_k. Substitute V(z) in and read
+    // w1_k = V - v_breakdown_k + z1_k, w2_k = v_f_k - V + z2_k. Substitute V(z) in and read
     // off M, q row by row.
     let mut m = vec![vec![0.0; 2 * n]; 2 * n];
     let mut q = vec![0.0; 2 * n];
@@ -70,7 +70,7 @@ fn build_lcp(diodes: &[IdealDiode], e1: f64, r: f64) -> (Vec<Vec<f64>>, Vec<f64>
         m[row_w1][2 * k] += 1.0; // + z1_k term
 
         let row_w2 = 2 * k + 1;
-        q[row_w2] = c.v_th - v0;
+        q[row_w2] = c.v_f - v0;
         for (dst, src) in m[row_w2].iter_mut().zip(coupling.iter()) {
             *dst = -src;
         }

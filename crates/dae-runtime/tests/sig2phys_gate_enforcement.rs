@@ -41,7 +41,10 @@ fn naming_a_raw_block_directly_is_rejected_before_any_step_runs() {
     gates.insert(
         "D1".to_string(),
         // raw Const, not wrapped in a domain=voltage Sig2Phys -- must be rejected
-        GateBinding::Block("DUTY".to_string()),
+        GateBinding::Block {
+            ctrl: "DUTY".to_string(),
+            v_gs_th: 0.5,
+        },
     );
 
     let err = simulate_transient_with_blocks(
@@ -99,7 +102,10 @@ fn naming_a_domain_current_sig2phys_block_is_also_rejected() {
     let mut gates = BTreeMap::new();
     gates.insert(
         "D1".to_string(),
-        GateBinding::Block("DUTY_GATE".to_string()),
+        GateBinding::Block {
+            ctrl: "DUTY_GATE".to_string(),
+            v_gs_th: 0.5,
+        },
     );
 
     let err = simulate_transient_with_blocks(
@@ -155,7 +161,10 @@ fn wrapping_the_same_block_in_a_domain_voltage_sig2phys_makes_it_work() {
     let mut gates = BTreeMap::new();
     gates.insert(
         "D1".to_string(),
-        GateBinding::Block("DUTY_GATE".to_string()),
+        GateBinding::Block {
+            ctrl: "DUTY_GATE".to_string(),
+            v_gs_th: 0.5,
+        },
     );
 
     // Should simply succeed -- correctness of the resulting switching is already covered by

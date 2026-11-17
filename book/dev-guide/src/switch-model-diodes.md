@@ -14,7 +14,7 @@ gated-off ideal switch's own body diode reuses it unchanged.
 
 `pwl_devices::IdealSwitch` (`crates/pwl-devices/src/ideal_switch.rs:49-59`) carries a `body_diode:
 IdealDiode` field — an ordinary `IdealDiode`, declared in its own natural terms: anode at the
-switch's source, cathode at its drain, forward conduction for `V(source) - V(drain) > v_th`, the
+switch's source, cathode at its drain, forward conduction for `V(source) - V(drain) > v_f`, the
 same body-diode orientation every real N-channel MOSFET has. When `dae-runtime` builds the
 circuit for a step where a given switch is gated off, it doesn't invent a separate mechanism for
 this diode — it inserts it directly into the same `diodes: BTreeMap<String, IdealDiode>` every
@@ -32,7 +32,7 @@ The netlist declares an ideal switch's two terminals in plain SPICE-conventional
 source)` order — not `(source, drain)`, which is the order `IdealDiode`'s own `body_diode` field
 is defined in. Stamping `body_diode` directly against nodes declared `(drain, source)` would
 evaluate the diode's curve against `V = V(drain) - V(source)`, but the diode's own forward
-direction is defined for `V(source) - V(drain) > v_th` — exactly backwards.
+direction is defined for `V(source) - V(drain) > v_f` — exactly backwards.
 
 `IdealSwitch::body_diode_for_drain_source_stamping` (`ideal_switch.rs:66-74`) fixes this by
 mirroring the *curve*, not the netlist's own node order: it returns `self.body_diode.reversed()`

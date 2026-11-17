@@ -14,7 +14,7 @@ gives `name kind=<kind> field=value ...` genuine first-class syntax — no `*`-c
 needed:
 
 ```text
-D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1
+D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_f=0.7 g_on=1
 ONVAL kind=const value=1
 ONGATE kind=sig2phys domain=voltage in=ONVAL
 ```

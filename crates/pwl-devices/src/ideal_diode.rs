@@ -3,34 +3,34 @@
 //! ```text
 //!            g_breakdown          g_off (leakage)         g_on (forward)
 //!   <---------------------|------------------------|-------------------->
-//!                     v_breakdown                 v_th
+//!                     v_breakdown                 v_f
 //! ```
 //!
 //! Continuous at both breakpoints by construction (each segment's offset is chosen so it
 //! meets its neighbor exactly at the shared breakpoint).
 
 /// A piecewise-linear diode: reverse-breakdown conduction below `v_breakdown`, near-zero
-/// leakage between `v_breakdown` and `v_th`, forward conduction above `v_th`.
+/// leakage between `v_breakdown` and `v_f`, forward conduction above `v_f`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IdealDiode {
     pub g_breakdown: f64,
     pub v_breakdown: f64,
     pub g_off: f64,
-    pub v_th: f64,
+    pub v_f: f64,
     pub g_on: f64,
 }
 
 impl IdealDiode {
-    pub fn new(g_breakdown: f64, v_breakdown: f64, g_off: f64, v_th: f64, g_on: f64) -> Self {
+    pub fn new(g_breakdown: f64, v_breakdown: f64, g_off: f64, v_f: f64, g_on: f64) -> Self {
         assert!(
-            v_breakdown < v_th,
-            "v_breakdown ({v_breakdown}) must be strictly below v_th ({v_th})"
+            v_breakdown < v_f,
+            "v_breakdown ({v_breakdown}) must be strictly below v_f ({v_f})"
         );
         IdealDiode {
             g_breakdown,
             v_breakdown,
             g_off,
-            v_th,
+            v_f,
             g_on,
         }
     }
@@ -43,11 +43,11 @@ impl IdealDiode {
         if v <= self.v_breakdown {
             let anchor = self.g_off * self.v_breakdown;
             anchor + self.g_breakdown * (v - self.v_breakdown)
-        } else if v < self.v_th {
+        } else if v < self.v_f {
             self.g_off * v
         } else {
-            let anchor = self.g_off * self.v_th;
-            anchor + self.g_on * (v - self.v_th)
+            let anchor = self.g_off * self.v_f;
+            anchor + self.g_on * (v - self.v_f)
         }
     }
 
@@ -57,17 +57,17 @@ impl IdealDiode {
     /// ```text
     /// I(v) = g_off * v + delta_on * z2 - delta_br * z1
     /// z1 = max(0, v_breakdown - v)   (how far below breakdown, else 0)
-    /// z2 = max(0, v - v_th)          (how far above threshold, else 0)
+    /// z2 = max(0, v - v_f)          (how far above threshold, else 0)
     /// ```
     ///
     /// `z1` and `z2` are exactly the LCP `z` variables this diode contributes: each is
-    /// complementary to a slack `w1 = v - v_breakdown + z1`, `w2 = v_th - v + z2` (both >= 0,
+    /// complementary to a slack `w1 = v - v_breakdown + z1`, `w2 = v_f - v + z2` (both >= 0,
     /// each `w_i * z_i == 0`). See `docs/architecture.md` for the derivation and why this is
     /// equivalent to "exactly one segment active."
     pub fn canonical(&self) -> IdealDiodeCanonical {
         IdealDiodeCanonical {
             v_breakdown: self.v_breakdown,
-            v_th: self.v_th,
+            v_f: self.v_f,
             g_off: self.g_off,
             delta_br: self.g_breakdown - self.g_off,
             delta_on: self.g_on - self.g_off,
@@ -77,8 +77,8 @@ impl IdealDiode {
 
 impl IdealDiode {
     /// The same physical diode with its two terminals swapped: `reversed().current(v) ==
-    /// -self.current(-v)` for every `v`, i.e. conducts (forward) for `v < -self.v_th` instead
-    /// of `v > self.v_th`, with breakdown now on the *positive* side instead of the negative
+    /// -self.current(-v)` for every `v`, i.e. conducts (forward) for `v < -self.v_f` instead
+    /// of `v > self.v_f`, with breakdown now on the *positive* side instead of the negative
     /// one. Exists so a two-terminal device whose curve is defined in terms of `V = V(n1) -
     /// V(n2)` (every PWL device in this crate, including [`crate::IdealSwitch`]'s body diode) can be
     /// stamped correctly regardless of which physical terminal a caller happened to declare
@@ -89,14 +89,14 @@ impl IdealDiode {
     /// Derivation: substituting `u = -v` into each of the three segments and negating gives a
     /// new 3-segment curve with the same shape (breakdown / leakage / forward, continuous at
     /// both breakpoints) but mirrored breakpoints and swapped slopes — which is exactly what
-    /// `IdealDiode::new` already builds, just called with `(g_on, -v_th, g_off, -v_breakdown,
-    /// g_breakdown)` instead of the original `(g_breakdown, v_breakdown, g_off, v_th, g_on)`.
-    /// `v_breakdown < v_th` (this struct's own invariant) guarantees `-v_th < -v_breakdown`, so
+    /// `IdealDiode::new` already builds, just called with `(g_on, -v_f, g_off, -v_breakdown,
+    /// g_breakdown)` instead of the original `(g_breakdown, v_breakdown, g_off, v_f, g_on)`.
+    /// `v_breakdown < v_f` (this struct's own invariant) guarantees `-v_f < -v_breakdown`, so
     /// the reversed curve's own breakpoint ordering is automatically valid too.
     pub fn reversed(&self) -> Self {
         IdealDiode::new(
             self.g_on,
-            -self.v_th,
+            -self.v_f,
             self.g_off,
             -self.v_breakdown,
             self.g_breakdown,
@@ -107,18 +107,18 @@ impl IdealDiode {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IdealDiodeCanonical {
     pub v_breakdown: f64,
-    pub v_th: f64,
+    pub v_f: f64,
     pub g_off: f64,
     pub delta_br: f64,
     pub delta_on: f64,
 }
 
 impl IdealDiodeCanonical {
-    /// `z1 = max(0, v_breakdown - v)`, `z2 = max(0, v - v_th)` — the values Lemke's algorithm
+    /// `z1 = max(0, v_breakdown - v)`, `z2 = max(0, v - v_f)` — the values Lemke's algorithm
     /// would resolve them to at a given `v`. Provided for testing/reference, not used by the
     /// LCP solve itself (which determines `v` and the `z`s simultaneously).
     pub fn z_at(&self, v: f64) -> (f64, f64) {
-        ((self.v_breakdown - v).max(0.0), (v - self.v_th).max(0.0))
+        ((self.v_breakdown - v).max(0.0), (v - self.v_f).max(0.0))
     }
 
     pub fn current(&self, v: f64, z1: f64, z2: f64) -> f64 {
@@ -159,7 +159,7 @@ mod tests {
         let d = IdealDiode::new(50.0, -20.0, 1e-6, 0.7, 10.0);
         let eps = 1e-6;
         assert!((d.current(d.v_breakdown - eps) - d.current(d.v_breakdown + eps)).abs() < 1e-3);
-        assert!((d.current(d.v_th - eps) - d.current(d.v_th + eps)).abs() < 1e-3);
+        assert!((d.current(d.v_f - eps) - d.current(d.v_f + eps)).abs() < 1e-3);
     }
 
     #[test]
@@ -189,10 +189,10 @@ mod tests {
 
     /// Concrete physical check, matching this session's own standalone CLI body-diode test on
     /// the TIDA-010954 controller's own ideal-switch (MOSFET) parameters (`g_breakdown=0, v_breakdown=-1e6,
-    /// g_off=1e-6, v_th=0.6, g_on=100`): a diode reversed this way and then evaluated with `v =
+    /// g_off=1e-6, v_f=0.6, g_on=100`): a diode reversed this way and then evaluated with `v =
     /// V(drain) - V(source)` (the plain SPICE-conventional node order, *not* this crate's
     /// `(source, drain)` convention) blocks for `v > 0` (near-zero leakage current) and
-    /// conducts strongly for `v` well below `-v_th` -- the correct low-side-switch body-diode
+    /// conducts strongly for `v` well below `-v_f` -- the correct low-side-switch body-diode
     /// behavior without requiring the netlist to declare nodes in any unusual order.
     #[test]
     fn reversed_gives_correct_low_side_switch_behavior_at_spice_conventional_node_order() {
@@ -201,7 +201,7 @@ mod tests {
         // v = V(drain) - V(source) = +10: drain driven positive relative to source -- a real
         // low-side NMOS's body diode blocks here (only tiny leakage).
         assert!(r.current(10.0).abs() < 1e-4);
-        // v = -10: drain pulled well below source (below -v_th) -- the body diode conducts.
+        // v = -10: drain pulled well below source (below -v_f) -- the body diode conducts.
         assert!(r.current(-10.0) < -100.0);
     }
 }
