@@ -312,7 +312,10 @@ fn a_leg_rule_can_stop_the_run_the_moment_the_short_appears() {
     engine.observe(0, 0.0, &leg(true, false));
     assert!(engine.stop_requested().is_none());
     engine.observe(1, 1e-6, &leg(true, true));
-    assert_eq!(engine.stop_requested(), Some("shoot_through"));
+    // `<target>.<name>`, the label every report prints. The target is part of it because a
+    // rule's name is not always unique on its own: a rating written on a device line is named
+    // for its field, so "stopped by rule 'i_max'" would not say which component.
+    assert_eq!(engine.stop_requested(), Some("leg_a.shoot_through"));
 }
 
 #[test]

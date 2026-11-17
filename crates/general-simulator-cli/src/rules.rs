@@ -1,5 +1,13 @@
-//! `kind=rule` cards: parsing them out of the netlist, feeding them each step, and writing what
-//! they found.
+//! `kind=rule` cards and ratings written on a device line: parsing them out of the netlist,
+//! feeding them each step, and writing what they found.
+//!
+//! The specification offers two ways to write the same thing, and both compile to the same
+//! [`Rule`] objects. A card says everything explicitly; a rating says it where the component is
+//! declared, which is where a datasheet number belongs:
+//!
+//! ```text
+//! Ls a b 36u i_max=60 i_sat=70 on_violation=console
+//! ```
 //!
 //! # Why the cards are stripped before the solver sees them
 //!
@@ -14,6 +22,16 @@
 //! adjusting the rule and resuming is the whole point of having the two features together, so
 //! the cards are removed here, before the hash is taken. Editing the *circuit* still invalidates
 //! a checkpoint, which is correct: that state belongs to the old circuit.
+//!
+//! A rating is stripped for the same reason, which costs more work: the rest of the device line
+//! has to survive, so the rating tokens are cut out of the line rather than the line being
+//! blanked. Without that, raising `i_max` -- the most natural thing to do after a run stops on
+//! it -- would change the deck hash and refuse the checkpoint of the run that just stopped.
+//! `general-mna` accepts these fields in their own right (it carries any field a caller
+//! registers through `BuildOptions::annotate`, see that repository's #25), so a consumer that
+//! registers [`RATING_FIELDS`] -- a GUI, or anything handing the netlist straight to the
+//! builder -- can keep them instead of being refused the deck. This crate strips them anyway,
+//! because the hash is what makes stop-adjust-resume work.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -22,19 +40,44 @@ use std::path::Path;
 
 use dae_runtime::{GateState, OperatingPoint, SignalValue};
 use general_mna::block_graph::GateBinding;
-use general_spice_core::ast::Statement;
+use general_spice_core::ast::{ElementInstance, Statement};
 use general_spice_core::Dialect;
 use gsim_rules::{
     Action, Condition, EventRecord, Qualifiers, Rule, RuleSummary, Sample, Severity, Watch,
 };
 
-/// Pulls every `kind=rule` card out of `source`, returning the netlist without them.
+/// Pulls every `kind=rule` card and every device-line rating out of `source`, returning the
+/// netlist without them.
+///
+/// A card's whole line goes; a rating is cut token by token, because the device it is written on
+/// still has to be there afterwards. See the module doc for why either is removed at all.
 pub fn extract(source: &str, dialect: Dialect) -> Result<(String, Vec<Rule>), String> {
     let statements = general_mna::parse_and_flatten(source, dialect)?;
     let mut rules = Vec::new();
     let mut blank_lines: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    // Rating tokens to cut, keyed by the line they sit on. A device card may span continuation
+    // lines, so the token's own line is what matters, not the element's first.
+    let mut cut_tokens: BTreeMap<usize, Vec<String>> = BTreeMap::new();
 
     for stmt in &statements {
+        if let Statement::ElementInstance(element) = stmt {
+            let (element_rules, cuts) = ratings_of(element)?;
+            rules.extend(element_rules);
+            for token in cuts {
+                // Which line the token is on is not recorded by the parser, so it is found by
+                // looking: a token is cut from the first line of the element's span that still
+                // contains it, which is the line it was written on.
+                for line in element.span.clone() {
+                    let already = cut_tokens.entry(line).or_default();
+                    let text = source.lines().nth(line - 1).unwrap_or("");
+                    if contains_token(text, &token) && !already.contains(&token) {
+                        already.push(token.clone());
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
         let Statement::BlockInstance(bi) = stmt else {
             continue;
         };
@@ -52,17 +95,245 @@ pub fn extract(source: &str, dialect: Dialect) -> Result<(String, Vec<Rule>), St
         }
     }
 
-    if blank_lines.is_empty() {
+    if blank_lines.is_empty() && cut_tokens.is_empty() {
         return Ok((source.to_string(), rules));
     }
     let mut out = String::with_capacity(source.len());
     for (i, line) in source.lines().enumerate() {
-        if !blank_lines.contains(&(i + 1)) {
-            out.push_str(line);
+        let number = i + 1;
+        if !blank_lines.contains(&number) {
+            match cut_tokens.get(&number) {
+                None => out.push_str(line),
+                Some(tokens) => out.push_str(&without_tokens(line, tokens)),
+            }
         }
         out.push('\n');
     }
     Ok((out, rules))
+}
+
+/// Whether `line` carries `token` as a whole whitespace-delimited token.
+///
+/// Substring matching would be wrong twice over: `i_max=6` occurs inside `i_max=60`, and a
+/// node named `i_max=60` cannot exist but a value like `60` certainly occurs elsewhere.
+fn contains_token(line: &str, token: &str) -> bool {
+    line.split_whitespace().any(|found| found == token)
+}
+
+/// `line` with each of `tokens` removed once, leaving the rest of it byte-for-byte.
+fn without_tokens(line: &str, tokens: &[String]) -> String {
+    let mut remaining: Vec<&String> = tokens.iter().collect();
+    let kept: Vec<&str> = line
+        .split_whitespace()
+        .filter(|found| {
+            if let Some(index) = remaining.iter().position(|token| token.as_str() == *found) {
+                remaining.remove(index);
+                return false;
+            }
+            true
+        })
+        .collect();
+    // Leading whitespace is not significant on a SPICE device line, but a leading `+` is: it
+    // marks a continuation, and dropping the indentation of one would join two cards.
+    let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+    format!("{indent}{}", kept.join(" "))
+}
+
+/// Every field name this crate claims on a device line.
+///
+/// Registered with `general-mna` through `BuildOptions::annotate` so a deck carrying them is
+/// valid for any consumer that opts in, rather than only for this binary. Exposed for that
+/// registration and for a test that keeps the two lists from drifting apart.
+pub const RATING_FIELDS: &[&str] = &[
+    "i_max",
+    "i_sat",
+    "v_max",
+    "on_violation",
+    "severity",
+    "hold",
+];
+
+/// The rules a device line's ratings compile to, and the tokens to cut out of the line.
+///
+/// A rating is a limit written where the component is declared, which is where a datasheet
+/// number belongs. It produces exactly the [`Rule`] a card would, so everything downstream --
+/// hold times, the event log, the summary table, `stop` -- behaves identically whichever way
+/// the limit was written.
+///
+/// **A rating is a limit on magnitude, not on signed value.** `i_max=60` compiles to
+/// `outside(-60, +60)`, not to `above(60)`. A buck inductor's current is one-signed and either
+/// reading would do; a bridge inductor's is not, and `above` would watch a 70 A reverse
+/// current go by without a word. A rating that only half-works is worse than none, because it
+/// reads as covered.
+fn ratings_of(element: &ElementInstance) -> Result<(Vec<Rule>, Vec<String>), String> {
+    let line = element.span.start;
+    let name = &element.name;
+    let ctx = |msg: String| format!("line {line}: device '{name}': {msg}");
+
+    let mut written: Vec<(String, String, String)> = Vec::new();
+    for token in &element.raw_params {
+        let Some((key, value)) = token.split_once('=') else {
+            continue;
+        };
+        let key = key.trim().to_ascii_lowercase();
+        if RATING_FIELDS.contains(&key.as_str()) {
+            written.push((key, value.to_string(), token.clone()));
+        }
+    }
+    if written.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    // `on_violation`, `severity` and `hold` modify a rating; alone they modify nothing. Left
+    // accepted, the line would be stripped and the field would silently do nothing, which is
+    // the failure this feature exists to remove -- and `on_violation=stop` on its own reads
+    // exactly like a deck that is guarded.
+    if written
+        .iter()
+        .all(|(key, _, _)| matches!(key.as_str(), "on_violation" | "severity" | "hold"))
+    {
+        let names: Vec<&str> = written.iter().map(|(key, _, _)| key.as_str()).collect();
+        return Err(ctx(format!(
+            "'{}' modifies a rating, and this device declares none -- add one of \
+             i_max, i_sat or v_max, or remove the field",
+            names.join("', '")
+        )));
+    }
+
+    let cuts: Vec<String> = written.iter().map(|(_, _, token)| token.clone()).collect();
+    let field = |wanted: &str| -> Option<&str> {
+        written
+            .iter()
+            .find(|(key, _, _)| key == wanted)
+            .map(|(_, value, _)| value.as_str())
+    };
+
+    // A rating is a hard limit, so it defaults to `error` where a card's `type=above` defaults
+    // to `warning`: the number came off a datasheet, and exceeding it is not a matter of taste.
+    // The action then follows from the severity exactly as it does for a card.
+    let severity = match field("severity").unwrap_or("error") {
+        "info" => Severity::Info,
+        "warning" => Severity::Warning,
+        "error" => Severity::Error,
+        "fatal" => Severity::Fatal,
+        other => {
+            return Err(ctx(format!(
+                "unknown severity '{other}' -- one of info, warning, error, fatal"
+            )))
+        }
+    };
+    let default_action = if severity >= Severity::Error {
+        "console"
+    } else {
+        "log"
+    };
+    let action = match field("on_violation").unwrap_or(default_action) {
+        "log" => Action::Log,
+        "console" => Action::Console,
+        "stop" => Action::Stop,
+        "pause" => Action::Pause,
+        other => {
+            return Err(ctx(format!(
+                "unknown on_violation '{other}' -- one of log, console, stop, pause"
+            )))
+        }
+    };
+    let hold = match field("hold") {
+        None => None,
+        Some(raw) => {
+            Some(parse_number(raw).ok_or_else(|| ctx(format!("'hold' is not a number: '{raw}'")))?)
+        }
+    };
+
+    let qualifiers = |min_duration: Option<f64>| Qualifiers {
+        min_duration,
+        hysteresis: None,
+        after: None,
+        before: None,
+        max_events: None,
+        stop_after: None,
+    };
+
+    let mut rules = Vec::new();
+    for (key, raw, _) in &written {
+        let limit = match key.as_str() {
+            "on_violation" | "severity" | "hold" => continue,
+            _ => {
+                parse_number(raw).ok_or_else(|| ctx(format!("'{key}' is not a number: '{raw}'")))?
+            }
+        };
+        if limit <= 0.0 {
+            // A magnitude limit of zero or less is violated at rest, so every step of every
+            // run would report. It is a typo, not a rule.
+            return Err(ctx(format!(
+                "'{key}' must be greater than zero, not '{raw}' -- it is a limit on magnitude"
+            )));
+        }
+
+        let (quantity, unit) = match key.as_str() {
+            "i_max" | "i_sat" => (branch_current(element).map_err(ctx)?, " A"),
+            "v_max" => (element_voltage(element).map_err(ctx)?, " V"),
+            _ => unreachable!("key came from RATING_FIELDS"),
+        };
+
+        rules.push(Rule {
+            // `target` is the label every report prints before the rule's own name, and the
+            // thing a schematic view would highlight, so it is the component rather than the
+            // quantity: `L1.i_max`, not `I(L1).I(L1)` or the `V(out,0).v_max` a voltage
+            // rating's quantity would produce, which names a node pair and not the capacitor
+            // that is over its rating. The quantity stays in the `Watch`, where it is what
+            // gets read.
+            name: key.clone(),
+            target: name.clone(),
+            watch: Watch::Quantity { quantity },
+            unit: unit.to_string(),
+            condition: Condition::Outside {
+                low: -limit,
+                high: limit,
+            },
+            qualifiers: qualifiers(hold),
+            severity,
+            action,
+        });
+    }
+
+    Ok((rules, cuts))
+}
+
+/// The waveform name of `element`'s own current, or why it does not have one.
+///
+/// Only `V`, `L`, `E` and `H` carry a branch current as an MNA unknown. A resistor's,
+/// capacitor's or ideal switch's current is a product of the solution rather than part of it,
+/// so there is no `I(name)` column to watch -- as the CSV header of any switching deck shows.
+///
+/// This is an error rather than a warning because of what the alternative does: a rating that
+/// is accepted and never evaluated reads, in the summary table, exactly like a rating that was
+/// never exceeded.
+fn branch_current(element: &ElementInstance) -> Result<String, String> {
+    match element.device_letter {
+        'V' | 'L' | 'E' | 'H' => Ok(format!("I({})", element.name)),
+        letter => Err(format!(
+            "a current rating needs a branch current, and device {letter} does not have one \
+             (only V, L, E and H do -- a resistor's or a switch's current is computed from the \
+             solution, not solved for). Write a `kind=rule` card naming a current you do have, \
+             or probe this one first."
+        )),
+    }
+}
+
+/// The waveform expression for the voltage across a two-terminal `element`.
+///
+/// `V(p,n)` rather than `V(p)`: a rating is across the component, and the component is rarely
+/// referenced to ground. [`StepSample::get`] evaluates the difference.
+fn element_voltage(element: &ElementInstance) -> Result<String, String> {
+    match element.nodes.as_slice() {
+        [positive, negative] => Ok(format!("V({positive},{negative})")),
+        nodes => Err(format!(
+            "a voltage rating needs two terminals, and this device has {} \
+             (write a `kind=rule` card naming the voltage you mean)",
+            nodes.len()
+        )),
+    }
 }
 
 fn parse_rule(name: &str, line: usize, fields: &BTreeMap<&str, &str>) -> Result<Rule, String> {
@@ -309,6 +580,25 @@ impl Sample for StepSample<'_> {
         if let Some(SignalValue::Scalar(v)) = self.outputs.get(quantity) {
             return Some(*v);
         }
+        // `V(p,n)`: the voltage across something, which is what a rating on a two-terminal
+        // device means and what anyone writing a rule about a floating component wants. Not an
+        // unknown, so it is computed -- and `0` is ground, which has no unknown of its own.
+        if let Some(pair) = quantity
+            .strip_prefix("V(")
+            .or_else(|| quantity.strip_prefix("v("))
+            .and_then(|rest| rest.strip_suffix(')'))
+        {
+            if let Some((positive, negative)) = pair.split_once(',') {
+                let node = |name: &str| -> Option<f64> {
+                    let name = name.trim();
+                    if name == "0" {
+                        return Some(0.0);
+                    }
+                    self.point.value(&format!("V({name})"))
+                };
+                return Some(node(positive)? - node(negative)?);
+            }
+        }
         // `NAME[i]` for one element of a vector-valued block output.
         let (name, index) = quantity.strip_suffix(']')?.split_once('[')?;
         let index: usize = index.parse().ok()?;
@@ -454,6 +744,173 @@ pub fn summary_report(summaries: &[RuleSummary]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Compiles `source`'s ratings, returning the stripped netlist and the rules.
+    fn ratings(source: &str) -> (String, Vec<Rule>) {
+        extract(source, Dialect::Ngspice).expect("the deck parses")
+    }
+
+    fn rating_error(source: &str) -> String {
+        extract(source, Dialect::Ngspice).expect_err("the deck should be rejected")
+    }
+
+    #[test]
+    fn a_rating_compiles_to_a_magnitude_rule_on_the_elements_own_current() {
+        let (_, rules) = ratings("V1 a 0 10\nL1 a 0 36u i_max=60\n");
+        assert_eq!(rules.len(), 1);
+        let rule = &rules[0];
+        assert_eq!(rule.name, "i_max");
+        assert_eq!(rule.target, "L1");
+        assert_eq!(rule.unit, " A");
+        assert_eq!(
+            rule.watch,
+            Watch::Quantity {
+                quantity: "I(L1)".to_string()
+            }
+        );
+        // The claim worth testing: a rating is on magnitude. `above(60)` would let a 70 A
+        // reverse current through a bridge inductor pass unreported.
+        assert_eq!(
+            rule.condition,
+            Condition::Outside {
+                low: -60.0,
+                high: 60.0
+            }
+        );
+        assert!(rule.condition.margin(-70.0) > 0.0, "a reverse overload");
+        assert!(rule.condition.margin(70.0) > 0.0, "a forward overload");
+        assert!(rule.condition.margin(59.0) <= 0.0, "within the rating");
+    }
+
+    #[test]
+    fn a_rating_defaults_to_error_where_a_card_defaults_to_warning() {
+        // A datasheet number is not a matter of taste, so the default is one step up from a
+        // card's, and the action follows from the severity exactly as a card's does.
+        let (_, rules) = ratings("V1 a 0 10\nL1 a 0 36u i_max=60\n");
+        assert_eq!(rules[0].severity, Severity::Error);
+        assert_eq!(rules[0].action, Action::Console);
+    }
+
+    #[test]
+    fn a_voltage_rating_watches_the_difference_across_the_component() {
+        let (_, rules) = ratings("V1 a 0 10\nC1 a b 1u v_max=400\n");
+        assert_eq!(
+            rules[0].watch,
+            Watch::Quantity {
+                quantity: "V(a,b)".to_string()
+            }
+        );
+        assert_eq!(rules[0].unit, " V");
+        assert_eq!(rules[0].target, "C1");
+    }
+
+    #[test]
+    fn modifiers_apply_to_every_rating_on_the_line() {
+        let (_, rules) = ratings(
+            "V1 a 0 10\nL1 a 0 36u i_max=60 i_sat=70 on_violation=stop severity=warning hold=2u\n",
+        );
+        assert_eq!(rules.len(), 2, "i_max and i_sat, not the three modifiers");
+        for rule in &rules {
+            assert_eq!(rule.action, Action::Stop);
+            assert_eq!(rule.severity, Severity::Warning);
+            assert_eq!(rule.qualifiers.min_duration, Some(2e-6));
+        }
+        let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["i_max", "i_sat"]);
+    }
+
+    #[test]
+    fn the_rating_leaves_the_device_line_otherwise_untouched() {
+        // The stripping is what keeps a rating out of the deck hash, so an edited limit still
+        // loads its checkpoint. The rest of the line has to survive it.
+        let (stripped, _) = ratings("V1 a 0 10\nL1 a 0 36u i_max=60 ic=2\n");
+        assert_eq!(stripped, "V1 a 0 10\nL1 a 0 36u ic=2\n");
+    }
+
+    #[test]
+    fn two_decks_differing_only_in_a_limit_strip_to_the_same_text() {
+        // Stated directly, because this is the property the whole stripping exists for: the
+        // deck hash a checkpoint is keyed by cannot see a rating.
+        let (low, _) = ratings("V1 a 0 10\nL1 a 0 36u i_max=60\n");
+        let (high, _) = ratings("V1 a 0 10\nL1 a 0 36u i_max=4000\n");
+        assert_eq!(low, high);
+    }
+
+    #[test]
+    fn a_rating_on_a_continuation_line_is_cut_from_that_line() {
+        let (stripped, rules) = ratings("V1 a 0 10\nL1 a 0 36u\n+ i_max=60 ic=2\n");
+        assert_eq!(rules.len(), 1);
+        assert_eq!(stripped, "V1 a 0 10\nL1 a 0 36u\n+ ic=2\n");
+    }
+
+    #[test]
+    fn a_current_rating_needs_a_device_that_has_a_current() {
+        // Accepting it would be worse than refusing it: in the summary table a rating that was
+        // never evaluated reads exactly like one that was never exceeded.
+        let error = rating_error("V1 a 0 10\nR1 a 0 50 i_max=2\n");
+        assert!(error.contains("device R does not have one"), "{error}");
+        assert!(error.contains("only V, L, E and H"), "{error}");
+        assert!(error.starts_with("line 2: device 'R1'"), "{error}");
+    }
+
+    #[test]
+    fn a_modifier_without_a_rating_is_refused() {
+        // `on_violation=stop` alone reads like a guarded deck and guards nothing.
+        let error = rating_error("V1 a 0 10\nL1 a 0 36u on_violation=stop\n");
+        assert!(error.contains("modifies a rating"), "{error}");
+    }
+
+    #[test]
+    fn a_limit_of_zero_or_less_is_a_typo_not_a_rule() {
+        for raw in ["0", "-5"] {
+            let error = rating_error(&format!("V1 a 0 10\nL1 a 0 36u i_max={raw}\n"));
+            assert!(
+                error.contains("must be greater than zero"),
+                "{raw}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_rating_that_is_not_a_number_says_so() {
+        let error = rating_error("V1 a 0 10\nL1 a 0 36u i_max=plenty\n");
+        assert!(error.contains("'i_max' is not a number"), "{error}");
+    }
+
+    #[test]
+    fn general_mna_accepts_every_rating_field_once_it_is_registered() {
+        // This crate strips ratings before anything builds the deck, so its own run never needs
+        // the registration. Another consumer's does: a GUI or a tool that hands the netlist
+        // straight to `general-mna` sees a hard "unknown field" error unless these names are
+        // registered. The contract between the two halves is asserted here rather than left to
+        // a comment, because drift would be silent until someone wrote the field in a deck.
+        let mut options = general_mna::BuildOptions::default();
+        for field in RATING_FIELDS {
+            options.annotate(field);
+        }
+        let deck = "V1 a 0 10\nL1 a 0 36u i_max=60 i_sat=70 v_max=400 \
+                    on_violation=console severity=error hold=2u\n";
+        let system = general_mna::MnaBuilder::with_options(Dialect::Ngspice, options)
+            .build_fragment(deck)
+            .expect("general-mna must accept every field this crate claims");
+
+        let mut carried: Vec<&str> = system.annotations.iter().map(|a| a.key.as_str()).collect();
+        carried.sort_unstable();
+        let mut expected: Vec<&str> = RATING_FIELDS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(
+            carried, expected,
+            "every claimed field must survive the build"
+        );
+    }
+
+    #[test]
+    fn a_deck_with_no_ratings_comes_back_unchanged() {
+        let source = "V1 a 0 10\nR1 a 0 50\n";
+        let (stripped, rules) = ratings(source);
+        assert_eq!(stripped, source);
+        assert!(rules.is_empty());
+    }
 
     #[test]
     fn numbers_follow_the_netlists_own_grammar() {

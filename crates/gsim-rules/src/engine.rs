@@ -462,7 +462,10 @@ impl RuleEngine {
                 .stop_after
                 .is_none_or(|threshold| entries_including_this >= threshold);
         if stopping && self.stop_requested.is_none() {
-            self.stop_requested = Some(rule.name.clone());
+            // `target.name`, the same label every report prints, rather than the rule's own
+            // name: a card's name is unique in a deck, but a rating's is the field it was
+            // written as, so "stopped by rule 'i_max'" would not say which component.
+            self.stop_requested = Some(format!("{}.{}", rule.target, rule.name));
         }
         let state = &mut self.state[index];
         state.produced += 1;

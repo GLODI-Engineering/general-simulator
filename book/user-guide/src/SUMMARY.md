@@ -33,6 +33,10 @@
 - [Fixed vs. adaptive time stepping](time-stepping.md)
 - [Checkpoint and resume](checkpoint-resume.md)
 
+# Rules and diagnostics
+
+- [Rules and ratings: making a wrong run say so](rules-and-ratings.md)
+
 # Post-processing measurements
 
 - [`kind=measure`: ngspice/Xyce-style .measure statements](measurements.md)
