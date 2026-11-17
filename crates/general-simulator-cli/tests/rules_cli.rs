@@ -1034,3 +1034,298 @@ fn a_per_period_card_insists_on_knowing_what_a_period_is() {
         assert!(stderr.contains(expected), "for {card}:\n{stderr}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Declared ports and efficiency
+// ---------------------------------------------------------------------------
+
+/// A buck with a port on each side: the input port on the source, the output port on a
+/// zero-volt sense source in line with the load.
+///
+/// The two declarations differ by the leading minus on `i=`, and that is the whole sign
+/// convention. A source's branch current leaves its positive terminal, so the input port
+/// negates it; a series sense element's enters, so the output port does not. See `rules::Port`
+/// for the measurement that establishes this.
+const BUCK_WITH_PORTS: &str = "\
+VIN in 0 12
+DSW in sw idealswitchmodel
+DSW kind=ideal_switch r_on=0.01 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=100 gate=block ctrl=GATE
+D1 0 sw idealdiodemodel
+D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.4 g_on=100
+L1 sw out 1e-3
+C1 out 0 1e-4
+VSENSE out load 0
+R1 load 0 5
+DUTY kind=const value=0.4
+PWM1 kind=pwm freq=50000 in=DUTY
+GATE kind=sig2phys domain=voltage in=PWM1
+P_IN kind=port v=(in,0) i=-VIN
+P_OUT kind=port v=(out,0) i=VSENSE
+";
+
+/// A dependent source stamped with a gain that creates energy: the output port carries 40 times
+/// the input port's power. This is the mistake the rule exists for -- a transformer with the
+/// wrong turns ratio, a dependent source with the wrong gain -- and nothing in any single
+/// waveform is out of range.
+const OVER_UNITY: &str = "\
+VIN in 0 12
+R1 in mid 1
+R3 mid 0 100
+E1 out 0 mid 0 2
+R2 out 0 10
+P_IN kind=port v=(in,0) i=-VIN
+P_OUT kind=port v=(out,0) i=-E1
+";
+
+#[test]
+fn a_real_converter_efficiency_sits_inside_its_band() {
+    // The averaging window is 2 ms, not one switching period, and that is the whole lesson of
+    // this test. See `a_window_shorter_than_the_output_ring_exceeds_unity_legitimately` for the
+    // failure it avoids and why it is not a bug.
+    let netlist = write(
+        "eta_pass.cir",
+        &format!(
+            "{BUCK_WITH_PORTS}\
+             ETA kind=rule type=efficiency in=P_IN out=P_OUT min=0 max=1 period=2e-3 severity=error\n"
+        ),
+    );
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "8e-3",
+        "--dt",
+        "2e-7",
+        "--out-every",
+        "1000000",
+    ]);
+    let text = fs::read_to_string(netlist.with_extension("events.txt")).expect("the text log");
+    assert!(
+        text.contains("P_OUT/P_IN.ETA               passed"),
+        "a buck averaged over its ring period should never look over-unity:\n{text}"
+    );
+    assert_eq!(output.status.code(), Some(0), "{text}");
+}
+
+#[test]
+fn a_window_shorter_than_the_output_ring_exceeds_unity_legitimately() {
+    // Found by running the rule on a real buck rather than reasoning about it: with a
+    // one-switching-period window this converter reports efficiencies up to 1.29, and with a
+    // 1 ms window 1.36. Neither is energy creation and neither is a defect in the rule.
+    //
+    // $\eta = \overline{p_\text{out}} / \overline{p_\text{in}}$ accounts for no *stored* energy.
+    // While the output filter rings, the capacitor spends half of each ring cycle delivering
+    // into the load energy that the input supplied on an earlier cycle, so the load genuinely
+    // receives more power than the source provides. Here $L = 1$ mH and $C = 100$ uF, so
+    // $f_0 = 1 / (2\pi\sqrt{LC}) = 503$ Hz and the ring period is 1.99 ms -- which is why the
+    // passing test above averages over 2 ms and this one, at half that, reports.
+    //
+    // The rule for anyone writing one of these: the window must be long compared with the
+    // slowest energy-storage cycle in the circuit, not with the switching period.
+    let netlist = write(
+        "eta_short_window.cir",
+        &format!(
+            "{BUCK_WITH_PORTS}\
+             ETA kind=rule type=efficiency in=P_IN out=P_OUT max=1 period=1e-3 severity=error\n"
+        ),
+    );
+    run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "2.2e-3",
+        "--dt",
+        "2e-7",
+        "--out-every",
+        "1000000",
+    ]);
+    let text = fs::read_to_string(netlist.with_extension("events.txt")).expect("the text log");
+    assert!(
+        text.contains("ERROR P_OUT/P_IN.ETA"),
+        "half a ring period should report the capacitor's discharge as over-unity:\n{text}"
+    );
+    // The finding must carry both means, because the only way a reader can tell this apart from
+    // a genuine over-unity stamp is by seeing that the output power exceeds the input by a
+    // little and transiently, rather than by a factor.
+    assert!(
+        text.contains("mean P_OUT / mean P_IN ="),
+        "the finding should show both averages:\n{text}"
+    );
+}
+
+#[test]
+fn a_stamp_that_creates_energy_is_caught_and_stops_the_run() {
+    let netlist = write(
+        "eta_over_unity.cir",
+        &format!(
+            "{OVER_UNITY}\
+             ETA kind=rule type=efficiency in=P_IN out=P_OUT max=1 period=1e-5 severity=error action=stop\n"
+        ),
+    );
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "1e-4",
+        "--dt",
+        "1e-6",
+        "--out-every",
+        "100000",
+    ]);
+    let text = fs::read_to_string(netlist.with_extension("events.txt")).expect("the text log");
+    // The findings go to the log; the stop notice goes to the console, which is where someone
+    // watching the run reads it.
+    let console = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        console.contains("stopped by rule 'P_OUT/P_IN.ETA'"),
+        "an over-unity stamp should stop the run:\n{console}"
+    );
+    // The report has to say *how far* over unity, not merely that a limit was passed: 39.6 is
+    // the gain squared over the load ratio, and a reader needs the number to find the stamp.
+    assert!(
+        text.contains("ERROR P_OUT/P_IN.ETA") && text.contains("limit 1.0000"),
+        "the finding should name the ratio and the limit:\n{text}"
+    );
+    assert_eq!(output.status.code(), Some(3), "stopped by a rule:\n{text}");
+}
+
+#[test]
+fn a_port_declared_backwards_reports_a_negative_efficiency_rather_than_inverting_it() {
+    // `i=VIN` without the minus on an input port: the source's branch current is in the passive
+    // convention, so the port's power comes out negative. The rule reports it instead of
+    // quietly producing a plausible-looking positive efficiency, which is the only reason
+    // `min=0` is worth writing.
+    let netlist = write(
+        "eta_backwards.cir",
+        &format!(
+            "{}\
+             ETA kind=rule type=efficiency in=P_IN out=P_OUT min=0 sync=DSW severity=error\n",
+            BUCK_WITH_PORTS.replace("i=-VIN", "i=VIN")
+        ),
+    );
+    run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "5e-4",
+        "--dt",
+        "2e-7",
+        "--out-every",
+        "100000",
+    ]);
+    let text = fs::read_to_string(netlist.with_extension("events.txt")).expect("the text log");
+    // A negative *denominator* is the signature: the input port is reporting power flowing the
+    // wrong way. Matched on the detail rather than on the ratio's own text, because early in
+    // the run the ratio is small enough to be printed in exponent form.
+    assert!(
+        text.contains("ERROR P_OUT/P_IN.ETA")
+            && text.contains("mean P_IN = ")
+            && text.contains("/ -"),
+        "a backwards port should report a negative input power:\n{text}"
+    );
+}
+
+#[test]
+fn a_period_whose_input_power_averages_to_zero_is_skipped_not_reported() {
+    // An unpowered circuit: the denominator is zero every period. A ratio against nothing is
+    // not a finding about the circuit, and a converter whose input has not arrived yet would
+    // otherwise be reported for being off.
+    let netlist = write(
+        "eta_zero.cir",
+        "VIN in 0 0
+R1 in mid 1
+R2 mid 0 10
+P_IN kind=port v=(in,0) i=-VIN
+P_OUT kind=port v=(mid,0) i=-VIN
+ETA kind=rule type=efficiency in=P_IN out=P_OUT max=1 min=0 period=1e-5 severity=error
+",
+    );
+    run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "1e-4",
+        "--dt",
+        "1e-6",
+        "--out-every",
+        "100000",
+    ]);
+    let text = fs::read_to_string(netlist.with_extension("events.txt")).expect("the text log");
+    assert!(
+        text.contains("P_OUT/P_IN.ETA               passed"),
+        "a zero denominator should be skipped, not reported:\n{text}"
+    );
+}
+
+#[test]
+fn a_port_power_converges_to_the_product_the_netlist_can_compute() {
+    // The mechanism the port object replaces: probe the node and the branch into the signal
+    // domain and multiply them with a `kind=product` block. The two do *not* agree exactly, and
+    // finding out why is what justifies the port object existing at all -- a block output is
+    // evaluated with a one-step lag, so the netlist-computed product trails the port by one
+    // step and converges to it as the step shrinks.
+    //
+    // Asserted as first-order convergence rather than equality, because equality is false. With
+    // the startup skipped (`after=`, since the first periods are dominated by a waveform rising
+    // from zero where the lag is a large fraction of the value), the measured deviations from
+    // unity were 2.37% at dt=4e-7, 1.18% at 2e-7, and inside 1% from 1e-7 down -- halving with
+    // the step, which is what a one-step lag does and what no other explanation would.
+    let deck = "\
+VIN in 0 12
+DSW in sw idealswitchmodel
+DSW kind=ideal_switch r_on=0.01 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=100 gate=block ctrl=GATE
+D1 0 sw idealdiodemodel
+D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.4 g_on=100
+L1 sw out 1e-3
+C1 out 0 1e-4
+R1 out 0 5
+DUTY kind=const value=0.4
+PWM1 kind=pwm freq=50000 in=DUTY
+GATE kind=sig2phys domain=voltage in=PWM1
+VPROBE kind=phys2sig node=in
+IPROBE kind=phys2sig branch=VIN
+NEG kind=const value=-1
+P_PRODUCT kind=product inputs=VPROBE,IPROBE,NEG
+P_IN kind=port v=(in,0) i=-VIN
+";
+    // A band that the coarse step fails and the fine step passes is the convergence assertion:
+    // one deck, one rule, two step sizes, opposite outcomes.
+    let netlist = write(
+        "eta_agree.cir",
+        &format!(
+            "{deck}\
+             CHK kind=rule type=efficiency in=P_PRODUCT out=P_IN min=0.99 max=1.01 \
+             period=1e-5 after=8e-5 severity=error\n"
+        ),
+    );
+    let at = |dt: &str| -> String {
+        let output = run(&[
+            netlist.to_str().unwrap(),
+            "--mode",
+            "transient",
+            "--tfinal",
+            "2e-4",
+            "--dt",
+            dt,
+            "--out-every",
+            "2000000",
+        ]);
+        let _ = output;
+        fs::read_to_string(netlist.with_extension("events.txt")).expect("the text log")
+    };
+    let coarse = at("4e-7");
+    assert!(
+        coarse.contains("ERROR P_IN/P_PRODUCT.CHK"),
+        "at dt=4e-7 the lagging product should sit outside a 1% band:\n{coarse}"
+    );
+    let fine = at("1e-7");
+    assert!(
+        fine.contains("P_IN/P_PRODUCT.CHK") && fine.contains("passed"),
+        "at dt=1e-7 the product should have converged into the 1% band:\n{fine}"
+    );
+}
