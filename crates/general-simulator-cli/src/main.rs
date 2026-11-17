@@ -590,14 +590,14 @@ fn run() -> Result<u8, String> {
     // mean that editing a limit invalidates the checkpoint of the run that limit just stopped.
     // Stripping them here is what lets a run stop on a rule, have the rule adjusted, and resume.
     let (devices_for_build, device_rules) = rules::extract(&devices_for_build, dialect)
-        .map_err(|e| format!("parsing kind=rule declarations: {e}"))?;
+        .map_err(|e| format!("parsing kind=rule cards and device ratings: {e}"))?;
     // The solver re-parses the netlist *itself*, and the deck hash a checkpoint is keyed by is
     // taken over those statements -- so the cards have to be gone from this copy too, not only
     // from the one `build_system` sees. Without this, editing a limit changes the hash, and the
     // checkpoint written by the run that limit just stopped refuses to load into the deck that
     // differs from it by one number.
     let (netlist, netlist_rules) = rules::extract(&netlist, dialect)
-        .map_err(|e| format!("parsing kind=rule declarations: {e}"))?;
+        .map_err(|e| format!("parsing kind=rule cards and device ratings: {e}"))?;
     // With no `--devices`, both extractions ran over the same text and found the same cards;
     // with one, a rule may sit in either file and both sets count.
     let declared_rules = if devices_path.is_some() {
@@ -693,7 +693,18 @@ fn run() -> Result<u8, String> {
         // Checkpointing always goes through the block-graph path (the plain path has no
         // checkpoint support and would only ever be picked for a block-free, switch-free deck,
         // which that path handles identically).
-        if ideal_switches.is_empty() && blocks.is_empty() && !checkpointing {
+        // `declared_rules` is in this condition because the rules engine is wired into the
+        // streamed path only. Without it, a deck with no switches and no blocks took the plain
+        // path and every rule on it -- card or device rating -- was accepted at load and then
+        // never evaluated, which is the one outcome this whole feature exists to prevent: the
+        // summary table reads the same for "never exceeded" as for "never looked at". The
+        // streamed path handles a block-free, switch-free deck identically, as the comment
+        // below already notes, so there is nothing to lose by preferring it.
+        if ideal_switches.is_empty()
+            && blocks.is_empty()
+            && !checkpointing
+            && declared_rules.is_empty()
+        {
             let trace = simulate_transient(&netlist, dialect, &diodes, None, t_final, step)
                 .map_err(|e| format!("{e:?}"))?;
             let headers = match trace.first() {
