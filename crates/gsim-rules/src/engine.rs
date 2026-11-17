@@ -120,14 +120,17 @@ struct RuleState {
     /// by the first turn-on seen rather than starting at zero, so a run that begins midway
     /// through a sequence is not reported for it.
     expected_index: Option<usize>,
-    /// For [`Watch::PerPeriod`] and [`Watch::Efficiency`]: the period being accumulated. For an
-    /// efficiency this is the numerator's.
-    period: Option<Accumulator>,
-    /// For [`Watch::Efficiency`] only: the denominator's period, closed on the same boundary as
-    /// `period` so the ratio is of two averages over the *same* interval. A single accumulator
-    /// would have to be re-run per quantity, and two runs cannot be guaranteed to see the same
-    /// boundary once the boundary is an outcome of the circuit rather than a setting.
-    period_b: Option<Accumulator>,
+    /// The period being accumulated, one [`Accumulator`] per quantity the rule measures, in the
+    /// rule's own order. Empty means no period is open.
+    ///
+    /// A vector rather than a field per quantity, because every per-period measurement needs its
+    /// quantities closed on the *same* boundary: with a `Sync` boundary the period is an outcome
+    /// of the circuit rather than a setting, so measurements run side by side would have no
+    /// guarantee of agreeing where a period ended, and a ratio or a difference between them
+    /// would then be of two different intervals. One quantity for [`Watch::PerPeriod`], two for
+    /// [`Watch::Efficiency`], two plus one per device for [`Watch::LossClosure`] -- all through
+    /// [`RuleEngine::accumulate_period`].
+    periods: Vec<Accumulator>,
     /// Whether a sync boundary has been seen, so the fragment before the first one is not
     /// mistaken for a period.
     period_started: bool,
@@ -334,6 +337,7 @@ impl RuleEngine {
         self.check_commutation_order(index, t, step, sample, out);
         self.measure_period(index, t, step, sample, out);
         self.measure_efficiency(index, t, step, sample, out);
+        self.measure_loss_closure(index, t, step, sample, out);
         self.check_zvs(index, t, step, sample, out);
 
         let Some(observation) = self.observe_watch(index, sample) else {
@@ -586,6 +590,30 @@ impl RuleEngine {
                     value: worst,
                     margin: -1.0,
                     limit: *v_max,
+                    detail: None,
+                })
+            }
+            // Every finding is an instant produced by `measure_loss_closure`; this answers only
+            // so that a port or a device the sample does not carry is reported as unreadable.
+            Watch::LossClosure {
+                in_port,
+                out_port,
+                devices,
+                boundary,
+                max,
+            } => {
+                let value = readable(sample.get(in_port))?;
+                readable(sample.get(out_port))?;
+                for device in devices {
+                    readable(sample.get(device))?;
+                }
+                if let PeriodBoundary::Sync(switch) = boundary {
+                    sample.switch_on(switch)?;
+                }
+                Some(Observation {
+                    value,
+                    margin: -1.0,
+                    limit: *max,
                     detail: None,
                 })
             }
@@ -878,15 +906,6 @@ impl RuleEngine {
         }
     }
 
-    /// Accumulate the current period and report one that falls outside its bounds.
-    ///
-    /// A fixed period closes by *splitting* the step that crosses the boundary: the sample at
-    /// the boundary is interpolated between the two steps either side of it, the part before
-    /// belongs to the period that is closing, and the part after opens the next. Closing at the
-    /// step that noticed instead would measure one period plus however much of a step the
-    /// stepping happened to leave, and for volt-second balance that is not a small error -- the
-    /// quantity being bounded is near zero, so a stray step's worth of volt-seconds is not
-    /// small compared with it.
     /// Decides the period boundary for one rule at `t`, recording a sync switch's transition.
     ///
     /// Shared by [`Self::measure_period`] and [`Self::measure_efficiency`] because the decision
@@ -1026,6 +1045,86 @@ impl RuleEngine {
         }
     }
 
+    /// Folds `values` into this rule's period, and reports each one's measure when the period
+    /// closes.
+    ///
+    /// The single place a per-period measurement happens, whatever it is measuring. `None` while
+    /// a period is still open; `Some((started, ended, measures))` on the step that closes one,
+    /// with `measures` in the same order as `values`.
+    ///
+    /// All the quantities share one boundary by construction, which is why this is one function
+    /// rather than one per rule type.
+    ///
+    /// A fixed period closes by *splitting* the step that crosses the boundary: each quantity's
+    /// value at the boundary is interpolated from its own last segment, the part before belongs
+    /// to the period that is closing, and the part after opens the next. Closing at the step
+    /// that noticed instead would measure one period plus however much of a step the stepping
+    /// happened to leave -- and for a volt-second balance that is not a small error, because the
+    /// quantity being bounded is near zero and a stray step's worth of volt-seconds is not small
+    /// compared with it.
+    fn accumulate_period(
+        &mut self,
+        index: usize,
+        t: f64,
+        boundary: &PeriodBoundary,
+        sample: &impl Sample,
+        values: &[f64],
+        measure: PeriodMeasure,
+    ) -> Option<(f64, f64, Vec<f64>)> {
+        let started = self.state[index].periods.first().map(|open| open.started);
+        let edge = self.period_edge(index, t, boundary, sample, started)?;
+
+        let ends_at = match edge {
+            PeriodEdge::Opening => {
+                self.state[index].periods = values
+                    .iter()
+                    .map(|value| {
+                        let mut first = Accumulator::new(t);
+                        first.extend(t, *value);
+                        first
+                    })
+                    .collect();
+                return None;
+            }
+            PeriodEdge::Continuing => {
+                for (open, value) in self.state[index].periods.iter_mut().zip(values) {
+                    open.extend(t, *value);
+                }
+                return None;
+            }
+            PeriodEdge::Closing(ends_at) => ends_at,
+        };
+
+        let open = std::mem::take(&mut self.state[index].periods);
+        // A rule's quantity count cannot change mid-run, so this never differs in practice;
+        // bailing rather than indexing keeps it from ever becoming a panic if one day it can.
+        if open.len() != values.len() {
+            return None;
+        }
+
+        let mut measures = Vec::with_capacity(open.len());
+        let mut next = Vec::with_capacity(open.len());
+        let mut period_started = ends_at;
+        for (mut acc, value) in open.into_iter().zip(values) {
+            let at_boundary = acc.value_at(ends_at, t, *value);
+            period_started = acc.started;
+            acc.extend(ends_at, at_boundary);
+            measures.push(acc.measure(measure, ends_at));
+            // The next period carries the boundary sample as its left end, so the segment
+            // straddling two periods is split between them rather than dropped.
+            let mut following = Accumulator::new(ends_at);
+            following.extend(ends_at, at_boundary);
+            if t > ends_at {
+                following.extend(t, *value);
+            }
+            next.push(following);
+        }
+        self.state[index].periods = next;
+
+        let measures: Option<Vec<f64>> = measures.into_iter().collect();
+        measures.map(|m| (period_started, ends_at, m))
+    }
+
     /// One quantity, averaged or integrated over each period: [`Watch::PerPeriod`].
     fn measure_period(
         &mut self,
@@ -1052,50 +1151,13 @@ impl RuleEngine {
             return;
         };
 
-        let started = self.state[index].period.as_ref().map(|open| open.started);
-        let Some(edge) = self.period_edge(index, t, &boundary, sample, started) else {
+        let Some((started, ends_at, measures)) =
+            self.accumulate_period(index, t, &boundary, sample, &[value], measure)
+        else {
             return;
         };
+        let result = measures[0];
 
-        let ends_at = match edge {
-            PeriodEdge::Opening => {
-                let mut first = Accumulator::new(t);
-                first.extend(t, value);
-                self.state[index].period = Some(first);
-                return;
-            }
-            PeriodEdge::Continuing => {
-                // `period` is `Some` here: `Opening` is the only edge returned without one.
-                if let Some(open) = self.state[index].period.as_mut() {
-                    open.extend(t, value);
-                }
-                return;
-            }
-            PeriodEdge::Closing(ends_at) => ends_at,
-        };
-
-        let Some(open) = self.state[index].period.as_mut() else {
-            return;
-        };
-        let at_boundary = open.value_at(ends_at, t, value);
-
-        // Close the period at the boundary, not at this step.
-        open.extend(ends_at, at_boundary);
-        let result = open.measure(measure, ends_at);
-        let started = open.started;
-
-        // Open the next period at the boundary, carrying the boundary sample as its left end so
-        // the segment straddling two periods is split between them rather than dropped.
-        let mut next = Accumulator::new(ends_at);
-        next.extend(ends_at, at_boundary);
-        if t > ends_at {
-            next.extend(t, value);
-        }
-        self.state[index].period = Some(next);
-
-        let Some(result) = result else {
-            return;
-        };
         let outside = match (min, max) {
             (Some(low), _) if result < low => Some(low),
             (_, Some(high)) if result > high => Some(high),
@@ -1121,11 +1183,6 @@ impl RuleEngine {
     }
 
     /// The ratio of two quantities' per-period means: [`Watch::Efficiency`].
-    ///
-    /// Both accumulate over the same boundary and both close at the same instant, which is the
-    /// reason this is one measurement rather than two `PerPeriod` rules and a division: with a
-    /// `Sync` boundary the period is an outcome of the circuit, so two separately-run
-    /// measurements have no guarantee of agreeing on where a period ended.
     fn measure_efficiency(
         &mut self,
         index: usize,
@@ -1155,62 +1212,18 @@ impl RuleEngine {
             return;
         };
 
-        let started = self.state[index].period.as_ref().map(|open| open.started);
-        let Some(edge) = self.period_edge(index, t, &boundary, sample, started) else {
-            return;
-        };
-
-        let ends_at = match edge {
-            PeriodEdge::Opening => {
-                let mut first = Accumulator::new(t);
-                first.extend(t, top);
-                let mut second = Accumulator::new(t);
-                second.extend(t, bottom);
-                self.state[index].period = Some(first);
-                self.state[index].period_b = Some(second);
-                return;
-            }
-            PeriodEdge::Continuing => {
-                if let Some(open) = self.state[index].period.as_mut() {
-                    open.extend(t, top);
-                }
-                if let Some(open) = self.state[index].period_b.as_mut() {
-                    open.extend(t, bottom);
-                }
-                return;
-            }
-            PeriodEdge::Closing(ends_at) => ends_at,
-        };
-
-        let (Some(mut open_top), Some(mut open_bottom)) = (
-            self.state[index].period.take(),
-            self.state[index].period_b.take(),
+        let Some((started, ends_at, means)) = self.accumulate_period(
+            index,
+            t,
+            &boundary,
+            sample,
+            &[top, bottom],
+            PeriodMeasure::Mean,
         ) else {
             return;
         };
+        let (mean_top, mean_bottom) = (means[0], means[1]);
 
-        let top_at = open_top.value_at(ends_at, t, top);
-        let bottom_at = open_bottom.value_at(ends_at, t, bottom);
-        open_top.extend(ends_at, top_at);
-        open_bottom.extend(ends_at, bottom_at);
-        let mean_top = open_top.measure(PeriodMeasure::Mean, ends_at);
-        let mean_bottom = open_bottom.measure(PeriodMeasure::Mean, ends_at);
-        let started = open_top.started;
-
-        let mut next_top = Accumulator::new(ends_at);
-        next_top.extend(ends_at, top_at);
-        let mut next_bottom = Accumulator::new(ends_at);
-        next_bottom.extend(ends_at, bottom_at);
-        if t > ends_at {
-            next_top.extend(t, top);
-            next_bottom.extend(t, bottom);
-        }
-        self.state[index].period = Some(next_top);
-        self.state[index].period_b = Some(next_bottom);
-
-        let (Some(mean_top), Some(mean_bottom)) = (mean_top, mean_bottom) else {
-            return;
-        };
         // A period whose denominator averages to zero is skipped, not reported. A ratio against
         // nothing says nothing about the circuit, and a converter whose input power has not
         // arrived yet would otherwise be reported on its very first period -- for being off.
@@ -1246,6 +1259,84 @@ impl RuleEngine {
             self.state[index].instants += 1;
             self.emit(index, record, out);
         }
+    }
+
+    /// The fraction of a converter's power deficit the loss model does not explain:
+    /// [`Watch::LossClosure`].
+    fn measure_loss_closure(
+        &mut self,
+        index: usize,
+        t: f64,
+        step: usize,
+        sample: &impl Sample,
+        out: &mut Vec<EventRecord>,
+    ) {
+        let Watch::LossClosure {
+            in_port,
+            out_port,
+            devices,
+            boundary,
+            max,
+        } = &self.rules[index].watch
+        else {
+            return;
+        };
+        let max = *max;
+        let boundary = boundary.clone();
+        let (in_port, out_port) = (in_port.clone(), out_port.clone());
+        let devices = devices.clone();
+
+        // Every quantity has to be readable for the sum to mean anything. One unreadable device
+        // would silently shrink the modelled total and show up as unaccounted power -- a wrong
+        // finding about the circuit from a missing name, which is the worst kind.
+        let mut values = Vec::with_capacity(devices.len() + 2);
+        for name in std::iter::once(&in_port)
+            .chain(std::iter::once(&out_port))
+            .chain(devices.iter())
+        {
+            match readable(sample.get(name)) {
+                Some(value) => values.push(value),
+                None => return,
+            }
+        }
+
+        let Some((started, ends_at, means)) =
+            self.accumulate_period(index, t, &boundary, sample, &values, PeriodMeasure::Mean)
+        else {
+            return;
+        };
+        let (mean_in, mean_out) = (means[0], means[1]);
+        let modelled: f64 = means[2..].iter().sum();
+
+        // Nothing flowing in yet: the fraction has no denominator, and a converter that has not
+        // started is not a converter whose loss model is wrong.
+        if mean_in == 0.0 {
+            return;
+        }
+        let unaccounted = (mean_in - mean_out - modelled).abs() / mean_in.abs();
+        if !unaccounted.is_finite() || unaccounted <= max {
+            return;
+        }
+
+        let unit = self.rules[index].unit.clone();
+        let record = self.instant(
+            index,
+            ends_at,
+            step,
+            unaccounted,
+            max,
+            &unit,
+            format!(
+                "in {} - out {} = {} deficit, model accounts for {}, over the period \
+                 {started:e} s .. {ends_at:e} s",
+                format_magnitude(mean_in),
+                format_magnitude(mean_out),
+                format_magnitude(mean_in - mean_out),
+                format_magnitude(modelled)
+            ),
+        );
+        self.state[index].instants += 1;
+        self.emit(index, record, out);
     }
 
     /// An [`EventKind::Instant`] finding: something measured at a transition, with no interval.

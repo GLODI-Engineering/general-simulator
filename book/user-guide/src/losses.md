@@ -175,3 +175,69 @@ said about verifying ZVS.
 So the tool reports the **voltage**, and $\tfrac{1}{2} C_{oss} V^2$ is your multiplication, with a
 $C_{oss}$ you have from a datasheet and the simulator does not have at all. That is a better
 division of labour than a number that looks like an energy and is really a step size.
+
+# Does the loss model describe the circuit at all?
+
+Every rule so far bounds one device's loss. None of them can answer the question that decides
+whether the whole budget is worth anything: **is the loss model accounting for the power the
+circuit is actually losing?**
+
+```text
+P_IN  kind=port v=(in,0)  i=-VIN
+P_OUT kind=port v=(out,0) i=VSENSE
+CLOSE kind=rule type=loss_closure in=P_IN out=P_OUT devices=DSW,D1 max=0.002 \
+      period=2e-3 after=6e-3 severity=error
+```
+
+$$\text{unaccounted} = \frac{\left|\,\overline{p_\text{in}} - \overline{p_\text{out}}
+- \sum_k \overline{p_k}\,\right|}{\overline{p_\text{in}}}$$
+
+The measured deficit between the ports minus everything the model claims to explain, as a
+fraction of the input power. You name the devices; their conduction quantities are filled in, so
+switches and diodes are listed the same way and a name the netlist does not have is refused
+rather than quietly counted as zero.
+
+Scaled by input power rather than bounded in watts for the same reason efficiency is a ratio: a
+0.2 W residual means something very different on a 4 W converter and a 4 kW one, and a deck
+should not have to restate its own power level inside a tolerance. `max` is therefore a fraction
+in $0..1$, and a `max=5` is refused — it would read as 5 W and would never fire.
+
+## Why this is the most useful rule in the chapter
+
+**Every per-device figure can be individually correct while the model explains almost nothing.**
+On the buck in the test suite:
+
+| | deficit $\overline{p_\text{in}} - \overline{p_\text{out}}$ | modelled | unaccounted |
+| --- | --- | --- | --- |
+| `devices=DSW,D1` | 0.2433 W | 0.2391 W | **0.097%** |
+| `devices=DSW` | 0.2433 W | 0.0165 W | **5.62%** |
+
+The switch's 0.0165 W is a *true number about the switch* in both rows. In the second it is also
+7% of the real loss, because the freewheeling diode dissipates 0.2227 W — **93% of the
+conduction loss in this converter.** A loss report counting only switches would have made a
+synchronous rectifier look like a pointless complication.
+
+That 0.097% is cross-checked rather than trusted: integrating the same waveform in Python with a
+plain trapezoid gives the same deficit, the same modelled total and 0.0969% unaccounted, from a
+completely different code path than the engine's interpolating accumulator.
+
+## The same stored-energy caveat as efficiency
+
+`after=6e-3` in the card above is not decoration. The closure residual is **not** small until the
+circuit settles:
+
+| window | unaccounted |
+| --- | --- |
+| 2 – 4 ms (still ringing) | 3.48% |
+| 4 – 6 ms | 0.51% |
+| 6 – 8 ms (settled) | 0.097% |
+
+Nothing is wrong with the model in the first row. The balance accounts for no *stored* energy, so
+while the output filter rings, part of the deficit is energy going into $L$ and $C$ rather than
+into heat — exactly the effect that lets a per-period efficiency exceed 1. Use `after=` to start
+the check once the transient has decayed, and remember that an underdamped output filter rings
+for many milliseconds.
+
+A residual that *stays* large after settling is the real finding, and it means one of three
+things: a device is missing from `devices=`, a loss mechanism is not modelled at all (an ESR, a
+core loss), or a port is wired to the wrong node.
