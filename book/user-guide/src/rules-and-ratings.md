@@ -217,6 +217,41 @@ Available on any card, and `hold` on a rating:
 `hold` is the one to reach for first. A switch model can produce a 20 ns numerical spike that is
 not a real overload, and a rule that reports it trains its reader to ignore the log.
 
+## The one check you do not have to ask for
+
+Every rule above compares a value against a limit, and **every comparison against a `NaN` is
+false** — `NaN > limit` and `NaN < limit` both. So a run whose state has stopped being made of
+numbers finds no violations, summarises as `passed`, and exits 0, while its waveform file
+carries a column of `NaN` that a plotting tool draws as a gap and a reader takes for a
+rendering artefact.
+
+So the finite check is on by default, on every step of every deck, and it needs no card:
+
+```text
+[100.0000 ns] FATAL BAD.finite  at NaN  limit inf
+              [BAD is not a number, so every later value is meaningless and every
+               rule comparing one is false. The run stops here.]
+abandoned at step 0 (t = 1e-7 s): 'BAD' is not a finite number.
+```
+
+It covers both the solved state and the block outputs. A block output is the worse case: it is
+not part of the solution, so nothing else examines it, and next step it reaches the circuit
+through a gate or a source value. `sqrt` of a negative, `inv` of zero and `ln` of zero all
+produce one, and none of them refuses.
+
+The exit code is **4**, its own, because 3 and 4 mean opposite things to whatever reads them: 3
+is a rule doing its job on a run that behaved as the deck said it would, and 4 is a run with no
+result at all.
+
+The rules engine has its own guard for the same problem: a non-finite sample counts as an
+*unreadable* one, so a rule watching a quantity that has gone to `NaN` reports `NOT EVALUATED`
+rather than `passed`. That matters for a block output nobody stops on, and for any other
+program using the engine.
+
+Why it is not opt-in, when everything else is: every other rule is written by someone who
+suspected something. Nobody suspects a `NaN`, and a run that produced one has no result to
+report, so there is nothing an opt-in would protect.
+
 ## What a run produces
 
 Events are written as they happen, to `<deck>.events.jsonl` and `<deck>.events.txt`, and at
@@ -247,7 +282,7 @@ and the answer was no; `NOT EVALUATED` means the quantity was never there to rea
 problem with the rule rather than with the circuit.
 
 Exit codes: `0` nothing above a warning, `2` something at `error` or `fatal`, `3` a rule stopped
-the run.
+the run, `4` the run went non-finite and was abandoned.
 
 ## Stopping, adjusting, and carrying on
 

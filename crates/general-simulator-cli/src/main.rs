@@ -296,6 +296,7 @@
 //! See internal closed-loop LLC-vs-Xyce/ngspice and buck underdamped-resonance-filter
 //! experiments for full worked examples this syntax was built for.
 
+mod finite;
 mod measure;
 mod raw_format;
 mod rules;
@@ -363,6 +364,12 @@ mod exit {
     pub const RULE_ERROR: u8 = 2;
     /// A rule ended the run.
     pub const STOPPED_BY_RULE: u8 = 3;
+    /// The solved state went non-finite and the run was abandoned.
+    ///
+    /// Its own code rather than `STOPPED_BY_RULE`, because the two mean opposite things to
+    /// whatever reads them: 3 is a rule doing its job on a run that behaved as the deck said
+    /// it would, and 4 is a run with no result at all.
+    pub const NOT_FINITE: u8 = 4;
 }
 
 fn run() -> Result<u8, String> {
@@ -981,6 +988,9 @@ fn run_transient_streamed(
         )?)
     };
     let mut steps_seen: usize = 0;
+    // The unknown that went non-finite first, once one has. Held outside the step closure so
+    // the run can report it after the loop, beside a rule stop.
+    let mut non_finite: Option<(String, usize, f64)> = None;
 
     let final_checkpoint = simulate_transient_with_blocks_checkpointed(
         netlist,
@@ -1053,6 +1063,25 @@ fn run_transient_streamed(
                 }
             }
 
+            // Before the rules, because every one of them compares a value against a limit and
+            // every such comparison against a `NaN` is false: a run that has gone non-finite
+            // would otherwise report nothing, summarise as `passed` and exit 0. Checked on
+            // every step whether or not any rule was declared -- see `finite`'s module doc for
+            // why this one is not opt-in.
+            if non_finite.is_none() {
+                let broken = finite::first_non_finite(&point)
+                    .map(|(name, value)| (name.to_string(), value))
+                    .or_else(|| finite::first_non_finite_output(&outputs));
+                if let Some((name, value)) = broken {
+                    let record = finite::event(&name, value, steps_seen, t);
+                    eprintln!("{}", record.console_line());
+                    if let Some(reporter) = &mut reporter {
+                        reporter.record(&record).map_err(DaeError::Io)?;
+                    }
+                    non_finite = Some((name, steps_seen, t));
+                }
+            }
+
             // Rules see every step, not every *written* point. `--out-every` thins the
             // waveform file, and an edge or a peak falling between two written points is
             // exactly what a rule exists to catch -- so this sits above the thinning return
@@ -1073,7 +1102,7 @@ fn run_transient_streamed(
             // rule has already been solved, its state is what the checkpoint will carry, and a
             // resume continues from *after* it -- so its row belongs in the waveform. Returning
             // here instead would leave a one-row hole exactly at the interesting moment.
-            let stop_now = engine.stop_requested().is_some();
+            let stop_now = engine.stop_requested().is_some() || non_finite.is_some();
 
             // `--out-every N` thins what is *written*, never what is computed: every step is
             // still taken, every measurement above still sees every point, and the solution is
@@ -1198,6 +1227,16 @@ fn run_transient_streamed(
     // The run itself succeeded in every case that reaches here, including a rule stop: the
     // waveform, the event log and the checkpoint are all written and readable. The code says
     // what the rules found.
+    // Checked before a rule stop: when both happened on the same step, the non-finite state
+    // is the one that explains the run, and a rule that fired on a `NaN`-adjacent value is a
+    // consequence rather than a finding.
+    if let Some((name, step, when)) = non_finite {
+        eprintln!(
+            "abandoned at step {step} (t = {when:e} s): '{name}' is not a finite number. \
+             Nothing in the waveform after this point means anything."
+        );
+        return Ok(exit::NOT_FINITE);
+    }
     if let Some(name) = stopped_by {
         eprintln!("stopped by rule '{name}'");
         return Ok(exit::STOPPED_BY_RULE);
