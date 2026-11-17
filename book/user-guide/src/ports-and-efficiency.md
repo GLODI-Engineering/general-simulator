@@ -45,7 +45,7 @@ Once declared, a port's name **is** a quantity, so every existing rule type can 
 power limit is an ordinary `type=above` card:
 
 ```text
-P_SW kind=rule type=above target=P_IN limit=50 unit=W severity=error
+P_SW kind=rule type=above target=P_IN max=50 unit=W severity=error
 ```
 
 ## The sign, and the one minus you have to write
