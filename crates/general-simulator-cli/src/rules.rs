@@ -118,6 +118,42 @@ pub struct SwitchChannel {
     pub r_on: f64,
 }
 
+/// A diode's piecewise-linear curve, as a conduction loss needs it.
+///
+/// Collected the same way a [`SwitchChannel`] is, from the device line's node pair and the
+/// `kind=ideal_diode` line's curve. A diode is not an afterthought in a loss report: measured on
+/// a buck at $D = 0.4$ with a 50 m$\Omega$ switch and a 0.4 V diode, the freewheeling diode
+/// dissipated 0.2226 W against the switch's 0.0165 W -- **93% of the conduction loss**. A report
+/// that counted only switches would miss almost all of it, and would make a synchronous
+/// rectifier look like a pointless complication.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiodeCurve {
+    pub positive: String,
+    pub negative: String,
+    pub v_f: f64,
+    pub g_on: f64,
+    pub g_off: f64,
+    pub v_breakdown: f64,
+    pub g_breakdown: f64,
+}
+
+impl DiodeCurve {
+    /// The current through the diode at a given voltage across it, from its own declared curve.
+    ///
+    /// The same piecewise form `IdealDiode` is stamped from, evaluated here rather than read out
+    /// of the solver's segment list, so a diode's loss needs nothing of the LCP's internals: the
+    /// curve is a function of the voltage and the voltage is solved for.
+    fn current_at(&self, v: f64) -> f64 {
+        if v < self.v_breakdown {
+            self.g_breakdown * (v - self.v_breakdown) + self.g_off * self.v_breakdown
+        } else if v < self.v_f {
+            self.g_off * v
+        } else {
+            self.g_off * self.v_f + self.g_on * (v - self.v_f)
+        }
+    }
+}
+
 /// What a deck carried besides the circuit: rules, ports, and the netlist without them.
 #[derive(Debug)]
 pub struct Extracted {
@@ -129,6 +165,8 @@ pub struct Extracted {
     /// Every `kind=ideal_switch`'s channel, so `P_cond(NAME)` can be resolved. Read, never
     /// stripped: the solver needs those lines.
     pub switches: BTreeMap<String, SwitchChannel>,
+    /// Every `kind=ideal_diode`'s curve, for the same reason.
+    pub diodes: BTreeMap<String, DiodeCurve>,
 }
 
 /// Parses one `kind=port` declaration.
@@ -198,6 +236,7 @@ pub fn extract(source: &str, dialect: Dialect) -> Result<Extracted, String> {
     // either order, so each half is collected separately and joined at the end.
     let mut switch_nodes: BTreeMap<String, (String, String)> = BTreeMap::new();
     let mut switch_r_on: BTreeMap<String, f64> = BTreeMap::new();
+    let mut diode_curves: BTreeMap<String, (f64, f64, f64, f64, f64)> = BTreeMap::new();
     // Rule cards are collected now and parsed after the whole deck has been walked, because a
     // card may name a switch whose own lines come later in the file -- and `type=zvs` fills in
     // each switch's voltage from its declared node pair rather than making the deck repeat it.
@@ -259,6 +298,20 @@ pub fn extract(source: &str, dialect: Dialect) -> Result<Extracted, String> {
                 }
                 continue;
             }
+            // Read, not stripped, exactly as for a switch.
+            Some("ideal_diode") => {
+                let number = |key: &str| fields.get(key).and_then(|raw| parse_number(raw));
+                if let (Some(v_f), Some(g_on), Some(g_off), Some(v_bd), Some(g_bd)) = (
+                    number("v_f"),
+                    number("g_on"),
+                    number("g_off"),
+                    number("v_breakdown"),
+                    number("g_breakdown"),
+                ) {
+                    diode_curves.insert(bi.name.clone(), (v_f, g_on, g_off, v_bd, g_bd));
+                }
+                continue;
+            }
             _ => continue,
         }
         for line in bi.span.clone() {
@@ -284,8 +337,27 @@ pub fn extract(source: &str, dialect: Dialect) -> Result<Extracted, String> {
         })
         .collect();
 
+    let diodes: BTreeMap<String, DiodeCurve> = diode_curves
+        .into_iter()
+        .filter_map(|(name, (v_f, g_on, g_off, v_breakdown, g_breakdown))| {
+            let (positive, negative) = switch_nodes.get(&name)?.clone();
+            Some((
+                name,
+                DiodeCurve {
+                    positive,
+                    negative,
+                    v_f,
+                    g_on,
+                    g_off,
+                    v_breakdown,
+                    g_breakdown,
+                },
+            ))
+        })
+        .collect();
+
     for (name, line, fields) in &pending {
-        rules.push(parse_rule(name, *line, fields, &switches)?);
+        rules.push(parse_rule(name, *line, fields, &switches, &diodes)?);
     }
 
     if blank_lines.is_empty() && cut_tokens.is_empty() {
@@ -294,6 +366,7 @@ pub fn extract(source: &str, dialect: Dialect) -> Result<Extracted, String> {
             rules,
             ports,
             switches,
+            diodes,
         });
     }
     let mut out = String::with_capacity(source.len());
@@ -312,6 +385,7 @@ pub fn extract(source: &str, dialect: Dialect) -> Result<Extracted, String> {
         rules,
         ports,
         switches,
+        diodes,
     })
 }
 
@@ -580,6 +654,7 @@ fn parse_rule(
     line: usize,
     fields: &BTreeMap<&str, &str>,
     switches: &BTreeMap<String, SwitchChannel>,
+    diodes: &BTreeMap<String, DiodeCurve>,
 ) -> Result<Rule, String> {
     let ctx = |msg: String| format!("line {line}: rule '{name}': {msg}");
     let rule_type = fields
@@ -972,6 +1047,66 @@ fn parse_rule(
                 fields.get("unit").copied().unwrap_or(" V").to_string(),
             )
         }
+        "loss_closure" => {
+            let port = |key: &str| -> Result<String, String> {
+                Ok(fields
+                    .get(key)
+                    .copied()
+                    .ok_or_else(|| {
+                        ctx(format!(
+                            "missing field '{key}' -- the name of a `kind=port` declaration"
+                        ))
+                    })?
+                    .to_string())
+            };
+            let in_port = port("in")?;
+            let out_port = port("out")?;
+            let named = list("devices")?;
+            if named.is_empty() {
+                return Err(ctx(
+                    "'devices' is empty -- with nothing modelled the whole deficit is \
+                     unaccounted for, which is a true statement about no loss model rather \
+                     than a check on one"
+                        .into(),
+                ));
+            }
+            // The deck names devices; the quantity is synthesised, the same way `type=zvs`
+            // synthesises each switch's voltage. Each name is checked against the declared
+            // switches and diodes here, because a device the sample cannot resolve would
+            // otherwise shrink the modelled total silently and be reported as unaccounted
+            // power -- a wrong finding about the circuit produced by a typo.
+            let mut devices = Vec::with_capacity(named.len());
+            for device in &named {
+                if !switches.contains_key(device) && !diodes.contains_key(device) {
+                    return Err(ctx(format!(
+                        "'{device}' is not a declared `kind=ideal_switch` or `kind=ideal_diode`, \
+                         so it has no conduction loss to account for"
+                    )));
+                }
+                devices.push(format!("P_cond({device})"));
+            }
+            let boundary = parse_boundary(fields, &ctx)?;
+            let max = number("max")?;
+            if !(0.0..=1.0).contains(&max) {
+                return Err(ctx(format!(
+                    "'max' is a fraction of the input power, so it belongs in 0..1, not '{max}'"
+                )));
+            }
+            (
+                Watch::LossClosure {
+                    in_port: in_port.clone(),
+                    out_port: out_port.clone(),
+                    devices,
+                    boundary,
+                    max,
+                },
+                Condition::Above { limit: max },
+                format!("{out_port}/{in_port}"),
+                // Dimensionless: a fraction of the input power, which is the whole point of
+                // scaling it rather than bounding watts.
+                fields.get("unit").copied().unwrap_or("").to_string(),
+            )
+        }
         "commutation_order" => {
             let sequence = list("sequence")?;
             if sequence.len() < 2 {
@@ -996,7 +1131,7 @@ fn parse_rule(
             return Err(ctx(format!(
                 "unknown rule type '{other}' -- one of above, below, outside, inside, \
                  forbidden_state, required_path, switch_timing, rate_of_change, body_diode, \
-                 commutation_order, per_period, efficiency, zvs"
+                 commutation_order, per_period, efficiency, zvs, loss_closure"
             )))
         }
     };
@@ -1077,6 +1212,8 @@ pub struct StepSample<'a> {
     pub ports: &'a BTreeMap<String, Port>,
     /// Every switch's channel, so `P_cond(NAME)` resolves to its conduction power.
     pub switches: &'a BTreeMap<String, SwitchChannel>,
+    /// Every diode's curve, for the same reason.
+    pub diodes: &'a BTreeMap<String, DiodeCurve>,
 }
 
 impl Sample for StepSample<'_> {
@@ -1177,19 +1314,27 @@ impl StepSample<'_> {
     /// then -- which also makes a per-period mean come out as the duty-weighted average without
     /// the rule having to know the duty. Body-diode conduction is a different expression on a
     /// different state and is deliberately not counted here.
-    fn conduction_power(&self, switch: &str) -> Option<f64> {
-        let channel = self.switches.get(switch)?;
-        if !self.switch_on(switch)? {
-            return Some(0.0);
-        }
+    fn conduction_power(&self, device: &str) -> Option<f64> {
         let node = |name: &str| -> Option<f64> {
             if name == "0" {
                 return Some(0.0);
             }
             self.point.value(&format!("V({name})"))
         };
-        let across = node(&channel.positive)? - node(&channel.negative)?;
-        Some(across * across / channel.r_on)
+        if let Some(channel) = self.switches.get(device) {
+            if !self.switch_on(device)? {
+                return Some(0.0);
+            }
+            let across = node(&channel.positive)? - node(&channel.negative)?;
+            return Some(across * across / channel.r_on);
+        }
+        // A diode has no commanded state to gate on: its curve *is* the gating, and it is
+        // valid in every segment, so the power is simply $v \cdot i(v)$ with no special case.
+        // That also means a diode's blocking leakage is counted rather than assumed to be
+        // zero, which is correct and is usually negligible.
+        let curve = self.diodes.get(device)?;
+        let across = node(&curve.positive)? - node(&curve.negative)?;
+        Some(across * curve.current_at(across))
     }
 
     fn port_power(&self, port: &Port) -> Option<f64> {
@@ -1708,57 +1853,69 @@ G kind=sig2phys domain=voltage in=D
         );
     }
 
-    /// A `StepSample` over hand-written node voltages, for asserting the formula itself.
-    fn sample_with<'a>(
-        unknowns: &[&str],
-        x: &[f64],
-        gates: &'a BTreeMap<String, GateState>,
-        switches: &'a BTreeMap<String, SwitchChannel>,
-        point: &'a mut OperatingPoint,
-        outputs: &'a BTreeMap<String, SignalValue>,
-        ports: &'a BTreeMap<String, Port>,
-    ) -> StepSample<'a> {
-        point.unknowns = unknowns.iter().map(|s| s.to_string()).collect();
-        point.x = x.to_vec();
-        StepSample {
-            point,
-            outputs,
-            gates,
-            ports,
-            switches,
+    /// Owns everything a [`StepSample`] borrows, so a test can assert the formulae directly
+    /// against hand-written node voltages.
+    struct Fixture {
+        point: OperatingPoint,
+        outputs: BTreeMap<String, SignalValue>,
+        gates: BTreeMap<String, GateState>,
+        ports: BTreeMap<String, Port>,
+        switches: BTreeMap<String, SwitchChannel>,
+        diodes: BTreeMap<String, DiodeCurve>,
+    }
+
+    impl Fixture {
+        fn new(unknowns: &[&str], x: &[f64]) -> Fixture {
+            Fixture {
+                point: OperatingPoint {
+                    unknowns: unknowns.iter().map(|s| s.to_string()).collect(),
+                    x: x.to_vec(),
+                    diode_names: Vec::new(),
+                    diode_z: Vec::new(),
+                    diode_raw_ioff: Vec::new(),
+                },
+                outputs: BTreeMap::new(),
+                gates: BTreeMap::new(),
+                ports: BTreeMap::new(),
+                switches: BTreeMap::new(),
+                diodes: BTreeMap::new(),
+            }
+        }
+
+        fn with_switch(mut self, name: &str, channel: SwitchChannel, state: GateState) -> Fixture {
+            self.switches.insert(name.to_string(), channel);
+            self.gates.insert(name.to_string(), state);
+            self
+        }
+
+        fn sample(&self) -> StepSample<'_> {
+            StepSample {
+                point: &self.point,
+                outputs: &self.outputs,
+                gates: &self.gates,
+                ports: &self.ports,
+                switches: &self.switches,
+                diodes: &self.diodes,
+            }
         }
     }
 
     #[test]
     fn a_commanded_on_switch_dissipates_the_square_of_its_drop_over_r_on() {
-        let switches = BTreeMap::from([(
-            "DSW".to_string(),
+        // A 0.02 V drop across 0.02 ohm is 1 A, so 0.02 W.
+        let fixture = Fixture::new(&["V(in)", "V(mid)"], &[12.0, 11.98]).with_switch(
+            "DSW",
             SwitchChannel {
                 positive: "in".to_string(),
                 negative: "mid".to_string(),
                 r_on: 0.02,
             },
-        )]);
-        let gates = BTreeMap::from([("DSW".to_string(), GateState::On)]);
-        let (outputs, ports) = (BTreeMap::new(), BTreeMap::new());
-        let mut point = OperatingPoint {
-            unknowns: Vec::new(),
-            x: Vec::new(),
-            diode_names: Vec::new(),
-            diode_z: Vec::new(),
-            diode_raw_ioff: Vec::new(),
-        };
-        // A 0.02 V drop across 0.02 ohm is 1 A, so 0.02 W.
-        let sample = sample_with(
-            &["V(in)", "V(mid)"],
-            &[12.0, 11.98],
-            &gates,
-            &switches,
-            &mut point,
-            &outputs,
-            &ports,
+            GateState::On,
         );
-        let power = sample.get("P_cond(DSW)").expect("a commanded-on switch");
+        let power = fixture
+            .sample()
+            .get("P_cond(DSW)")
+            .expect("a commanded-on switch");
         assert!(
             (power - 0.02).abs() < 1e-12,
             "(0.02 V)^2 / 0.02 ohm = 0.02 W, got {power}"
@@ -1771,64 +1928,27 @@ G kind=sig2phys domain=voltage in=D
         // same arithmetic gave 1240 A against a true 0 A, because the device is no longer a
         // resistance and the voltage across it is the full blocking voltage. The gating on the
         // commanded state is the whole correctness argument, so it is asserted directly.
-        let switches = BTreeMap::from([(
-            "DSW".to_string(),
+        //
+        // The full bus across it: 12^2 / 0.02 would be 7200 W if the state were ignored.
+        let fixture = Fixture::new(&["V(in)", "V(mid)"], &[12.0, 0.0]).with_switch(
+            "DSW",
             SwitchChannel {
                 positive: "in".to_string(),
                 negative: "mid".to_string(),
                 r_on: 0.02,
             },
-        )]);
-        let gates = BTreeMap::from([("DSW".to_string(), GateState::Off)]);
-        let (outputs, ports) = (BTreeMap::new(), BTreeMap::new());
-        let mut point = OperatingPoint {
-            unknowns: Vec::new(),
-            x: Vec::new(),
-            diode_names: Vec::new(),
-            diode_z: Vec::new(),
-            diode_raw_ioff: Vec::new(),
-        };
-        // The full bus across it: 12^2 / 0.02 would be 7200 W if the state were ignored.
-        let sample = sample_with(
-            &["V(in)", "V(mid)"],
-            &[12.0, 0.0],
-            &gates,
-            &switches,
-            &mut point,
-            &outputs,
-            &ports,
+            GateState::Off,
         );
-        assert_eq!(sample.get("P_cond(DSW)"), Some(0.0));
+        assert_eq!(fixture.sample().get("P_cond(DSW)"), Some(0.0));
     }
 
     #[test]
-    fn an_undeclared_switch_has_no_conduction_power_rather_than_zero() {
-        // Unreadable, not zero: a rule naming a switch the netlist does not have must report as
+    fn an_undeclared_device_has_no_conduction_power_rather_than_zero() {
+        // Unreadable, not zero: a rule naming a device the netlist does not have must report as
         // unanswerable, exactly as every other missing quantity does. Zero would make a typo in
-        // a switch name look like a lossless device.
-        let (switches, gates, outputs, ports) = (
-            BTreeMap::new(),
-            BTreeMap::new(),
-            BTreeMap::new(),
-            BTreeMap::new(),
-        );
-        let mut point = OperatingPoint {
-            unknowns: Vec::new(),
-            x: Vec::new(),
-            diode_names: Vec::new(),
-            diode_z: Vec::new(),
-            diode_raw_ioff: Vec::new(),
-        };
-        let sample = sample_with(
-            &["V(in)"],
-            &[12.0],
-            &gates,
-            &switches,
-            &mut point,
-            &outputs,
-            &ports,
-        );
-        assert_eq!(sample.get("P_cond(NOPE)"), None);
+        // a device name look like a lossless part.
+        let fixture = Fixture::new(&["V(in)"], &[12.0]);
+        assert_eq!(fixture.sample().get("P_cond(NOPE)"), None);
     }
 
     // ---- the zvs card ----------------------------------------------------
@@ -1978,5 +2098,94 @@ G kind=sig2phys domain=voltage in=D
             3,
             "all three prefixed-bound cards should parse"
         );
+    }
+
+    // ---- the loss-closure card -------------------------------------------
+
+    const CLOSURE_DECK: &str = "\
+VIN in 0 12
+DSW in sw idealswitchmodel
+DSW kind=ideal_switch r_on=0.05 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 \
+body_v_f=0.5 body_g_on=100 gate=block ctrl=G
+D1 0 sw idealdiodemodel
+D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_f=0.4 g_on=100
+R1 sw 0 5
+ONE kind=const value=1
+G kind=sig2phys domain=voltage in=ONE
+P_IN kind=port v=(in,0) i=-VIN
+P_OUT kind=port v=(sw,0) i=-VIN
+";
+
+    #[test]
+    fn a_loss_closure_card_synthesises_the_conduction_quantity_for_each_device() {
+        // The deck names devices, not quantities -- the same choice `type=zvs` makes for its
+        // voltages. A first version passed the bare names through and the rule was reported as
+        // "NOT EVALUATED (80000 steps had no such quantity)", which is a confusing way to say
+        // the card and the sample disagreed about a name.
+        let (_, rules) = ratings(&format!(
+            "{CLOSURE_DECK}CLOSE kind=rule type=loss_closure in=P_IN out=P_OUT \
+             devices=DSW,D1 max=0.01 period=1e-5\n"
+        ));
+        assert_eq!(rules.len(), 1);
+        assert_eq!(
+            rules[0].watch,
+            Watch::LossClosure {
+                in_port: "P_IN".to_string(),
+                out_port: "P_OUT".to_string(),
+                devices: vec!["P_cond(DSW)".to_string(), "P_cond(D1)".to_string()],
+                boundary: PeriodBoundary::Fixed(1e-5),
+                max: 0.01,
+            }
+        );
+    }
+
+    #[test]
+    fn a_device_the_netlist_does_not_have_is_refused_by_name() {
+        // Silently unreadable would be the worst outcome available: the missing device would
+        // shrink the modelled total and be reported as unaccounted power, so a typo would read
+        // as a defect in the circuit.
+        let message = rating_error(&format!(
+            "{CLOSURE_DECK}CLOSE kind=rule type=loss_closure in=P_IN out=P_OUT \
+             devices=DSW,D9 max=0.01 period=1e-5\n"
+        ));
+        assert!(
+            message.contains("'D9' is not a declared") && message.contains("conduction loss"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_loss_closure_card_with_no_devices_is_refused() {
+        let message = rating_error(&format!(
+            "{CLOSURE_DECK}CLOSE kind=rule type=loss_closure in=P_IN out=P_OUT devices= \
+             max=0.01 period=1e-5\n"
+        ));
+        assert!(message.contains("devices"), "{message}");
+    }
+
+    #[test]
+    fn a_closure_bound_outside_zero_to_one_is_refused_because_it_is_a_fraction() {
+        // `max=5` would read as 5 W to anyone who had not read the docs, and would silently
+        // never fire. Refusing it is the only way the unit is unambiguous at the point of use.
+        let message = rating_error(&format!(
+            "{CLOSURE_DECK}CLOSE kind=rule type=loss_closure in=P_IN out=P_OUT devices=DSW \
+             max=5 period=1e-5\n"
+        ));
+        assert!(message.contains("fraction of the input power"), "{message}");
+    }
+
+    #[test]
+    fn a_diode_curve_is_assembled_like_a_switch_channel() {
+        let out = extract(CLOSURE_DECK, Dialect::Ngspice).expect("the deck parses");
+        let curve = &out.diodes["D1"];
+        assert_eq!(
+            (curve.positive.as_str(), curve.negative.as_str()),
+            ("0", "sw")
+        );
+        assert_eq!(curve.v_f, 0.4);
+        assert_eq!(curve.g_on, 100.0);
+        // Forward: i = g_on * (v - v_f) above the threshold, and the leakage term below it.
+        assert!((curve.current_at(1.4) - 100.0).abs() < 1e-12);
+        assert_eq!(curve.current_at(0.2), 0.0);
     }
 }

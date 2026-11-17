@@ -300,6 +300,38 @@ pub enum Watch {
         /// Report a turn-on that happens with more than this magnitude across the switch.
         v_max: f64,
     },
+    /// How much of a converter's power deficit the loss model fails to explain.
+    ///
+    /// $$ \text{unaccounted} = \frac{\left|\,\overline{p_\text{in}} - \overline{p_\text{out}}
+    /// - \sum_k \overline{p_k}\,\right|}{\overline{p_\text{in}}} $$
+    ///
+    /// Every individual loss rule answers "is this device dissipating more than it should". This
+    /// answers the question none of them can: **is the loss model describing the circuit at
+    /// all.** If the measured deficit between the ports is 6.10 W and the modelled losses add up
+    /// to 5.86 W, then 0.24 W is going somewhere the model does not describe -- and every
+    /// per-device figure can be individually correct while that is true.
+    ///
+    /// Scaled by the input power rather than bounded in watts, for the same reason
+    /// [`Watch::Efficiency`] is a ratio: a residual of 0.2 W means something quite different on
+    /// a 4 W converter and on a 4 kW one, and a deck should not have to restate its own power
+    /// level in a tolerance.
+    ///
+    /// Measured on a buck with a 50 m$\Omega$ switch and a 0.4 V freewheeling diode, averaged
+    /// over 2 ms once settled: a deficit of 0.2433 W against modelled losses of 0.2391 W, so
+    /// 0.0969% unaccounted. The diode was 0.2226 W of that total and the switch 0.0165 W, which
+    /// is why a model that counts only switches fails this check badly rather than subtly.
+    LossClosure {
+        /// The port supplying power, as [`Watch::Efficiency`]'s denominator.
+        in_port: String,
+        /// The port delivering it.
+        out_port: String,
+        /// The devices whose loss the model accounts for. Each name resolves to a conduction
+        /// power through the sample, so switches and diodes are named the same way.
+        devices: Vec<String>,
+        boundary: PeriodBoundary,
+        /// Report a period where more than this fraction of the input power is unexplained.
+        max: f64,
+    },
     /// The order a group of switches must turn on in.
     ///
     /// Multi-step commutation -- a current-source inverter, a matrix converter, any four-step
@@ -364,6 +396,20 @@ impl Watch {
                 .chain(voltages.iter())
                 .map(String::as_str)
                 .collect(),
+            Watch::LossClosure {
+                in_port,
+                out_port,
+                devices,
+                boundary,
+                ..
+            } => {
+                let mut names = vec![in_port.as_str(), out_port.as_str()];
+                names.extend(devices.iter().map(String::as_str));
+                if let PeriodBoundary::Sync(switch) = boundary {
+                    names.push(switch.as_str());
+                }
+                names
+            }
             Watch::Efficiency {
                 numerator,
                 denominator,

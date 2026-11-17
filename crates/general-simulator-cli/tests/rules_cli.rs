@@ -1800,3 +1800,125 @@ EXPECT kind=rule type=outside target=V(out) min={low} max={high} after=3e-3 seve
         "the report should carry the worst value and when it happened:\n{log}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Does the loss model describe the circuit at all?
+// ---------------------------------------------------------------------------
+
+/// A buck with ports on both sides and both of its conducting devices nameable.
+///
+/// `r_on=0.05` and a 0.4 V diode are chosen so the two losses are far apart: measured over a
+/// settled 2 ms window the diode dissipates 0.2227 W and the switch 0.0165 W, so the diode is
+/// 93% of the conduction loss. A deck where they were comparable would not show whether the
+/// check actually notices a missing device.
+const BUCK_FOR_CLOSURE: &str = "\
+VIN in 0 12
+DSW in sw idealswitchmodel
+DSW kind=ideal_switch r_on=0.05 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.5 body_g_on=100 gate=block ctrl=GATE
+D1 0 sw idealdiodemodel
+D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_f=0.4 g_on=100
+L1 sw out 1e-3
+C1 out 0 1e-4
+VSENSE out load 0
+R1 load 0 5
+DUTY kind=const value=0.4
+PWM1 kind=pwm freq=50000 in=DUTY
+GATE kind=sig2phys domain=voltage in=PWM1
+P_IN kind=port v=(in,0) i=-VIN
+P_OUT kind=port v=(out,0) i=VSENSE
+";
+
+fn closure_run(name: &str, card: &str) -> String {
+    let netlist = write(name, &format!("{BUCK_FOR_CLOSURE}{card}"));
+    run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "1e-2",
+        "--dt",
+        "1e-7",
+        "--out-every",
+        "2000000",
+    ]);
+    fs::read_to_string(netlist.with_extension("events.txt")).expect("the text log")
+}
+
+#[test]
+fn a_fully_modelled_converter_closes_its_loss_budget() {
+    // Cross-checked against an independent calculation rather than trusted: integrating the
+    // same CSV in Python with a plain trapezoid gave a 0.2433 W deficit against 0.2391 W of
+    // modelled loss, so 0.0969% unaccounted. The engine, which accumulates with sub-step
+    // interpolation through a different code path, reports 9.6869e-4 over the same window.
+    // Four significant figures from two independent computations.
+    let text = closure_run(
+        "closure_good.cir",
+        "CLOSE kind=rule type=loss_closure in=P_IN out=P_OUT devices=DSW,D1 max=0.002 \
+         period=2e-3 after=6e-3 severity=error\n",
+    );
+    assert!(
+        text.contains("P_OUT/P_IN.CLOSE") && text.contains("passed"),
+        "a buck whose only losses are conduction should close to better than 0.2%:\n{text}"
+    );
+}
+
+#[test]
+fn omitting_the_freewheeling_diode_shows_up_as_unaccounted_power() {
+    // The check's reason for existing. Every per-device figure can be individually correct
+    // while the model as a whole describes almost none of the loss -- here the switch's
+    // 0.0165 W is a true number about the switch and 7% of the real total.
+    let text = closure_run(
+        "closure_missing.cir",
+        "CLOSE kind=rule type=loss_closure in=P_IN out=P_OUT devices=DSW max=0.002 \
+         period=2e-3 after=6e-3 severity=error\n",
+    );
+    assert!(
+        text.contains("ERROR P_OUT/P_IN.CLOSE"),
+        "a loss model missing the dominant device should be reported:\n{text}"
+    );
+    // The finding has to carry the deficit *and* what the model accounted for, because the
+    // difference between the two is the only thing that tells a reader where to look.
+    assert!(
+        text.contains("deficit, model accounts for"),
+        "the finding should show both sides of the comparison:\n{text}"
+    );
+}
+
+#[test]
+fn the_unaccounted_fraction_is_far_larger_with_the_diode_left_out() {
+    // A bound either side of both answers would be arbitrary; what matters is that the two
+    // cases are separated by a wide margin rather than by a hair. Measured: 0.0969% with both
+    // devices, 5.62% with the switch alone -- a factor of 58.
+    let with_both = closure_run(
+        "closure_cmp_both.cir",
+        "CLOSE kind=rule type=loss_closure in=P_IN out=P_OUT devices=DSW,D1 max=0.0 \
+         period=2e-3 after=6e-3 severity=info\n",
+    );
+    let switch_only = closure_run(
+        "closure_cmp_one.cir",
+        "CLOSE kind=rule type=loss_closure in=P_IN out=P_OUT devices=DSW max=0.0 \
+         period=2e-3 after=6e-3 severity=info\n",
+    );
+    let fraction = |text: &str| -> f64 {
+        text.lines()
+            .rfind(|l| l.contains("P_OUT/P_IN.CLOSE") && l.contains(" at "))
+            .and_then(|l| {
+                l.split(" at ")
+                    .nth(1)?
+                    .split_whitespace()
+                    .next()?
+                    .parse()
+                    .ok()
+            })
+            .unwrap_or_else(|| panic!("no finding in:\n{text}"))
+    };
+    let (both, one) = (fraction(&with_both), fraction(&switch_only));
+    assert!(
+        both < 0.002,
+        "with both devices modelled the residual should be small, got {both}"
+    );
+    assert!(
+        one > 20.0 * both,
+        "leaving out 93% of the loss should be unmistakable: {one} vs {both}"
+    );
+}

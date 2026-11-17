@@ -602,6 +602,7 @@ fn run() -> Result<u8, String> {
         rules: device_rules,
         ports: device_ports,
         switches: device_switch_channels,
+        diodes: device_diode_curves,
     } = rules::extract(&devices_for_build, dialect).map_err(|e| {
         format!("parsing kind=rule cards, kind=port declarations and device ratings: {e}")
     })?;
@@ -615,6 +616,7 @@ fn run() -> Result<u8, String> {
         rules: netlist_rules,
         ports: netlist_ports,
         switches: netlist_switch_channels,
+        diodes: netlist_diode_curves,
     } = rules::extract(&netlist, dialect).map_err(|e| {
         format!("parsing kind=rule cards, kind=port declarations and device ratings: {e}")
     })?;
@@ -647,6 +649,13 @@ fn run() -> Result<u8, String> {
         all
     } else {
         device_switch_channels
+    };
+    let diode_curves = if devices_path.is_some() {
+        let mut all = netlist_diode_curves;
+        all.extend(device_diode_curves);
+        all
+    } else {
+        device_diode_curves
     };
     let general_mna::System {
         ideal_diodes: diodes,
@@ -798,6 +807,7 @@ fn run() -> Result<u8, String> {
                 declared_rules,
                 &declared_ports,
                 &switch_channels,
+                &diode_curves,
                 CheckpointArgs {
                     out: checkpoint_out.as_deref().map(Path::new),
                     every: checkpoint_every,
@@ -947,6 +957,7 @@ fn run_transient_streamed(
     declared_rules: Vec<gsim_rules::Rule>,
     declared_ports: &BTreeMap<String, rules::Port>,
     switch_channels: &BTreeMap<String, rules::SwitchChannel>,
+    diode_curves: &BTreeMap<String, rules::DiodeCurve>,
     checkpoints: CheckpointArgs<'_>,
 ) -> Result<u8, String> {
     let resume_from = match checkpoints.resume {
@@ -1131,6 +1142,7 @@ fn run_transient_streamed(
                     gates: &gate_states,
                     ports: declared_ports,
                     switches: switch_channels,
+                    diodes: diode_curves,
                 };
                 for event in engine.observe(steps_seen, t, &sample) {
                     reporter.record(&event).map_err(DaeError::Io)?;
