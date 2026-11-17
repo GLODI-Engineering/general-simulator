@@ -175,6 +175,53 @@ pub enum Watch {
         /// still settles.
         require_commutation: bool,
     },
+    /// How fast a quantity is allowed to change.
+    ///
+    /// The general form of the cut-current check. Open every switch in an inductor's path and
+    /// the current has nowhere to go; the solver answers with whatever voltage the stamp
+    /// implies rather than with an error, and the result is the enormous spike that everyone
+    /// has seen and that is routinely blamed on the solver rather than on the netlist.
+    ///
+    /// `RequiredPath` catches the case where the switches that should have been conducting can
+    /// be named. This catches it from the other side, off the solution itself, and catches
+    /// every other impossible slew with it -- a current step through an inductance implies
+    /// $v = L \, \mathrm{d}i/\mathrm{d}t$, and a bound on the slope is a bound on that
+    /// voltage.
+    RateOfChange {
+        quantity: String,
+        /// Report when $|\mathrm{d}x/\mathrm{d}t|$ exceeds this, in the quantity's own units
+        /// per second.
+        max_slope: f64,
+    },
+    /// A switch that is commanded off and conducting anyway, through its body diode.
+    ///
+    /// Not a fault by itself -- it is exactly how a synchronous bridge freewheels, and how
+    /// every unsynchronised dead time is survived. It becomes a finding when the current is
+    /// large, because then it is either a sync FET whose channel was never turned on (so the
+    /// losses are the diode's, several times what the design assumed) or a path nobody
+    /// intended.
+    ///
+    /// Only meaningful for a commanded-off switch, and that is not a limitation of the rule
+    /// but of what the question means: a switch commanded *on* is stamped as a plain
+    /// resistance conducting in both directions, so it cannot fail to conduct.
+    BodyDiode {
+        switches: Vec<String>,
+        /// Below this magnitude the conduction is ordinary dead-time freewheeling, so the rule
+        /// stays quiet.
+        i_min: f64,
+        /// The current through each switch, in `switches` order. Named rather than derived
+        /// because a switch's own current is not an MNA unknown.
+        currents: Vec<String>,
+    },
+    /// The order a group of switches must turn on in.
+    ///
+    /// Multi-step commutation -- a current-source inverter, a matrix converter, any four-step
+    /// sequence -- is correct only if the transitions happen in the stated order. Out of order
+    /// it still simulates, and the answer is wrong in a way nothing in the waveform reveals.
+    CommutationOrder {
+        /// The cyclic order of turn-ons. After the last, the next expected is the first again.
+        sequence: Vec<String>,
+    },
 }
 
 impl Watch {
@@ -184,6 +231,9 @@ impl Watch {
             Watch::Quantity { quantity } => vec![quantity.as_str()],
             Watch::ForbiddenState { switches, .. } => switches.iter().map(String::as_str).collect(),
             Watch::SwitchTiming { switches, .. } => switches.iter().map(String::as_str).collect(),
+            Watch::RateOfChange { quantity, .. } => vec![quantity.as_str()],
+            Watch::BodyDiode { switches, .. } => switches.iter().map(String::as_str).collect(),
+            Watch::CommutationOrder { sequence } => sequence.iter().map(String::as_str).collect(),
             Watch::RequiredPath {
                 switches, current, ..
             } => switches

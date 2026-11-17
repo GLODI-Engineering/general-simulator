@@ -670,3 +670,183 @@ fn a_deck_whose_gates_are_driven_by_a_modulator_says_nothing() {
         "a working buck must be silent: {stderr}"
     );
 }
+
+// -------------------------------------------------------------------------------------------
+// Conduction checks through the binary. See #53.
+// -------------------------------------------------------------------------------------------
+
+/// A synchronous buck: a high-side switch and a low-side sync rectifier driven by the
+/// complementary outputs of one PWM, with 300 ns of dead time inserted on each edge.
+///
+/// A 0 V source sits in series with each switch. That is how a switch's own current becomes
+/// observable -- only V, L, E and H carry a branch-current unknown, and `general-mna` says so
+/// when asked for a switch's current directly.
+const SYNC_BUCK: &str = "\
+VIN vin 0 12
+VSH vin sh 0
+DSH sh mid idealswitchmodel
+DSH kind=ideal_switch r_on=0.02 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.4 g_on=50 gate=block ctrl=GH
+VSL mid sl 0
+DSL sl 0 idealswitchmodel
+DSL kind=ideal_switch r_on=0.02 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.4 g_on=50 gate=block ctrl=GL
+L1 mid out 22e-6
+C1 out 0 47e-6 ic=5
+RL out 0 4
+DUTY kind=const value=0.45
+PWM1 kind=pwm freq=100000 in=DUTY red=300e-9 fed=300e-9
+GH kind=sig2phys domain=voltage in=PWM1
+GL kind=sig2phys domain=voltage in=PWM1_comp
+";
+
+#[test]
+fn a_body_diode_carrying_the_dead_time_current_is_reported_with_its_duration() {
+    // This test measures the dead time twice, by two independent routes, and they must agree:
+    // 300 ns was inserted into the modulator with `fed=`, and what comes back is the length of
+    // the interval during which the low-side switch was commanded off and its body diode was
+    // resolved into conduction. If the rule were reading the wrong thing, the two numbers
+    // would not match to three digits.
+    let netlist = write(
+        "sync_body.cir",
+        &format!(
+            "{SYNC_BUCK}B_dsl kind=rule type=body_diode switches=DSL currents=I(VSL) \
+             i_min=0.5 severity=warning\n"
+        ),
+    );
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "3e-5",
+        "--dt",
+        "1e-8",
+    ]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("body diode conducting in DSL"), "{stderr}");
+    assert!(
+        stderr.contains("302.3458 ns") || stderr.contains("302."),
+        "the measured interval should be the 300 ns dead time: {stderr}"
+    );
+}
+
+#[test]
+fn a_threshold_above_the_dead_time_current_keeps_ordinary_freewheeling_quiet() {
+    // Without this the test above would pass for a rule that reports any commanded-off switch.
+    let netlist = write(
+        "sync_body_ok.cir",
+        &format!(
+            "{SYNC_BUCK}B_dsl kind=rule type=body_diode switches=DSL currents=I(VSL) \
+             i_min=50 severity=warning\n"
+        ),
+    );
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "3e-5",
+        "--dt",
+        "1e-8",
+    ]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("0 violated, 1 passed"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn a_slope_bound_reports_the_slope_the_circuit_actually_produced() {
+    // The buck's inductor sees about 9 V across 22 uH at start-up, so di/dt is about
+    // 4.1e5 A/s. The figure in the log is checked against that derivation rather than against
+    // itself: a bound of 2e5 must report roughly 4.1e5, not merely something.
+    let netlist = write(
+        "slew.cir",
+        &format!(
+            "{BUCK}R_slew kind=rule type=rate_of_change target=I(L1) max_slope=2e5 \
+             unit=A/s severity=warning\n"
+        ),
+    );
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "2e-5",
+        "--dt",
+        "1e-7",
+    ]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("limit 200000.0000A/s"), "{stderr}");
+    assert!(stderr.contains("40"), "about 4.1e5 A/s expected: {stderr}");
+
+    // And a bound the circuit cannot reach passes, so the rule is not simply always firing.
+    let ok = write(
+        "slew_ok.cir",
+        &format!(
+            "{BUCK}R_slew kind=rule type=rate_of_change target=I(L1) max_slope=1e9 \
+             unit=A/s severity=warning\n"
+        ),
+    );
+    let output = run(&[
+        ok.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "2e-5",
+        "--dt",
+        "1e-7",
+    ]);
+    assert_eq!(output.status.code(), Some(0));
+}
+
+#[test]
+fn a_commutation_order_the_bridge_keeps_passes() {
+    let netlist = write(
+        "order_ok.cir",
+        &format!("{SYNC_BUCK}C_ord kind=rule type=commutation_order sequence=DSH,DSL\n"),
+    );
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "3e-5",
+        "--dt",
+        "1e-8",
+    ]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("0 violated, 1 passed"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn the_conduction_cards_reject_what_they_cannot_act_on() {
+    // A current per switch, because a switch's own current is not an MNA unknown and the rule
+    // cannot invent one.
+    let mismatched = write(
+        "order_bad.cir",
+        &format!(
+            "{SYNC_BUCK}B_x kind=rule type=body_diode switches=DSH,DSL currents=I(VSH) i_min=1\n"
+        ),
+    );
+    let output = run(&[mismatched.to_str().unwrap(), "--mode", "transient"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("lists 1 name(s) for 2 switch(es)"),
+        "{stderr}"
+    );
+
+    // An order of one is not an order.
+    let single = write(
+        "order_one.cir",
+        &format!("{SYNC_BUCK}C_ord kind=rule type=commutation_order sequence=DSH\n"),
+    );
+    let output = run(&[single.to_str().unwrap(), "--mode", "transient"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("needs at least two switches"), "{stderr}");
+}

@@ -670,3 +670,267 @@ fn a_timing_rule_whose_switch_does_not_exist_says_so_rather_than_passing() {
     assert_eq!(summaries[0].missing_samples, 3);
     assert!(!summaries[0].passed(), "unreadable is not passed");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Conduction checks: a slope bound, a body diode carrying current, and a commutation order.
+// See #53.
+// ---------------------------------------------------------------------------------------------
+
+fn slope_rule(max_slope: f64) -> Rule {
+    Rule {
+        name: "R_slew".into(),
+        target: "I(L1)".into(),
+        watch: Watch::RateOfChange {
+            quantity: "I(L1)".into(),
+            max_slope,
+        },
+        unit: " A/s".into(),
+        condition: Condition::Above { limit: max_slope },
+        qualifiers: Default::default(),
+        severity: Severity::Error,
+        action: Action::Log,
+    }
+}
+
+#[test]
+fn a_slope_within_its_bound_is_not_reported() {
+    let mut engine = RuleEngine::new(vec![slope_rule(1e6)], false);
+    // 1 A per microsecond is 1e6 A/s exactly; stepping by 0.5 A each microsecond is half that.
+    for (step, value) in [0.0, 0.5, 1.0, 1.5].iter().enumerate() {
+        let records = engine.observe(step, step as f64 * 1e-6, &scalar("I(L1)", *value));
+        assert!(records.is_empty(), "at step {step}: {records:?}");
+    }
+}
+
+#[test]
+fn a_slope_over_its_bound_is_reported_with_the_slope_it_measured() {
+    let mut engine = RuleEngine::new(vec![slope_rule(1e6)], false);
+    let mut all = Vec::new();
+    // 3 A in one microsecond: 3e6 A/s.
+    for (step, value) in [0.0, 3.0].iter().enumerate() {
+        all.extend(engine.observe(step, step as f64 * 1e-6, &scalar("I(L1)", *value)));
+    }
+    assert_eq!(all.len(), 1, "{all:?}");
+    assert!((all[0].value - 3e6).abs() < 1.0, "{}", all[0].value);
+    assert_eq!(all[0].limit, 1e6);
+}
+
+#[test]
+fn a_slope_is_judged_on_magnitude_so_a_collapse_counts_as_much_as_a_surge() {
+    // A cut current falls as violently as it rises, and the sign of the branch depends on how
+    // the element was declared. Judging the signed slope would catch half the cases.
+    let mut engine = RuleEngine::new(vec![slope_rule(1e6)], false);
+    let mut all = Vec::new();
+    for (step, value) in [3.0, 0.0].iter().enumerate() {
+        all.extend(engine.observe(step, step as f64 * 1e-6, &scalar("I(L1)", *value)));
+    }
+    assert_eq!(all.len(), 1, "{all:?}");
+    assert!((all[0].value + 3e6).abs() < 1.0, "{}", all[0].value);
+}
+
+#[test]
+fn the_first_step_of_a_slope_rule_is_not_a_missing_sample() {
+    // There is no slope on the first step. Counting it as unreadable would leave every rate
+    // rule marked NOT EVALUATED for a step it could never have answered, which would make the
+    // summary lie about the one thing it exists to tell the truth about.
+    let mut engine = RuleEngine::new(vec![slope_rule(1e6)], false);
+    engine.observe(0, 0.0, &scalar("I(L1)", 5.0));
+    let (_, summaries) = engine.finish(1);
+    assert_eq!(summaries[0].missing_samples, 0);
+    assert!(summaries[0].passed());
+}
+
+/// A sample carrying a switch's commanded state, its body-diode segment and its current.
+struct Bridge {
+    on: bool,
+    body_diode: bool,
+    current: f64,
+}
+
+impl Sample for Bridge {
+    fn get(&self, quantity: &str) -> Option<f64> {
+        (quantity == "I(VSL)").then_some(self.current)
+    }
+    fn switch_on(&self, switch: &str) -> Option<bool> {
+        (switch == "DSL").then_some(self.on)
+    }
+    fn body_diode_on(&self, switch: &str) -> Option<bool> {
+        (switch == "DSL").then_some(self.body_diode)
+    }
+}
+
+fn body_diode_rule(i_min: f64) -> Rule {
+    Rule {
+        name: "B_dsl".into(),
+        target: "DSL".into(),
+        watch: Watch::BodyDiode {
+            switches: vec!["DSL".into()],
+            i_min,
+            currents: vec!["I(VSL)".into()],
+        },
+        unit: " A".into(),
+        condition: Condition::Above { limit: i_min },
+        qualifiers: Default::default(),
+        severity: Severity::Warning,
+        action: Action::Log,
+    }
+}
+
+#[test]
+fn a_body_diode_carrying_more_than_the_threshold_is_reported() {
+    let mut engine = RuleEngine::new(vec![body_diode_rule(0.5)], false);
+    let records = engine.observe(
+        0,
+        0.0,
+        &Bridge {
+            on: false,
+            body_diode: true,
+            current: 1.3,
+        },
+    );
+    assert_eq!(records.len(), 1, "{records:?}");
+    let detail = records[0].detail.as_deref().unwrap_or_default();
+    assert!(detail.contains("body diode conducting in DSL"), "{detail}");
+    assert!((records[0].value - 1.3).abs() < 1e-12);
+}
+
+#[test]
+fn ordinary_dead_time_freewheeling_stays_below_the_threshold_and_stays_quiet() {
+    // The reason the rule has a threshold at all: a body diode carrying current is how every
+    // unsynchronised dead time is survived, and reporting each one would bury the case where
+    // the channel was never turned on.
+    let mut engine = RuleEngine::new(vec![body_diode_rule(10.0)], false);
+    let records = engine.observe(
+        0,
+        0.0,
+        &Bridge {
+            on: false,
+            body_diode: true,
+            current: 1.3,
+        },
+    );
+    assert!(records.is_empty());
+}
+
+#[test]
+fn a_switch_that_is_commanded_on_is_not_a_body_diode_finding() {
+    // A commanded-on switch is stamped as a plain resistance conducting both ways, so it has
+    // no body-diode segment and the question does not apply to it.
+    let mut engine = RuleEngine::new(vec![body_diode_rule(0.5)], false);
+    let records = engine.observe(
+        0,
+        0.0,
+        &Bridge {
+            on: true,
+            body_diode: true,
+            current: 50.0,
+        },
+    );
+    assert!(records.is_empty());
+}
+
+fn order_rule(sequence: &[&str]) -> Rule {
+    Rule {
+        name: "C_ord".into(),
+        target: sequence.join("->"),
+        watch: Watch::CommutationOrder {
+            sequence: sequence.iter().map(|s| (*s).to_string()).collect(),
+        },
+        unit: String::new(),
+        condition: Condition::Above { limit: 0.0 },
+        qualifiers: Default::default(),
+        severity: Severity::Error,
+        action: Action::Log,
+    }
+}
+
+/// One step of a three-switch bridge.
+fn three(a: bool, b: bool, c: bool) -> Step {
+    Step {
+        values: BTreeMap::new(),
+        switches: BTreeMap::from([
+            ("S1".to_string(), a),
+            ("S2".to_string(), b),
+            ("S3".to_string(), c),
+        ]),
+    }
+}
+
+#[test]
+fn turn_ons_in_the_stated_order_raise_nothing() {
+    let mut engine = RuleEngine::new(vec![order_rule(&["S1", "S2", "S3"])], false);
+    let pattern = [
+        (false, false, false),
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+        (true, false, false),
+    ];
+    for (step, (a, b, c)) in pattern.iter().enumerate() {
+        let records = engine.observe(step, step as f64 * 1e-6, &three(*a, *b, *c));
+        assert!(records.is_empty(), "at step {step}: {records:?}");
+    }
+}
+
+#[test]
+fn a_turn_on_out_of_order_is_reported_and_names_what_was_expected() {
+    let mut engine = RuleEngine::new(vec![order_rule(&["S1", "S2", "S3"])], false);
+    let mut all = Vec::new();
+    // S1, then S3 where S2 was due.
+    for (step, (a, b, c)) in [
+        (false, false, false),
+        (true, false, false),
+        (false, false, true),
+    ]
+    .iter()
+    .enumerate()
+    {
+        all.extend(engine.observe(step, step as f64 * 1e-6, &three(*a, *b, *c)));
+    }
+    assert_eq!(all.len(), 1, "{all:?}");
+    let detail = all[0].detail.as_deref().unwrap_or_default();
+    assert!(detail.contains("S3 turned on out of order"), "{detail}");
+    assert!(detail.contains("S2 was expected next"), "{detail}");
+}
+
+#[test]
+fn a_run_that_starts_midway_through_a_sequence_is_not_reported_for_it() {
+    // The phase comes from the first turn-on observed. Assuming the sequence begins at its
+    // first entry would report an artefact of where the window opened.
+    let mut engine = RuleEngine::new(vec![order_rule(&["S1", "S2", "S3"])], false);
+    let mut all = Vec::new();
+    for (step, (a, b, c)) in [
+        (false, false, false),
+        (false, true, false),
+        (false, false, true),
+        (true, false, false),
+    ]
+    .iter()
+    .enumerate()
+    {
+        all.extend(engine.observe(step, step as f64 * 1e-6, &three(*a, *b, *c)));
+    }
+    assert!(all.is_empty(), "started at S2, which is allowed: {all:?}");
+}
+
+#[test]
+fn one_departure_from_the_order_does_not_report_on_every_later_transition() {
+    // Resynchronising to what happened rather than to what was wanted. Otherwise a single
+    // mistake produces a finding per transition for the rest of the run, and a log with a
+    // thousand lines hides the one that mattered.
+    let mut engine = RuleEngine::new(vec![order_rule(&["S1", "S2", "S3"])], false);
+    let mut all = Vec::new();
+    for (step, (a, b, c)) in [
+        (false, false, false),
+        (true, false, false),
+        (false, false, true), // out of order
+        (true, false, false), // S1 again: correct after S3
+        (false, true, false), // S2: correct after S1
+    ]
+    .iter()
+    .enumerate()
+    {
+        all.extend(engine.observe(step, step as f64 * 1e-6, &three(*a, *b, *c)));
+    }
+    assert_eq!(all.len(), 1, "exactly one finding: {all:?}");
+}
