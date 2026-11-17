@@ -597,15 +597,25 @@ fn run() -> Result<u8, String> {
     // checkpoint is keyed by is taken over the parsed statements, so a rule left in them would
     // mean that editing a limit invalidates the checkpoint of the run that limit just stopped.
     // Stripping them here is what lets a run stop on a rule, have the rule adjusted, and resume.
-    let (devices_for_build, device_rules) = rules::extract(&devices_for_build, dialect)
-        .map_err(|e| format!("parsing kind=rule cards and device ratings: {e}"))?;
+    let rules::Extracted {
+        netlist: devices_for_build,
+        rules: device_rules,
+        ports: device_ports,
+    } = rules::extract(&devices_for_build, dialect).map_err(|e| {
+        format!("parsing kind=rule cards, kind=port declarations and device ratings: {e}")
+    })?;
     // The solver re-parses the netlist *itself*, and the deck hash a checkpoint is keyed by is
     // taken over those statements -- so the cards have to be gone from this copy too, not only
     // from the one `build_system` sees. Without this, editing a limit changes the hash, and the
     // checkpoint written by the run that limit just stopped refuses to load into the deck that
     // differs from it by one number.
-    let (netlist, netlist_rules) = rules::extract(&netlist, dialect)
-        .map_err(|e| format!("parsing kind=rule cards and device ratings: {e}"))?;
+    let rules::Extracted {
+        netlist,
+        rules: netlist_rules,
+        ports: netlist_ports,
+    } = rules::extract(&netlist, dialect).map_err(|e| {
+        format!("parsing kind=rule cards, kind=port declarations and device ratings: {e}")
+    })?;
     // With no `--devices`, both extractions ran over the same text and found the same cards;
     // with one, a rule may sit in either file and both sets count.
     let declared_rules = if devices_path.is_some() {
@@ -614,6 +624,16 @@ fn run() -> Result<u8, String> {
         all
     } else {
         device_rules
+    };
+    // Ports are merged the same way, and for the same reason: with `--devices` a port may be
+    // declared in either file. A name declared in both is the devices file's, which is the same
+    // precedence `extract` itself applies within one file.
+    let declared_ports = if devices_path.is_some() {
+        let mut all = netlist_ports;
+        all.extend(device_ports);
+        all
+    } else {
+        device_ports
     };
     let general_mna::System {
         ideal_diodes: diodes,
@@ -763,6 +783,7 @@ fn run() -> Result<u8, String> {
                 netlist_path,
                 &measurements,
                 declared_rules,
+                &declared_ports,
                 CheckpointArgs {
                     out: checkpoint_out.as_deref().map(Path::new),
                     every: checkpoint_every,
@@ -910,6 +931,7 @@ fn run_transient_streamed(
     netlist_path: &str,
     measurements: &[measure::MeasureSpec],
     declared_rules: Vec<gsim_rules::Rule>,
+    declared_ports: &BTreeMap<String, rules::Port>,
     checkpoints: CheckpointArgs<'_>,
 ) -> Result<u8, String> {
     let resume_from = match checkpoints.resume {
@@ -1092,6 +1114,7 @@ fn run_transient_streamed(
                     point: &point,
                     outputs: &outputs,
                     gates: &gate_states,
+                    ports: declared_ports,
                 };
                 for event in engine.observe(steps_seen, t, &sample) {
                     reporter.record(&event).map_err(DaeError::Io)?;

@@ -230,6 +230,43 @@ pub enum Watch {
         /// Report a period whose measure rises above this.
         max: Option<f64>,
     },
+    /// The ratio of two quantities, each averaged over the same period.
+    ///
+    /// Built for efficiency, which is what the question "is this a converter at all" reduces
+    /// to. A converter that produces more power than it consumes is not a converter, and
+    /// nothing in a waveform says so: every voltage and current can sit inside its own limit
+    /// while the circuit as a whole invents energy.
+    ///
+    /// The quantity is deliberately a *ratio* rather than a bounded difference between the two
+    /// powers. A difference needs a tolerance, and a tolerance needs a reference -- a
+    /// percentage of the input, of the larger side, of the rated power -- and each choice makes
+    /// a different claim. At 5% load, 2% of the input power is a different statement from 2% of
+    /// the rating, and neither is the one anyone means. A ratio is dimensionless and
+    /// self-normalising, so $\eta \le 1$ is the same correct claim at full load and at no load.
+    ///
+    /// Both quantities are averaged because instantaneous power changes sign inside a
+    /// switching cycle: the useful statement is about the cycle, not the instant.
+    ///
+    /// It also catches the lossless-element mistakes, which no efficiency *floor* would. A
+    /// transformer stamped with the wrong turns ratio dissipates nothing, so it does not look
+    /// lossy -- it looks like a gain. A band of $0.99 \le \eta \le 1.01$ across such an element
+    /// reports it; so does a dependent source with the wrong gain, and a port wired to the
+    /// wrong node.
+    Efficiency {
+        /// The quantity on top -- the output power, for an efficiency.
+        numerator: String,
+        /// The quantity underneath -- the input power. A period in which this averages to zero
+        /// is skipped rather than reported: a ratio against nothing is not a finding about the
+        /// circuit, and a converter that has not started yet would otherwise fail on its first
+        /// period.
+        denominator: String,
+        boundary: PeriodBoundary,
+        /// Report a period whose ratio falls below this -- an efficiency floor.
+        min: Option<f64>,
+        /// Report a period whose ratio rises above this. `max=1` is the one that says "this is
+        /// a converter": above it, energy is being created.
+        max: Option<f64>,
+    },
     /// The order a group of switches must turn on in.
     ///
     /// Multi-step commutation -- a current-source inverter, a matrix converter, any four-step
@@ -287,6 +324,18 @@ impl Watch {
                 PeriodBoundary::Fixed(_) => vec![quantity.as_str()],
                 PeriodBoundary::Sync(switch) => vec![quantity.as_str(), switch.as_str()],
             },
+            Watch::Efficiency {
+                numerator,
+                denominator,
+                boundary,
+                ..
+            } => {
+                let mut names = vec![numerator.as_str(), denominator.as_str()];
+                if let PeriodBoundary::Sync(switch) = boundary {
+                    names.push(switch.as_str());
+                }
+                names
+            }
             Watch::RequiredPath {
                 switches, current, ..
             } => switches

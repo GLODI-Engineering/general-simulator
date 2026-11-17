@@ -47,14 +47,136 @@ use gsim_rules::{
     Sample, Severity, Watch,
 };
 
+/// A declared power port: a voltage measured across one node pair, a current measured through
+/// one branch, and therefore a power.
+///
+/// ## Why this exists at all
+///
+/// The rules engine reads *named scalars*. Power is $p = v \cdot i$, a product of two names, and
+/// the engine has no arithmetic -- so there was nothing to write in a rule's `target=`. Three
+/// ways out were available: let the netlist compute it with a `kind=product` chain per port,
+/// give the rule grammar an expression language, or make the port a declared object. The port
+/// object was chosen because loss estimation needs exactly the same thing: power in minus power
+/// out, per element and per stage. An expression evaluator would have been re-derived into
+/// ports anyway, and it would have turned every `target=` field into a parser.
+///
+/// ## Sign convention: the plain product, and an explicit minus where one is needed
+///
+/// $p = V(\text{positive}, \text{negative}) \times I(\text{branch})$ -- the plain product, with
+/// the solver's own sign for the branch current and no hidden negation anywhere. `i=` may carry
+/// a leading minus (`i=-VIN`) which negates that current, and that is the only sign control
+/// there is.
+///
+/// A single built-in negation cannot serve both ends of a converter, which was established by
+/// measurement rather than argument. The solver reports a branch current in the passive
+/// convention, positive *into* the element's first node:
+///
+/// - On a **source**, current leaves the positive terminal: `VIN in 0 12` feeding `R1 in 0 12`
+///   solves to `I(VIN) = -1 A` while 1 A plainly flows from `in` through the resistor. So an
+///   input port reads positive with the minus: `P_IN kind=port v=(in,0) i=-VIN` gives
+///   $12 \times 1 = +12$ W.
+/// - On a **series sense element**, current enters the positive terminal: with
+///   `VSENSE out load 0` in line with the load, `I(VSENSE)` is already the load current. So an
+///   output port reads positive without one: `P_OUT kind=port v=(out,0) i=VSENSE` gives
+///   $V_\text{out} \times I_\text{load}$.
+///
+/// A first version of this type negated unconditionally, on the strength of the source
+/// measurement alone. The output port of a buck then came out negative and its rule silently
+/// never fired -- caught by probing a real converter, which is why both canonical declarations
+/// are written out above and asserted by a test.
+///
+/// Those two lines are the whole vocabulary: a port on a source carries the minus, a port on a
+/// sense element does not. A port declared the wrong way round reports a negative power, so an
+/// `type=efficiency` rule with `min=0` reports the mistake rather than inverting the answer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Port {
+    /// The port's own name, which is what a rule's `target=`/`in=`/`out=` names.
+    pub name: String,
+    /// The node the voltage is measured from. `0` is ground.
+    pub positive: String,
+    /// The node the voltage is measured to. `0` is ground.
+    pub negative: String,
+    /// The element whose branch current is this port's current. Must be one the solver actually
+    /// solves a current for -- `V`, `L`, `E` or `H` -- which is why a sense source is the usual
+    /// way to put a port anywhere else.
+    pub branch: String,
+    /// Whether `i=` carried a leading minus, as a port on a source does.
+    pub negate: bool,
+}
+
+/// What a deck carried besides the circuit: rules, ports, and the netlist without them.
+#[derive(Debug)]
+pub struct Extracted {
+    /// The netlist with every card and rating removed, which is what the solver parses.
+    pub netlist: String,
+    pub rules: Vec<Rule>,
+    /// Declared ports, by name.
+    pub ports: BTreeMap<String, Port>,
+}
+
+/// Parses one `kind=port` declaration.
+fn parse_port(name: &str, line: usize, fields: &BTreeMap<&str, &str>) -> Result<Port, String> {
+    let ctx = |msg: String| format!("line {line}: port '{name}': {msg}");
+    let pair = fields.get("v").copied().ok_or_else(|| {
+        ctx("missing field 'v' -- the node pair the voltage is across, v=(p,n)".into())
+    })?;
+    let inner = pair
+        .strip_prefix('(')
+        .and_then(|rest| rest.strip_suffix(')'))
+        .ok_or_else(|| {
+            ctx(format!(
+                "field 'v' must be a node pair like v=(out,0), not '{pair}'"
+            ))
+        })?;
+    let (positive, negative) = inner.split_once(',').ok_or_else(|| {
+        ctx(format!(
+            "field 'v' needs two nodes separated by a comma, not '{pair}'"
+        ))
+    })?;
+    if positive.trim().is_empty() || negative.trim().is_empty() {
+        return Err(ctx(format!("field 'v' has an empty node: '{pair}'")));
+    }
+    let branch = fields
+        .get("i")
+        .copied()
+        .ok_or_else(|| {
+            ctx(
+                "missing field 'i' -- the element whose branch current is this port's current \
+                 (a V, L, E or H; put a zero-volt sense source in series to measure anywhere \
+                 else)"
+                    .into(),
+            )
+        })?
+        .trim()
+        .to_string();
+    // A leading minus negates the branch current, which is what a port on a source needs. It is
+    // the only sign control, and it is visible in the deck rather than implied by the kind of
+    // element named.
+    let (negate, branch) = match branch.strip_prefix('-') {
+        Some(rest) => (true, rest.trim().to_string()),
+        None => (false, branch),
+    };
+    if branch.is_empty() {
+        return Err(ctx("field 'i' names no element".into()));
+    }
+    Ok(Port {
+        name: name.to_string(),
+        positive: positive.trim().to_string(),
+        negative: negative.trim().to_string(),
+        branch,
+        negate,
+    })
+}
+
 /// Pulls every `kind=rule` card and every device-line rating out of `source`, returning the
 /// netlist without them.
 ///
 /// A card's whole line goes; a rating is cut token by token, because the device it is written on
 /// still has to be there afterwards. See the module doc for why either is removed at all.
-pub fn extract(source: &str, dialect: Dialect) -> Result<(String, Vec<Rule>), String> {
+pub fn extract(source: &str, dialect: Dialect) -> Result<Extracted, String> {
     let statements = general_mna::parse_and_flatten(source, dialect)?;
     let mut rules = Vec::new();
+    let mut ports: BTreeMap<String, Port> = BTreeMap::new();
     let mut blank_lines: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     // Rating tokens to cut, keyed by the line they sit on. A device card may span continuation
     // lines, so the token's own line is what matters, not the element's first.
@@ -87,17 +209,34 @@ pub fn extract(source: &str, dialect: Dialect) -> Result<(String, Vec<Rule>), St
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
-        if fields.get("kind").copied() != Some("rule") {
-            continue;
+        match fields.get("kind").copied() {
+            // A port is stripped for the same two reasons a rule card is: the solver would
+            // reject it as an unknown device kind, and it must not reach the parsed statements
+            // the checkpoint's deck hash is taken over -- adding a port to inspect a stopped
+            // run would otherwise invalidate the checkpoint of the run being inspected.
+            Some("port") => {
+                let port = parse_port(&bi.name, bi.span.start, &fields)?;
+                if let Some(first) = ports.insert(port.name.clone(), port) {
+                    return Err(format!(
+                        "line {}: port '{}' is declared twice -- two ports of one name would                          make a rule naming it ambiguous",
+                        bi.span.start, first.name
+                    ));
+                }
+            }
+            Some("rule") => rules.push(parse_rule(&bi.name, bi.span.start, &fields)?),
+            _ => continue,
         }
-        rules.push(parse_rule(&bi.name, bi.span.start, &fields)?);
         for line in bi.span.clone() {
             blank_lines.insert(line);
         }
     }
 
     if blank_lines.is_empty() && cut_tokens.is_empty() {
-        return Ok((source.to_string(), rules));
+        return Ok(Extracted {
+            netlist: source.to_string(),
+            rules,
+            ports,
+        });
     }
     let mut out = String::with_capacity(source.len());
     for (i, line) in source.lines().enumerate() {
@@ -110,7 +249,11 @@ pub fn extract(source: &str, dialect: Dialect) -> Result<(String, Vec<Rule>), St
         }
         out.push('\n');
     }
-    Ok((out, rules))
+    Ok(Extracted {
+        netlist: out,
+        rules,
+        ports,
+    })
 }
 
 /// Whether `line` carries `token` as a whole whitespace-delimited token.
@@ -334,6 +477,42 @@ fn element_voltage(element: &ElementInstance) -> Result<String, String> {
              (write a `kind=rule` card naming the voltage you mean)",
             nodes.len()
         )),
+    }
+}
+
+/// The `period=`/`sync=` pair every per-period measurement shares.
+///
+/// Exactly one of the two. Both would be a contradiction and neither leaves no period to
+/// measure over, and in both cases the deck's author meant something specific.
+fn parse_boundary(
+    fields: &BTreeMap<&str, &str>,
+    ctx: &impl Fn(String) -> String,
+) -> Result<PeriodBoundary, String> {
+    let period = match fields.get("period").copied() {
+        None => None,
+        Some(raw) => Some(
+            parse_number(raw)
+                .ok_or_else(|| ctx(format!("field 'period' is not a number: '{raw}'")))?,
+        ),
+    };
+    match (period, fields.get("sync").copied()) {
+        (Some(_), Some(_)) => Err(ctx(
+            "'period' and 'sync' both given -- a period is either stated or taken from a \
+             switch, not both"
+                .into(),
+        )),
+        (None, None) => Err(ctx(
+            "needs 'period=<seconds>' or 'sync=<switch>' to know what one period is".into(),
+        )),
+        (Some(period), None) => {
+            if period <= 0.0 {
+                return Err(ctx(format!(
+                    "'period' must be greater than zero, not '{period}'"
+                )));
+            }
+            Ok(PeriodBoundary::Fixed(period))
+        }
+        (None, Some(switch)) => Ok(PeriodBoundary::Sync(switch.to_string())),
     }
 }
 
@@ -600,31 +779,7 @@ fn parse_rule(name: &str, line: usize, fields: &BTreeMap<&str, &str>) -> Result<
                     )))
                 }
             };
-            // Exactly one boundary. Both would be a contradiction and neither leaves no period
-            // to measure over, and in both cases the deck's author meant something specific.
-            let boundary =
-                match (number_opt("period")?, fields.get("sync").copied()) {
-                    (Some(_), Some(_)) => {
-                        return Err(ctx(
-                            "'period' and 'sync' both given -- a period is either stated or taken \
-                         from a switch, not both"
-                                .into(),
-                        ))
-                    }
-                    (None, None) => return Err(ctx(
-                        "needs 'period=<seconds>' or 'sync=<switch>' to know what one period is"
-                            .into(),
-                    )),
-                    (Some(period), None) => {
-                        if period <= 0.0 {
-                            return Err(ctx(format!(
-                                "'period' must be greater than zero, not '{period}'"
-                            )));
-                        }
-                        PeriodBoundary::Fixed(period)
-                    }
-                    (None, Some(switch)) => PeriodBoundary::Sync(switch.to_string()),
-                };
+            let boundary = parse_boundary(fields, &ctx)?;
             let (min, max) = (number_opt("min")?, number_opt("max")?);
             if min.is_none() && max.is_none() {
                 return Err(ctx(
@@ -645,6 +800,52 @@ fn parse_rule(name: &str, line: usize, fields: &BTreeMap<&str, &str>) -> Result<
                     limit: max.or(min).unwrap_or(0.0),
                 },
                 quantity,
+                fields.get("unit").copied().unwrap_or("").to_string(),
+            )
+        }
+        "efficiency" => {
+            let port = |key: &str| -> Result<String, String> {
+                Ok(fields
+                    .get(key)
+                    .copied()
+                    .ok_or_else(|| {
+                        ctx(format!(
+                            "missing field '{key}' -- the name of a `kind=port` declaration"
+                        ))
+                    })?
+                    .to_string())
+            };
+            let numerator = port("out")?;
+            let denominator = port("in")?;
+            if numerator == denominator {
+                return Err(ctx(format!(
+                    "'in' and 'out' are both '{numerator}' -- a port's efficiency against \
+                     itself is 1 by construction"
+                )));
+            }
+            let boundary = parse_boundary(fields, &ctx)?;
+            let (min, max) = (number_opt("min")?, number_opt("max")?);
+            if min.is_none() && max.is_none() {
+                return Err(ctx(
+                    "needs 'min' or 'max' -- 'max=1' is the one that says this is a converter \
+                     rather than a source of energy"
+                        .into(),
+                ));
+            }
+            (
+                Watch::Efficiency {
+                    numerator: numerator.clone(),
+                    denominator: denominator.clone(),
+                    boundary,
+                    min,
+                    max,
+                },
+                Condition::Above {
+                    limit: max.or(min).unwrap_or(0.0),
+                },
+                format!("{numerator}/{denominator}"),
+                // Dimensionless by construction, which is the whole reason the rule is a ratio
+                // and not a bounded difference of two powers.
                 fields.get("unit").copied().unwrap_or("").to_string(),
             )
         }
@@ -672,7 +873,7 @@ fn parse_rule(name: &str, line: usize, fields: &BTreeMap<&str, &str>) -> Result<
             return Err(ctx(format!(
                 "unknown rule type '{other}' -- one of above, below, outside, inside, \
                  forbidden_state, required_path, switch_timing, rate_of_change, body_diode, \
-                 commutation_order, per_period"
+                 commutation_order, per_period, efficiency"
             )))
         }
     };
@@ -749,10 +950,19 @@ pub struct StepSample<'a> {
     pub point: &'a OperatingPoint,
     pub outputs: &'a BTreeMap<String, SignalValue>,
     pub gates: &'a BTreeMap<String, GateState>,
+    /// Declared [`Port`]s, whose names resolve to a power rather than to an unknown.
+    pub ports: &'a BTreeMap<String, Port>,
 }
 
 impl Sample for StepSample<'_> {
     fn get(&self, quantity: &str) -> Option<f64> {
+        // A declared port resolves first, and to a power. It is checked before the solver's own
+        // names because a port is a name the deck's author introduced deliberately: if it
+        // collided with an unknown, silently preferring the unknown would answer a different
+        // question from the one the rule asks.
+        if let Some(port) = self.ports.get(quantity) {
+            return self.port_power(port);
+        }
         // The same names the waveform's own header carries, so a rule is written against what
         // the user already sees in the CSV rather than a second naming scheme.
         if let Some(value) = self.point.value(quantity) {
@@ -804,6 +1014,24 @@ impl Sample for StepSample<'_> {
         // blocking segment between them. A body diode conducting in either direction carries
         // current, which is what the rule asks about.
         Some(*breakdown > 0.0 || *forward > 0.0)
+    }
+}
+
+impl StepSample<'_> {
+    /// A port's instantaneous power, $p = v \cdot i$, with `i` negated only if the deck asked.
+    ///
+    /// No hidden convention: see [`Port`] for why a built-in negation cannot serve both ends of
+    /// a converter, and for the two canonical declarations.
+    fn port_power(&self, port: &Port) -> Option<f64> {
+        let node = |name: &str| -> Option<f64> {
+            if name == "0" {
+                return Some(0.0);
+            }
+            self.point.value(&format!("V({name})"))
+        };
+        let voltage = node(&port.positive)? - node(&port.negative)?;
+        let current = self.point.value(&format!("I({})", port.branch))?;
+        Some(voltage * if port.negate { -current } else { current })
     }
 }
 
@@ -941,7 +1169,15 @@ mod tests {
 
     /// Compiles `source`'s ratings, returning the stripped netlist and the rules.
     fn ratings(source: &str) -> (String, Vec<Rule>) {
-        extract(source, Dialect::Ngspice).expect("the deck parses")
+        let out = extract(source, Dialect::Ngspice).expect("the deck parses");
+        (out.netlist, out.rules)
+    }
+
+    /// Compiles `source`, returning its declared ports.
+    fn declared_ports(source: &str) -> BTreeMap<String, Port> {
+        extract(source, Dialect::Ngspice)
+            .expect("the deck parses")
+            .ports
     }
 
     fn rating_error(source: &str) -> String {
@@ -1128,5 +1364,137 @@ mod tests {
         assert_eq!(parse_number("2meg"), Some(2e6));
         assert_eq!(parse_number("2M"), Some(2e-3));
         assert_eq!(parse_number("2m"), Some(2e-3));
+    }
+
+    // ---- declared ports --------------------------------------------------
+
+    #[test]
+    fn a_port_declaration_is_taken_out_of_the_netlist_and_parsed() {
+        let deck = "V1 in 0 10\nR1 in 0 5\nP_IN kind=port v=(in,0) i=-V1\n";
+        let ports = declared_ports(deck);
+        assert_eq!(ports.len(), 1);
+        let port = &ports["P_IN"];
+        assert_eq!(port.positive, "in");
+        assert_eq!(port.negative, "0");
+        assert_eq!(port.branch, "V1");
+        assert!(
+            port.negate,
+            "the leading minus is the whole sign convention"
+        );
+
+        // The solver would reject `kind=port` as an unknown device, so the line has to be gone
+        // -- and gone as a blank line, so every other statement keeps its own line number.
+        let (netlist, _) = ratings(deck);
+        assert!(!netlist.contains("kind=port"), "{netlist}");
+        assert_eq!(netlist.lines().count(), deck.lines().count(), "{netlist}");
+    }
+
+    #[test]
+    fn a_port_on_a_sense_element_carries_no_minus() {
+        let ports = declared_ports(
+            "V1 in 0 10\nVSENSE out load 0\nR1 load 0 5\nP_OUT kind=port v=(out,0) i=VSENSE\n",
+        );
+        assert!(
+            !ports["P_OUT"].negate,
+            "a series sense element's current already flows into its positive terminal"
+        );
+    }
+
+    #[test]
+    fn a_port_missing_either_half_of_its_definition_is_refused() {
+        // A port is a voltage *and* a current. Either alone is not a power, and defaulting the
+        // missing half would mean guessing which boundary the author meant.
+        let no_current = rating_error("V1 in 0 10\nP kind=port v=(in,0)\n");
+        assert!(
+            no_current.contains("missing field 'i'") && no_current.contains("sense source"),
+            "{no_current}"
+        );
+        let no_voltage = rating_error("V1 in 0 10\nP kind=port i=V1\n");
+        assert!(
+            no_voltage.contains("missing field 'v'") && no_voltage.contains("v=(p,n)"),
+            "{no_voltage}"
+        );
+    }
+
+    #[test]
+    fn a_port_whose_node_pair_is_malformed_names_the_shape_it_wanted() {
+        for bad in ["v=in", "v=(in)", "v=(,0)", "v=(in,)"] {
+            let message = rating_error(&format!("V1 in 0 10\nP kind=port {bad} i=V1\n"));
+            assert!(
+                message.contains("field 'v'"),
+                "'{bad}' should be refused by name: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn two_ports_of_one_name_are_refused() {
+        // A rule names a port by name. Two of them would make `in=P` mean either, and silently
+        // keeping the last would make the deck's meaning depend on line order.
+        let message = rating_error(
+            "V1 in 0 10\nR1 in 0 5\nP kind=port v=(in,0) i=V1\nP kind=port v=(in,0) i=-V1\n",
+        );
+        assert!(message.contains("declared twice"), "{message}");
+    }
+
+    // ---- the efficiency card ---------------------------------------------
+
+    #[test]
+    fn an_efficiency_card_compiles_to_a_ratio_of_two_ports() {
+        let (_, rules) = ratings(
+            "V1 in 0 10\nR1 in 0 5\n\
+             P_IN kind=port v=(in,0) i=-V1\n\
+             P_OUT kind=port v=(in,0) i=V1\n\
+             ETA kind=rule type=efficiency in=P_IN out=P_OUT max=1 period=1e-5\n",
+        );
+        assert_eq!(rules.len(), 1);
+        let rule = &rules[0];
+        // The target is what the report prints, and it has to read as the ratio it is.
+        assert_eq!(rule.target, "P_OUT/P_IN");
+        assert_eq!(
+            rule.watch,
+            Watch::Efficiency {
+                numerator: "P_OUT".to_string(),
+                denominator: "P_IN".to_string(),
+                boundary: PeriodBoundary::Fixed(1e-5),
+                min: None,
+                max: Some(1.0),
+            }
+        );
+    }
+
+    #[test]
+    fn an_efficiency_card_with_no_bound_is_refused_and_recommends_max_one() {
+        let message = rating_error(
+            "V1 in 0 10\nP_IN kind=port v=(in,0) i=-V1\nP_OUT kind=port v=(in,0) i=V1\n\
+             ETA kind=rule type=efficiency in=P_IN out=P_OUT period=1e-5\n",
+        );
+        assert!(
+            message.contains("needs 'min' or 'max'") && message.contains("max=1"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn an_efficiency_of_a_port_against_itself_is_refused() {
+        let message = rating_error(
+            "V1 in 0 10\nP kind=port v=(in,0) i=-V1\n\
+             ETA kind=rule type=efficiency in=P out=P max=1 period=1e-5\n",
+        );
+        assert!(message.contains("against itself"), "{message}");
+    }
+
+    #[test]
+    fn an_efficiency_card_needs_exactly_one_period_boundary() {
+        let both = rating_error(
+            "V1 in 0 10\nP_IN kind=port v=(in,0) i=-V1\nP_OUT kind=port v=(in,0) i=V1\n\
+             ETA kind=rule type=efficiency in=P_IN out=P_OUT max=1 period=1e-5 sync=DSW\n",
+        );
+        assert!(both.contains("both given"), "{both}");
+        let neither = rating_error(
+            "V1 in 0 10\nP_IN kind=port v=(in,0) i=-V1\nP_OUT kind=port v=(in,0) i=V1\n\
+             ETA kind=rule type=efficiency in=P_IN out=P_OUT max=1\n",
+        );
+        assert!(neither.contains("what one period is"), "{neither}");
     }
 }

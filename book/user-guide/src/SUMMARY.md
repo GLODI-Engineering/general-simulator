@@ -36,6 +36,7 @@
 # Rules and diagnostics
 
 - [Rules and ratings: making a wrong run say so](rules-and-ratings.md)
+- [Ports and efficiency: is this a converter at all?](ports-and-efficiency.md)
 
 # Post-processing measurements
 
