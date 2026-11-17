@@ -317,7 +317,7 @@ impl RuleEngine {
         let rule = &self.rules[index];
         match &rule.watch {
             Watch::Quantity { quantity } => {
-                let value = sample.get(quantity)?;
+                let value = readable(sample.get(quantity))?;
                 Some(Observation {
                     value,
                     margin: rule.condition.margin(value),
@@ -358,7 +358,7 @@ impl RuleEngine {
                 quantity,
                 max_slope,
             } => {
-                let value = sample.get(quantity)?;
+                let value = readable(sample.get(quantity))?;
                 let state = &self.state[index];
                 let slope = match (state.prev_value, state.prev_time) {
                     (Some(previous), Some(then)) if self.last_time > then => {
@@ -399,7 +399,7 @@ impl RuleEngine {
                     let Some(name) = currents.get(position) else {
                         continue;
                     };
-                    let Some(current) = sample.get(name) else {
+                    let Some(current) = readable(sample.get(name)) else {
                         continue;
                     };
                     if current.abs() > worst {
@@ -437,7 +437,7 @@ impl RuleEngine {
                 i_min,
             } => {
                 let on = conducting(sample, switches)?;
-                let magnitude = sample.get(current)?.abs();
+                let magnitude = readable(sample.get(current))?.abs();
                 Some(Observation {
                     value: magnitude,
                     // Violating only when the current has nowhere to go: any conducting switch
@@ -908,6 +908,21 @@ impl RuleEngine {
             .collect();
         (out, summaries)
     }
+}
+
+/// A sample's value, or `None` when there is nothing usable there.
+///
+/// A non-finite value is an unreadable sample, not a value that happens not to violate. Every
+/// comparison against a `NaN` is false -- `NaN > limit`, `NaN < limit`, both -- so without this
+/// a rule whose quantity has gone to `NaN` finds no violation and the summary reports `passed`:
+/// the question was asked, the answer was unobtainable, and the table says the circuit is fine.
+/// Counted as missing instead, which is what `NOT EVALUATED` means and what `passed()` refuses.
+///
+/// The CLI also abandons a run whose state goes non-finite (see its `finite` module), which is
+/// the better answer. This is the engine's own guard, for every other caller and for the case
+/// where only a block output nobody stops on has broken.
+fn readable(value: Option<f64>) -> Option<f64> {
+    value.filter(|v| v.is_finite())
 }
 
 /// Which of `switches` the sample says are conducting, or `None` if it knows none of them.

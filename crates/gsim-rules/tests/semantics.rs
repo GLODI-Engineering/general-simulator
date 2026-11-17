@@ -934,3 +934,28 @@ fn one_departure_from_the_order_does_not_report_on_every_later_transition() {
     }
     assert_eq!(all.len(), 1, "exactly one finding: {all:?}");
 }
+
+#[test]
+fn a_rule_watching_a_nan_does_not_report_it_as_passed() {
+    // The premise the finite check exists for, pinned here so it cannot regress quietly:
+    // `NaN > limit` is false in Rust, so a rule comparing one finds no violation. Reporting
+    // `passed` for that would be the single most misleading line the summary can print --
+    // the question was asked, the answer was unobtainable, and the table would say the
+    // circuit is fine.
+    let mut engine = RuleEngine::new(vec![over(10.0, Action::Log)], false);
+    let records = engine.observe(0, 0.0, &scalar("i", f64::NAN));
+    assert!(
+        records.is_empty(),
+        "a NaN cannot cross a limit: {records:?}"
+    );
+
+    let (_, summaries) = engine.finish(1);
+    assert!(
+        !summaries[0].passed(),
+        "a rule that only ever saw a NaN must not report passed"
+    );
+    assert_eq!(
+        summaries[0].missing_samples, 1,
+        "it is an unreadable sample"
+    );
+}

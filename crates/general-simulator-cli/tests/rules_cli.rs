@@ -850,3 +850,84 @@ fn the_conduction_cards_reject_what_they_cannot_act_on() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("needs at least two switches"), "{stderr}");
 }
+
+// -------------------------------------------------------------------------------------------
+// The finite check, which is on by default because nobody suspects a NaN. See #59.
+// -------------------------------------------------------------------------------------------
+
+#[test]
+fn a_run_that_goes_non_finite_is_abandoned_and_says_which_quantity_went_first() {
+    // `sqrt` of a negative constant is a NaN, and nothing in the block library refuses it.
+    let netlist = write(
+        "nan.cir",
+        "VIN vin 0 12\nR1 vin a 1\nL1 a 0 22e-6\nNEG kind=const value=-1\nBAD kind=sqrt in=NEG\n",
+    );
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "1e-5",
+        "--dt",
+        "1e-7",
+    ]);
+    // Its own code: 3 means a rule did its job on a run that behaved as the deck said it
+    // would, and 4 means a run with no result at all. A script has to be able to tell those
+    // apart.
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "a non-finite run has its own code"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("'BAD' is not a finite number"), "{stderr}");
+    assert!(stderr.contains("not a number"), "{stderr}");
+    assert!(stderr.contains("abandoned at step 0"), "{stderr}");
+}
+
+#[test]
+fn a_healthy_run_is_not_touched_by_the_finite_check() {
+    // It runs on every step of every deck, so a false positive would break everything.
+    let netlist = write("finite_ok.cir", "VIN vin 0 12\nR1 vin a 1\nL1 a 0 22e-6\n");
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "1e-5",
+        "--dt",
+        "1e-7",
+    ]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn a_rule_on_a_non_finite_run_is_not_reported_as_passed() {
+    // The failure this check exists to remove. With a rule on the deck, the summary must not
+    // claim the limit held: it was never readable.
+    let netlist = write(
+        "nan_rule.cir",
+        "VIN vin 0 12\nR1 vin a 1\nL1 a 0 22e-6\nNEG kind=const value=-1\n\
+         BAD kind=sqrt in=NEG\n\
+         R_bad kind=rule type=above target=BAD limit=1 severity=error\n",
+    );
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "1e-5",
+        "--dt",
+        "1e-7",
+    ]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("1 passed"),
+        "a rule that could not read its quantity must not pass: {stderr}"
+    );
+}
