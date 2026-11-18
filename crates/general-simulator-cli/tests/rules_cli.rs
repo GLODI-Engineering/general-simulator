@@ -2066,3 +2066,48 @@ fn a_log_path_that_cannot_be_created_is_an_error_and_not_a_silently_skipped_log(
     assert!(stderr.contains("creating the event log"), "{stderr}");
     assert!(stderr.contains("run.jsonl"), "{stderr}");
 }
+
+#[test]
+fn every_line_of_the_log_says_which_shape_it_is() {
+    // The log holds two shapes -- an event per violation edge, a summary per rule at the end --
+    // and a reader used to have to discriminate on the absence of `kind`.
+    let netlist = write("tagged-lines.cir", BUCK_WITH_RATING);
+    let jsonl = scratch("tagged-lines.jsonl");
+    let _ = fs::remove_file(&jsonl);
+
+    run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "2e-4",
+        "--dt",
+        "1e-7",
+        "--events",
+        jsonl.to_str().unwrap(),
+    ]);
+
+    let log = fs::read_to_string(&jsonl).expect("the log");
+    let lines: Vec<&str> = log.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert!(!lines.is_empty(), "the rule fired, so there are lines");
+    for line in &lines {
+        let value: serde_json::Value = serde_json::from_str(line).expect("one JSON object");
+        let record = value["record"].as_str().unwrap_or_default();
+        assert!(
+            record == "event" || record == "summary",
+            "untagged line: {line}"
+        );
+    }
+
+    // Filtering on the tag partitions the file exactly: every event has a `kind`, every summary
+    // has an `entries` count, and there is one summary for the one rule in the deck.
+    let (events, summaries): (Vec<&&str>, Vec<&&str>) = lines
+        .iter()
+        .partition(|l| l.contains("\"record\":\"event\""));
+    assert!(!events.is_empty(), "{log}");
+    assert_eq!(summaries.len(), 1, "{log}");
+    for line in events {
+        assert!(line.contains("\"kind\":"), "{line}");
+    }
+    assert!(summaries[0].contains("\"entries\":"), "{}", summaries[0]);
+}

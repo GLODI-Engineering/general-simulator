@@ -172,7 +172,8 @@ happened.
 ### The event record
 
 ```json
-{"time": 4.9992e-4, "step": 4999, "step_time": 5.0e-4, "rule": "deadtime", "target": "lega",
+{"record": "event", "time": 4.9992e-4, "step": 4999, "step_time": 5.0e-4, "rule": "deadtime",
+ "target": "lega",
  "kind": "instant", "severity": "warning", "action": "console", "value": 0.0, "limit": 1.0e-7,
  "unit": "s", "detail": "lega_high, lega_low"}
 ```
@@ -184,6 +185,7 @@ happened.
 | `step_time` | the solver's own time at the end of that step, before interpolation | yes |
 | `rule` | the rule's name, as the deck spells it | yes |
 | `target` | the component, switch or signal watched — an **L0 name** | yes |
+| `record` | `event` — what shape this line is, so a reader never discriminates on a missing field | yes |
 | `kind` | `enter`, `leave`, `instant` | yes |
 | `severity` | `info`, `warning`, `error`, `fatal` | yes |
 | `action` | what was actually **done**, which is not always what the rule asked for | yes |
@@ -216,7 +218,7 @@ happened.
 
 ### The per-rule summary
 
-One record per rule at the end of the run: `entries`, `filtered` (excursions a hold time
+One record per rule at the end of the run, tagged `"record": "summary"`: `entries`, `filtered` (excursions a hold time
 discarded), `suppressed` (records a `max_events` budget kept out of the log), `total_time`,
 `worst_value`, `worst_time`, `missing_samples`, `instants`, `shortest_deadtime`.
 
@@ -225,9 +227,8 @@ not render as a pass. `filtered` above zero means the hold time is hiding someth
 
 **Status today:** written to `<netlist stem>.events.jsonl` (one JSON object per line) and
 `<netlist stem>.events.txt` — or wherever `--events <path>` / `--events-text <path>` ask for them,
-independently — plus the console for anything whose action earns it. The summary
-records are appended to the same JSONL **in a different shape** — a consumer discriminates on the
-presence of `kind`, which is a wart this contract records rather than blesses.
+independently — plus the console for anything whose action earns it. Both shapes are tagged:
+every line carries `record`, `"event"` or `"summary"`, as its first field.
 
 ---
 
@@ -270,7 +271,6 @@ because specifying them as though they were done is how a contract becomes ficti
   document, so `signals[].block`/`.port` are unfilled.
 - **L2 carries no unit.** Neither CSV nor the rawfile writer emits one, though the result document
   has the field.
-- **The summary lines share a file with the events but not their shape.**
 
 ## Evidence: what the current adapter loses
 
