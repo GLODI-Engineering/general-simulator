@@ -374,6 +374,19 @@ Events are written as they happen, to `<deck>.events.jsonl` and `<deck>.events.t
 `--events-text <path>`, independently; see
 [Command-line flags](cli-reference.md#--events-asking-for-the-event-stream-instead-of-finding-it).
 
+The `.jsonl` file is one JSON object per line, and **every line says which shape it is** as its
+first field:
+
+```json
+{"record":"event","time":6.93e-5,"step":69,"rule":"R_vb","target":"V(b)","kind":"enter", ...}
+{"record":"summary","rule":"R_vb","target":"V(b)","severity":"warning","entries":3, ...}
+```
+
+`record` is `"event"` for a violation edge during the run and `"summary"` for the one line per
+rule written at the end. Filter on it rather than on which fields happen to be present: an
+event always carries `kind`, a summary always carries `entries`, and the two shapes are
+otherwise free to grow.
+
 ```text
 [33.7782 us] ERROR L1.i_max           enter  3.5079 A  limit 3.5000 A
 [34.8724 us] ERROR L1.i_max           leave  3.6528 A  for 1.0942 us (peak 3.6528 A)

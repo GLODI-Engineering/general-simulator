@@ -1456,9 +1456,8 @@ impl Reporter {
         }
         if let Some(writer) = &mut self.jsonl {
             for summary in summaries {
-                let line = serde_json::to_string(summary)
+                writeln!(writer, "{}", summary.to_json_line())
                     .map_err(|e| format!("writing the event log: {e}"))?;
-                writeln!(writer, "{line}").map_err(|e| format!("writing the event log: {e}"))?;
             }
             writer
                 .flush()

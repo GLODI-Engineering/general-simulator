@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::event::{format_time, Severity};
+use crate::event::{format_time, tag_line, Severity};
 
 /// One rule's account of the whole run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -42,6 +42,18 @@ pub struct RuleSummary {
 }
 
 impl RuleSummary {
+    /// The summary as one line of `events.jsonl`, tagged `"record": "summary"`.
+    ///
+    /// Lives here, beside the type, for the same reason [`crate::EventRecord::to_json_line`]
+    /// does: the log, the viewer and anything reading it later must not drift into three
+    /// spellings of the same record.
+    pub fn to_json_line(&self) -> String {
+        match serde_json::to_string(self) {
+            Ok(body) => tag_line("summary", body),
+            Err(e) => format!("{{\"error\":\"summary could not be serialised: {e}\"}}"),
+        }
+    }
+
     /// Whether this rule has nothing to report -- and was in a position to know.
     pub fn passed(&self) -> bool {
         self.entries == 0 && self.instants == 0 && self.missing_samples == 0
@@ -175,5 +187,28 @@ mod tests {
         let line = noisy.line();
         assert!(line.contains("97 filtered"), "{line}");
         assert!(line.contains("40 not logged"), "{line}");
+    }
+
+    #[test]
+    fn a_summary_json_line_says_it_is_a_summary() {
+        let summary = RuleSummary {
+            rule: "i_max".into(),
+            target: "L1".into(),
+            severity: Severity::Error,
+            unit: "A".into(),
+            entries: 3,
+            filtered: 0,
+            suppressed: 0,
+            total_time: 4.89e-6,
+            worst_value: Some(3.819),
+            worst_time: Some(44.1e-6),
+            missing_samples: 0,
+            instants: 0,
+            shortest_deadtime: None,
+        };
+        let line = summary.to_json_line();
+        assert!(line.starts_with("{\"record\":\"summary\","), "{line}");
+        let parsed: RuleSummary = serde_json::from_str(&line).expect("still a RuleSummary");
+        assert_eq!(parsed, summary);
     }
 }

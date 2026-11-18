@@ -61,8 +61,6 @@ pub enum EventKind {
     /// A condition with no duration -- it was true at one instant and the question of when it
     /// stops does not arise.
     Instant,
-    /// Written once per rule at the end of the run.
-    Summary,
 }
 
 /// One thing that happened, in the form every output reads.
@@ -139,6 +137,27 @@ pub fn format_magnitude(value: f64) -> String {
     }
 }
 
+/// Prepends `"record": "<tag>"` to an already-serialized object.
+///
+/// The log holds two shapes -- an [`EventRecord`] per violation edge and a
+/// [`crate::RuleSummary`] per rule at the end -- and a reader used to have to discriminate on
+/// the *absence* of a field (`kind`). That is the least robust discriminator available: it
+/// breaks the moment either shape gains a field named like the other's, and it reads as a bug
+/// to anyone who did not write the writer. Every line now says what it is, positively, as its
+/// first field.
+///
+/// Done by prepending to the serialized text rather than through a `#[serde(flatten)]` wrapper
+/// because flattening forces map-based serialization, which reorders every other field
+/// alphabetically -- a gratuitous change to a file people already read.
+pub(crate) fn tag_line(tag: &str, body: String) -> String {
+    match body.strip_prefix('{') {
+        // `{}` would become `{"record":"event",}`. Unreachable for either real shape, both of
+        // which have required fields, but cheap to be right about.
+        Some("}") | None => format!("{{\"record\":\"{tag}\"}}"),
+        Some(rest) => format!("{{\"record\":\"{tag}\",{rest}"),
+    }
+}
+
 impl EventRecord {
     /// The record as one line of `events.jsonl`.
     ///
@@ -149,8 +168,10 @@ impl EventRecord {
         // The struct derives Serialize over plain fields, so this cannot fail for any value
         // the engine builds; a NaN would, and a NaN here is a bug worth seeing rather than
         // swallowing.
-        serde_json::to_string(self)
-            .unwrap_or_else(|e| format!("{{\"error\":\"event could not be serialised: {e}\"}}"))
+        match serde_json::to_string(self) {
+            Ok(body) => tag_line("event", body),
+            Err(e) => format!("{{\"error\":\"event could not be serialised: {e}\"}}"),
+        }
     }
 
     /// One line for the console, in the spec's own shape:
@@ -173,7 +194,6 @@ impl EventRecord {
             EventKind::Enter => "enter",
             EventKind::Leave => "leave",
             EventKind::Instant => "at",
-            EventKind::Summary => "total",
         };
         let mut line = format!(
             "[{:>9}] {} {:<18} {:<6} {}",
@@ -334,5 +354,55 @@ mod tests {
         assert!(!json.contains("truncated"), "{json}");
         assert!(json.contains("\"kind\":\"enter\""), "{json}");
         assert!(json.contains("\"severity\":\"info\""), "{json}");
+    }
+
+    /// Every line of the log says what it is, as its first field.
+    ///
+    /// Before this, a reader discriminated an event from a summary on the *absence* of `kind` --
+    /// the least robust discriminator there is, and one that reads as a bug to anyone who did
+    /// not write the writer.
+    #[test]
+    fn a_json_line_says_it_is_an_event_before_anything_else() {
+        let record = EventRecord {
+            time: 2.314e-3,
+            step: 231,
+            step_time: 2.32e-3,
+            rule: "i_max".into(),
+            target: "L1".into(),
+            kind: EventKind::Enter,
+            severity: Severity::Warning,
+            action: Action::Console,
+            value: 52.3,
+            limit: 50.0,
+            duration: None,
+            peak: None,
+            peak_time: None,
+            truncated: false,
+            detail: None,
+            unit: "A".into(),
+        };
+        let line = record.to_json_line();
+        assert!(line.starts_with("{\"record\":\"event\","), "{line}");
+        // And nothing else moved: the remaining fields keep the order they have always had, so
+        // an existing log and a new one differ by one field and not by a reshuffle.
+        assert!(line.contains("\"time\":0.002314,\"step\":231"), "{line}");
+
+        // The tag is additive: a reader that knows nothing about it still gets its record back.
+        let parsed: EventRecord = serde_json::from_str(&line).expect("still an EventRecord");
+        assert_eq!(parsed, record);
+    }
+
+    #[test]
+    fn the_tag_helper_never_emits_a_trailing_comma() {
+        // Unreachable for either real shape, both of which have required fields -- asserted
+        // because a malformed line in a machine-read log is expensive to diagnose.
+        assert_eq!(
+            tag_line("event", "{}".to_string()),
+            "{\"record\":\"event\"}"
+        );
+        assert_eq!(
+            tag_line("summary", "not json".to_string()),
+            "{\"record\":\"summary\"}"
+        );
     }
 }
