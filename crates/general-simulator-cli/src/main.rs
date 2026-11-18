@@ -421,6 +421,8 @@ fn run() -> Result<u8, String> {
     let mut max_steps: Option<usize> = None;
     let mut format = "csv".to_string();
     let mut out_path: Option<String> = None;
+    let mut events_jsonl: Option<String> = None;
+    let mut events_text: Option<String> = None;
     let mut out_every: usize = 1;
     let mut checkpoint_out: Option<String> = None;
     let mut checkpoint_every: Option<f64> = None;
@@ -499,6 +501,20 @@ fn run() -> Result<u8, String> {
             }
             "--out" => {
                 out_path = Some(args.get(i + 1).ok_or("--out needs a value")?.clone());
+                i += 2;
+            }
+            // The two event files, separately: a tool wants the JSONL and a person wants the
+            // text, and moving one should not hand the other a file nobody reads.
+            "--events" => {
+                events_jsonl = Some(args.get(i + 1).ok_or("--events needs a value")?.clone());
+                i += 2;
+            }
+            "--events-text" => {
+                events_text = Some(
+                    args.get(i + 1)
+                        .ok_or("--events-text needs a value")?
+                        .clone(),
+                );
                 i += 2;
             }
             other => return Err(format!("unrecognized argument '{other}'\n{}", usage())),
@@ -704,6 +720,12 @@ fn run() -> Result<u8, String> {
             other => format!("{other:?}"),
         });
     }
+    // The event-file overrides, resolved once. `None` keeps the `<netlist stem>.events.*`
+    // convention a person running the binary by hand expects.
+    let event_paths = rules::EventPaths {
+        jsonl: events_jsonl.as_deref().map(PathBuf::from),
+        text: events_text.as_deref().map(PathBuf::from),
+    };
 
     let (waveform, plot_name) = if mode == "dc" {
         let point = if ideal_switches.is_empty() {
@@ -808,6 +830,7 @@ fn run() -> Result<u8, String> {
                 &declared_ports,
                 &switch_channels,
                 &diode_curves,
+                &event_paths,
                 CheckpointArgs {
                     out: checkpoint_out.as_deref().map(Path::new),
                     every: checkpoint_every,
@@ -958,6 +981,7 @@ fn run_transient_streamed(
     declared_ports: &BTreeMap<String, rules::Port>,
     switch_channels: &BTreeMap<String, rules::SwitchChannel>,
     diode_curves: &BTreeMap<String, rules::DiodeCurve>,
+    event_paths: &rules::EventPaths,
     checkpoints: CheckpointArgs<'_>,
 ) -> Result<u8, String> {
     let resume_from = match checkpoints.resume {
@@ -1033,6 +1057,7 @@ fn run_transient_streamed(
         Some(rules::Reporter::new(
             Path::new(netlist_path),
             gsim_rules::Severity::Warning,
+            event_paths,
         )?)
     };
     let mut steps_seen: usize = 0;
@@ -1433,6 +1458,13 @@ OUTPUT
                               the computation: every step is still taken and kind=measure
                               still sees every point. [default: 1]
 
+EVENTS
+    --events <path>           Where the JSONL event stream goes.
+                              [default: <netlist stem>.events.jsonl]
+    --events-text <path>      Where its human-readable twin goes. Moves independently of
+                              --events. [default: <netlist stem>.events.txt]
+                              Both are written only for a netlist that declares rules.
+
 CHECKPOINTS
     --checkpoint-out <file>   Write the run's complete state at --tfinal, so a later run
                               can --resume it and continue bit-identically.
@@ -1469,6 +1501,7 @@ fn usage() -> String {
     "usage: general-simulator <netlist> [--devices <file>] [--mode dc|transient] [--tfinal T] \
      [--dt DT | --dt-max T --dt-min T --dt-init T --reltol R --abstol A] [--max-steps N] \
      [--format csv|raw] [--out <path>] [--out-every N]\n\
+     [--events <path>] [--events-text <path>]\n\
      [--checkpoint-out <file>] [--checkpoint-every T] [--resume <file>]\n\
      \n\
      --checkpoint-out writes the run's complete state at --tfinal (and, with --checkpoint-every T, \
@@ -1507,6 +1540,13 @@ fn usage() -> String {
      1 mOhm and 400 pF), which is 3.75 M steps across a 150 ns commutation window, while the \
      measurement itself needs a few thousand points. Without this flag that run is affordable \
      to compute and not to write down.\n\
+     \n\
+     --events <path> and --events-text <path> say where the two event files go, instead of \
+     <netlist stem>.events.jsonl and <netlist stem>.events.txt beside the netlist. They move \
+     independently: a tool reads the JSONL and a person reads the text, and a caller that \
+     redirects one should not be handed the other somewhere it never looks. Both are created \
+     only for a netlist that declares rules, and a path that cannot be created is an error -- a \
+     diagnostics channel that vanishes without a word is the failure these flags exist to fix.\n\
      \n\
      Any kind=measure lines in the netlist write their results to <netlist stem>.log, regardless \
      of --format -- see book/user-guide/src/measurements.md."

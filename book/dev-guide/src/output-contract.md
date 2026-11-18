@@ -224,7 +224,8 @@ discarded), `suppressed` (records a `max_events` budget kept out of the log), `t
 not render as a pass. `filtered` above zero means the hold time is hiding something.
 
 **Status today:** written to `<netlist stem>.events.jsonl` (one JSON object per line) and
-`<netlist stem>.events.txt`, plus the console for anything whose action earns it. The summary
+`<netlist stem>.events.txt` — or wherever `--events <path>` / `--events-text <path>` ask for them,
+independently — plus the console for anything whose action earns it. The summary
 records are appended to the same JSONL **in a different shape** — a consumer discriminates on the
 presence of `kind`, which is a wart this contract records rather than blesses.
 
@@ -269,8 +270,6 @@ because specifying them as though they were done is how a contract becomes ficti
   document, so `signals[].block`/`.port` are unfilled.
 - **L2 carries no unit.** Neither CSV nor the rawfile writer emits one, though the result document
   has the field.
-- **Events are written where they are, not where they are asked for.** They land beside the
-  netlist by convention, with no flag to redirect them.
 - **The summary lines share a file with the events but not their shape.**
 
 ## Evidence: what the current adapter loses

@@ -5,6 +5,7 @@ general-simulator <netlist> [--devices <file>] [--mode dc|transient] [--tfinal T
                    [--dt DT | --dt-max T --dt-min T --dt-init T --reltol R --abstol A]
                    [--max-steps N]
                    [--format csv|raw] [--out <path>] [--out-every N]
+                   [--events <path>] [--events-text <path>]
                    [--checkpoint-out <file>] [--checkpoint-every T] [--resume <file>]
 general-simulator (--help | -h)
 general-simulator (--version | -V)
@@ -25,6 +26,8 @@ is optional.
 | `--format csv\|raw` | Output serialization — see below. Default: `csv`. |
 | `--out <path>` | Destination file for `--format raw`. Ignored for `--format csv` (CSV always goes to stdout). |
 | `--out-every N` | Write only every Nth resolved point. Thins the output, never the computation — see below. Default: `1`. |
+| `--events <path>` | Where the JSONL event stream goes. Default: `<netlist stem>.events.jsonl`, beside the netlist. |
+| `--events-text <path>` | Where its human-readable twin goes, independently of `--events`. Default: `<netlist stem>.events.txt`. Both files are written only for a netlist that declares rules, and a path that cannot be created is an error — see below. |
 | `--checkpoint-out <file>` | Write the run's complete state at `--tfinal` so a later run can `--resume` it. See [Checkpoint and resume](checkpoint-resume.md). |
 | `--checkpoint-every T` | With `--checkpoint-out`: also rewrite that file every `T` seconds of simulated time, so a killed run loses at most `T`. |
 | `--resume <file>` | Continue from a checkpoint instead of from $t = 0$; `--tfinal` stays absolute. Only loads into the deck it was written from. |
@@ -89,6 +92,27 @@ Not a substitute for a coarser `--dt`, and not adaptive stepping. Adaptive stepp
 lengthen the step exactly across the flat dead band where the discharge is about to happen,
 which is the opposite of what a case like the above needs; `--out-every` keeps the guaranteed
 uniform step and thins only the record of it.
+
+
+## `--events`: asking for the event stream instead of finding it
+
+The two event files default to the netlist's own directory, which is right when you run the
+binary by hand and wrong for every tool. A front end compiles a schematic in memory and writes
+the `.cir` into a temporary directory; both files were then created inside it and deleted with
+it, so every event of every run was discarded — and nothing could have read them without
+reconstructing the `<deck>.events.*` convention from the outside.
+
+```bash
+general-simulator buck.cir --mode transient --tfinal 2e-3 --dt 1e-8 \
+  --events /tmp/run-17/events.jsonl --events-text /tmp/run-17/events.txt > /tmp/run-17/wave.csv
+```
+
+The two move independently on purpose: a tool reads the JSONL and a person reads the text, and a
+caller that redirects one should not be handed the other somewhere it never looks.
+
+A path whose directory does not exist is an error naming the path, and the run does not start.
+Losing the diagnostics channel in silence is the failure these flags exist to fix, so it is not
+something they will do themselves.
 
 ## `--format`: CSV vs. SPICE rawfile output
 

@@ -36,7 +36,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufWriter, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use dae_runtime::{GateState, OperatingPoint, SignalValue};
 use general_mna::block_graph::GateBinding;
@@ -1380,16 +1380,40 @@ pub struct Reporter {
     pub written: usize,
 }
 
+/// Where the two event files go.
+///
+/// Defaulting to the netlist's own directory is right for a person running the binary by hand,
+/// and wrong for every tool: the GUI compiles a `.gsim_sch` document in memory and writes the
+/// `.cir` into a temporary directory, so both files were created inside it and deleted with it.
+/// Every event of every run was discarded, and no consumer could have found them without
+/// reconstructing this convention from the outside. A caller asks instead.
+#[derive(Debug, Default, Clone)]
+pub struct EventPaths {
+    /// The machine-readable stream. `None` means `<netlist stem>.events.jsonl`.
+    pub jsonl: Option<PathBuf>,
+    /// The human-readable twin. `None` means `<netlist stem>.events.txt`.
+    pub text: Option<PathBuf>,
+}
+
 impl Reporter {
-    /// `stem` is the netlist path; the two files land beside it as `<stem>.events.jsonl` and
-    /// `<stem>.events.txt`, the same convention `kind=measure` uses for its `.log`.
-    pub fn new(stem: &Path, console_at: Severity) -> Result<Reporter, String> {
-        let jsonl_path = stem.with_extension("events.jsonl");
-        let text_path = stem.with_extension("events.txt");
+    /// `stem` is the netlist path: with neither override in `paths`, the two files land beside it
+    /// as `<stem>.events.jsonl` and `<stem>.events.txt`, the same convention `kind=measure` uses
+    /// for its `.log`.
+    pub fn new(stem: &Path, console_at: Severity, paths: &EventPaths) -> Result<Reporter, String> {
+        let jsonl_path = paths
+            .jsonl
+            .clone()
+            .unwrap_or_else(|| stem.with_extension("events.jsonl"));
+        let text_path = paths
+            .text
+            .clone()
+            .unwrap_or_else(|| stem.with_extension("events.txt"));
         let open = |path: &Path| -> Result<BufWriter<fs::File>, String> {
-            fs::File::create(path)
-                .map(BufWriter::new)
-                .map_err(|e| format!("creating {}: {e}", path.display()))
+            fs::File::create(path).map(BufWriter::new).map_err(|e| {
+                // Named, and fatal. A diagnostics channel that disappears without a word is the
+                // failure this parameter exists to fix, so failing to open one is not a warning.
+                format!("creating the event log {}: {e}", path.display())
+            })
         };
         Ok(Reporter {
             jsonl: Some(open(&jsonl_path)?),
