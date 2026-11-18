@@ -40,7 +40,7 @@ dependencies = [
 
 [[package]]
 name = "continuous-blocks"
-version = "0.5.1"
+version = "0.6.0"
 
 [[package]]
 name = "critical-section"
@@ -50,14 +50,14 @@ checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
 
 [[package]]
 name = "cscript-ffi"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "libloading",
 ]
 
 [[package]]
 name = "dae-runtime"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "continuous-blocks",
  "cscript-ffi",
@@ -85,7 +85,7 @@ checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
 
 [[package]]
 name = "general-mna"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "continuous-blocks",
  "general-spice-core",
@@ -94,7 +94,7 @@ dependencies = [
 
 [[package]]
 name = "general-simulator-cli"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "continuous-blocks",
  "dae-runtime",
@@ -160,7 +160,7 @@ checksum = "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
 
 [[package]]
 name = "lcp-solver"
-version = "0.5.1"
+version = "0.6.0"
 
 [[package]]
 name = "libc"
@@ -263,7 +263,7 @@ dependencies = [
 
 [[package]]
 name = "octave-ffi"
-version = "0.5.1"
+version = "0.6.0"
 
 [[package]]
 name = "once_cell"
@@ -310,14 +310,14 @@ dependencies = [
 
 [[package]]
 name = "pwl-devices"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "lcp-solver",
 ]
 
 [[package]]
 name = "pyblock-ffi"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "numpy",
  "pyo3",
