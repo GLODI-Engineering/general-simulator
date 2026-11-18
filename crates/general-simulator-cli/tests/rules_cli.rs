@@ -1922,3 +1922,147 @@ fn the_unaccounted_fraction_is_far_larger_with_the_diode_left_out() {
         "leaving out 93% of the loss should be unmistakable: {one} vs {both}"
     );
 }
+
+/// `BUCK` with one rule that fires early, for the tests about *where* the event files go rather
+/// than what is in them.
+const BUCK_WITH_RATING: &str = "\
+VIN vin 0 12
+DSW vin sw idealswitchmodel
+DSW kind=ideal_switch r_on=0.05 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.5 body_g_on=5 gate=block ctrl=GATE
+D1 0 sw dmodel
+D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_f=0.4 g_on=5
+L1 sw out 22e-6
+C1 out 0 47e-6 ic=3
+RL out 0 4
+VOUT kind=phys2sig node=out
+REF kind=const value=5
+ERR kind=sum inputs=REF,VOUT signs=1,-1
+PI kind=pid in=ERR kp=0.02 ki=50 kd=0 n=100 clamp_lo=0.05 clamp_hi=0.95 ic=0.4
+PWM1 kind=pwm freq=100000 in=PI
+GATE kind=sig2phys domain=voltage in=PWM1
+R_vout kind=rule type=above target=V(out) max=1 unit=V severity=warning action=console
+";
+
+// --- Where the event stream goes -------------------------------------------------------------
+//
+// The bug these exist for: both files were derived from the netlist path with no way to ask for
+// anything else, so the GUI -- which compiles a document in memory and writes the `.cir` into a
+// temporary directory -- had both of them created inside that directory and deleted with it.
+// Every event of every run was discarded, and no consumer could have found them without
+// reconstructing the `<stem>.events.*` convention from outside.
+
+#[test]
+fn the_event_stream_goes_where_it_is_asked_for() {
+    let netlist = write("redirected.cir", BUCK_WITH_RATING);
+    let jsonl = scratch("asked-for.jsonl");
+    let text = scratch("asked-for.txt");
+    let _ = fs::remove_file(&jsonl);
+    let _ = fs::remove_file(&text);
+    let _ = fs::remove_file(netlist.with_extension("events.jsonl"));
+    let _ = fs::remove_file(netlist.with_extension("events.txt"));
+
+    let out = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "2e-4",
+        "--dt",
+        "1e-7",
+        "--events",
+        jsonl.to_str().unwrap(),
+        "--events-text",
+        text.to_str().unwrap(),
+    ]);
+
+    let log = fs::read_to_string(&jsonl).expect("the redirected JSONL log");
+    assert!(log.contains("\"rule\":"), "{log}");
+    assert!(fs::read_to_string(&text).is_ok(), "the redirected text log");
+    // And nothing was left beside the netlist, which is the whole point: a caller that asked
+    // for a path does not also get a file somewhere it never looks.
+    assert!(
+        !netlist.with_extension("events.jsonl").exists(),
+        "a log was still written beside the netlist"
+    );
+    assert!(!netlist.with_extension("events.txt").exists());
+    assert!(
+        out.status.code() == Some(0) || out.status.code() == Some(2),
+        "{:?}: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn either_file_moves_without_the_other() {
+    // A tool reads the JSONL and a person reads the text. Forcing them to move together hands
+    // one of the two a file nobody opens.
+    let netlist = write("one-moved.cir", BUCK_WITH_RATING);
+    let jsonl = scratch("only-this-one.jsonl");
+    let _ = fs::remove_file(&jsonl);
+    let _ = fs::remove_file(netlist.with_extension("events.txt"));
+
+    run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "2e-4",
+        "--dt",
+        "1e-7",
+        "--events",
+        jsonl.to_str().unwrap(),
+    ]);
+
+    assert!(fs::read_to_string(&jsonl).is_ok(), "the redirected JSONL");
+    assert!(
+        netlist.with_extension("events.txt").exists(),
+        "the text log kept its default path"
+    );
+    assert!(!netlist.with_extension("events.jsonl").exists());
+}
+
+#[test]
+fn without_the_flags_the_files_keep_their_old_paths() {
+    let netlist = write("default-paths.cir", BUCK_WITH_RATING);
+    let _ = fs::remove_file(netlist.with_extension("events.jsonl"));
+    let _ = fs::remove_file(netlist.with_extension("events.txt"));
+
+    run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "2e-4",
+        "--dt",
+        "1e-7",
+    ]);
+
+    assert!(netlist.with_extension("events.jsonl").exists());
+    assert!(netlist.with_extension("events.txt").exists());
+}
+
+#[test]
+fn a_log_path_that_cannot_be_created_is_an_error_and_not_a_silently_skipped_log() {
+    // Losing the diagnostics channel without a word is the failure these flags exist to fix, so
+    // failing to open one is fatal and names the path.
+    let netlist = write("bad-log-path.cir", BUCK_WITH_RATING);
+    let missing = scratch("no-such-directory").join("run.jsonl");
+
+    let out = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "2e-4",
+        "--dt",
+        "1e-7",
+        "--events",
+        missing.to_str().unwrap(),
+    ]);
+
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("creating the event log"), "{stderr}");
+    assert!(stderr.contains("run.jsonl"), "{stderr}");
+}

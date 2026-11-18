@@ -370,7 +370,9 @@ report, so there is nothing an opt-in would protect.
 ## What a run produces
 
 Events are written as they happen, to `<deck>.events.jsonl` and `<deck>.events.txt`, and at
-`console` severity to stderr:
+`console` severity to stderr. Both paths can be asked for instead — `--events <path>` and
+`--events-text <path>`, independently; see
+[Command-line flags](cli-reference.md#--events-asking-for-the-event-stream-instead-of-finding-it).
 
 ```text
 [33.7782 us] ERROR L1.i_max           enter  3.5079 A  limit 3.5000 A
