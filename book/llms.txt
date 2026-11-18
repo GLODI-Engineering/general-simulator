@@ -39,6 +39,12 @@ For netlist authors: writing, running, and reading the output of a general-simul
 - [Fixed vs. adaptive time stepping](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/time-stepping.md): general-simulator steps a transient run one of two ways: a fixed step size you choose (--dt), or an adaptive, local-truncation-error-controlled step size the solver chooses for itself (the default whenever --dt is omitte
 - [Checkpoint and resume](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/checkpoint-resume.md): A transient run can save its complete state to a file and continue from it later — in another invocation, on another machine, after the first run was killed — and the continued run is bit-identical to one that never stop
 
+### Rules and diagnostics
+
+- [Rules and ratings: making a wrong run say so](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/rules-and-ratings.md): A transient simulation almost never refuses to produce an answer.
+- [Ports and efficiency: is this a converter at all?](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/ports-and-efficiency.md): Every rule in Rules and ratings bounds one quantity: a current, a voltage, a dead time, a volt-second balance.
+- [Losses: what a converter is really limited by](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/losses.md): A design that passes every rating can still be thermally impossible.
+
 ### Post-processing measurements
 
 - [`kind=measure`: ngspice/Xyce-style .measure statements](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/measurements.md): kind=measure is a netlist line that computes one scalar (or, for four, a small handful of related scalars) from an already-completed transient trace — the same job ngspice's .measure and Xyce's .MEASURE statements do, ex
@@ -94,6 +100,10 @@ For contributors: the math, internal mechanism, and rationale behind every major
 - [`octave-ffi`: Octave blocks (`kind=octfunc`, `kind=octblock`)](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/dev-guide/src/octave-blocks.md): *(kind=octfunc implemented first, as a genuinely separate, additive block kind alongside pyfunc — the direct octave-cli-hosted analog, not a mode of anything else, mirroring pyfunc-blocks.md's own before/after structure.
 - [`general-simulator-cli`: the netlist-in/CSV-out runner](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/dev-guide/src/crate-general-simulator-cli.md): The general-simulator binary, and the thinnest crate in the workspace by design.
 - [`kind=measure`: post-processing measurements, not a block-graph kind](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/dev-guide/src/measurements-architecture.md): *(Implemented this session — this chapter records the architecture decision and the actual integration, mirroring python-blocks.md's own before/after structure.)*
+
+### The output contract
+
+- [What a run produces, and what a displayer may rely on](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/dev-guide/src/output-contract.md): A run produces four things: an identity map, a status, a waveform, and an event stream.
 
 ### Contributing
 
