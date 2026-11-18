@@ -35,6 +35,10 @@
 - [`general-simulator-cli`: the netlist-in/CSV-out runner](crate-general-simulator-cli.md)
 - [`kind=measure`: post-processing measurements, not a block-graph kind](measurements-architecture.md)
 
+# The output contract
+
+- [What a run produces, and what a displayer may rely on](output-contract.md)
+
 # Contributing
 
 - [Verification discipline](verification-discipline.md)
