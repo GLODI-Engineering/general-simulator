@@ -244,7 +244,13 @@ every line carries `record`, `"event"` or `"summary"`, as its first field.
 
 ## What an engine must provide to join
 
-A new engine — `ngspice` first — needs, in this order:
+This section describes what **any** engine would have to provide to join the contract, in the
+order it would have to provide it. It is not a roadmap: no second engine is in progress here, and
+the engine side of this project has one implementation. `ngspice` is used as the example because
+it is the most likely first candidate from the editor's side, where multiple engines are the
+stated direction.
+
+A new engine — `ngspice` as the example — needs, in this order:
 
 1. **L1**: a documented mapping from its own exit status onto the five codes above. Anything else
    makes "it worked" unanswerable.
@@ -274,8 +280,8 @@ because specifying them as though they were done is how a contract becomes ficti
 
 ## Evidence: what the current adapter loses
 
-The three claims above are measured, not predicted. The GUI's existing adapter
-(`general-simulator-gui-for-vscode`, `packages/simulator/src/simulator/solvers/`):
+The three claims above are measured, not predicted. Omni Schematics' existing adapter
+(`omni-schematics`, its own simulator-solver layer):
 
 - writes the netlist into a `tempfile.TemporaryDirectory()`, so `<stem>.events.jsonl` and
   `<stem>.events.txt` are **deleted with it** — every event of every run is discarded;

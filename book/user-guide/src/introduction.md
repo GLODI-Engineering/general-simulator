@@ -35,13 +35,14 @@ netlists described here:
   across incompatible paradigms each raise at the line that caused them. The same package
   reads the output back and runs the measurements of
   [`kind=measure`](measurements.md) over non-uniformly sampled waveforms.
-- **[general-simulator-gui-for-vscode](https://github.com/GLODI-Engineering/general-simulator-gui-for-vscode)**
-  — a schematic editor and waveform viewer as a VS Code extension, for drawing a circuit
-  rather than writing one. Install it from the `general-simulator-gui.vsix` attached to its
-  [latest release](https://github.com/GLODI-Engineering/general-simulator-gui-for-vscode/releases/latest):
+- **[Omni Schematics](https://github.com/GLODI-Engineering/omni-schematics)** — a schematic
+  editor and waveform viewer as a VS Code extension, for drawing a circuit rather than writing
+  one. It runs this engine, and is named separately from it because it is built to run others.
+  Install it from the `omni-schematics.vsix` attached to its
+  [latest release](https://github.com/GLODI-Engineering/omni-schematics/releases/latest):
 
   ```console
-  $ code --install-extension general-simulator-gui.vsix
+  $ code --install-extension omni-schematics.vsix
   ```
 
 Both sit on
