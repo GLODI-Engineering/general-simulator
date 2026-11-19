@@ -1,4 +1,13 @@
-# Boost/LLC resonant converter
+# Boost and LLC: when duty is the wrong control variable
+
+**What this chapter is.** The boost section below carries a complete, runnable deck. The LLC
+section does not: it explains why a resonant converter is controlled by *frequency* rather than
+duty, and shows the controller chain that follows from that, as a **fragment** — the tank, the
+half-bridge and the transformer are not in it. A complete LLC deck, built from scratch and
+checked against the closed-form gain law, is the subject of the
+[LLC walk-through](https://github.com/GLODI-Engineering/omni-schematics/blob/main/docs/articles/simulating-an-llc-converter.md)
+in Omni Schematics, and the cross-simulator comparison for both topologies is in the
+[Validation chapter](../validation.md#open-loop-boost-and-llc-resonant-converters-vs-xyce-and-ngspice).
 
 ## Boost: the same duty-modulated pattern as buck, different topology
 
@@ -8,9 +17,51 @@ pwm` if closed-loop — just with the inductor moved to the input side and the d
 swapped so the output can exceed `Vin` instead of stepping it down. The
 [Validation chapter](../validation.md#open-loop-boost-and-llc-resonant-converters-vs-xyce-and-ngspice)
 already has a real cross-simulator comparison for the open-loop case (`Vin = 12 V`, 100 kHz/50%
-duty, `L1 = 100 uH`, `C1 = 100 uF`, `R1 = 50 ohm`) — worth reading first if you haven't, since
-the rest of this chapter builds on the same half-bridge/PWM machinery for a harder case: a
-resonant converter, where duty isn't the control variable at all.
+duty, `L1 = 100 uH`, `C1 = 100 uF`, `R1 = 50 ohm`). This is that circuit, as a deck:
+
+```text
+V1 vin 0 12
+L1 vin vsw 100u
+D1 0 vsw idealswitchmodel
+D1 kind=ideal_switch r_on=0.01 body_g_breakdown=0 body_v_breakdown=-1e6 body_g_off=1e-6 body_v_f=1e6 body_g_on=0 \
+     gate=block ctrl=SW_GATE
+D2 vsw vout dmodel
+D2 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_f=0.6 g_on=100
+C1 vout 0 100u
+R1 vout 0 50
+
+DUTY    kind=const value=0.5
+MOD1    kind=pwm freq=100000 in=DUTY
+SW_GATE kind=sig2phys domain=voltage in=MOD1
+```
+
+The inductor is on the input side and the switch shunts it to ground, which is the whole
+topological difference from the buck: the switch charges `L1` from the source, and when it opens
+the inductor's current forces `D2` to carry it into `C1` at whatever voltage that takes — above
+`Vin`, which is the point.
+
+```bash
+general-simulator boost-open.cir --mode transient --tfinal 0.02 --dt 2e-7 --out-every 25
+```
+
+| quantity | measured | the Validation chapter's own figure |
+|---|---|---|
+| `V(vout)` at t = 2 ms | **34.774 V** | 34.77 V |
+| peak `V(vout)` | **44.682 V** at t = 0.63 ms | 44.67 V |
+| mean `V(vout)`, 15–20 ms | **23.383 V** (ripple 0.245 V) | — |
+| mean `I(L1)`, 15–20 ms | **0.938 A** (0.571 → 1.312 A) | — |
+
+The first two rows are the point of printing the deck: they are the numbers the
+[Validation chapter](../validation.md#open-loop-boost-and-llc-resonant-converters-vs-xyce-and-ngspice)
+reports for `general-simulator` in its ngspice/Xyce comparison, reproduced here to three decimal
+places from the file above. The comparison was taken at 2 ms deliberately, because the circuit is
+nowhere near settled there — a boost with no soft-start overshoots to 44.7 V, nearly twice its
+own steady 23.4 V, on the way up. Where `D \cdot V_{in}` predicts $V_{out} = V_{in}/(1-D) = 24$ V,
+the real stage lands at 23.4 V: the switch's `r_on` and the diode's 0.6 V forward drop are the
+difference, and they come out of the output, not the input.
+
+The rest of this chapter builds on the same half-bridge/PWM machinery for a harder case: a
+resonant converter, where duty is not the control variable at all.
 
 ## LLC: why frequency, not duty
 
@@ -34,7 +85,10 @@ only covers how it's wired into a closed loop.
 
 A real, traced example of the resulting chain (from the internal closed-loop LLC validation
 experiment this project's own `general-simulator` cross-validated against ngspice — see the
-Validation chapter's closed-loop LLC section):
+Validation chapter's closed-loop LLC section). **This is a fragment**: it is the controller only,
+and wiring it up needs the tank, the half-bridge and the transformer, which the
+[LLC walk-through](https://github.com/GLODI-Engineering/omni-schematics/blob/main/docs/articles/simulating-an-llc-converter.md)
+builds step by step:
 
 ```text
 REF        kind=pwc points=[[0,20],[0.014,17]]

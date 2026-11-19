@@ -46,7 +46,7 @@
 # Worked examples
 
 - [Buck converter (open-loop and PID)](examples/buck.md)
-- [Boost/LLC resonant converter](examples/boost-llc.md)
+- [Boost and LLC: when duty is the wrong control variable](examples/boost-llc.md)
 - [Three-phase PFC active front end](examples/pfc.md)
 - [PMSM field-oriented-control drive](examples/pmsm-drive.md)
 
