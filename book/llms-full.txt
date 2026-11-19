@@ -83,7 +83,29 @@ reach for a real SPICE tool instead.
 
 # Installing and building
 
-There's no published binary yet — build from source.
+Three ways in, cheapest first.
+
+## From crates.io
+
+```bash
+cargo install general-simulator-cli
+```
+
+This builds and installs the `general-simulator` binary from the published crate. It needs a
+Rust toolchain and nothing else.
+
+## A prebuilt binary
+
+Every [release](https://github.com/GLODI-Engineering/general-simulator/releases) attaches four
+archives — Linux x86-64, Linux ARM64, macOS (Apple silicon) and Windows x86-64 — each holding
+the `general-simulator` binary built with default features. Download, unpack, put it on your
+`PATH`; no toolchain required.
+
+Both of the above give you the **default** build. If you need `kind=pyblock` or `kind=pyfunc`,
+which embed Python, you need the `python` Cargo feature and therefore a build of your own — see
+below.
+
+## From source
 
 ## Prerequisites
 
@@ -116,6 +138,8 @@ crates/
 ├── pwl-devices          ideal-diode / ideal-switch PWL models
 ├── dae-runtime           circuit assembly + the transient loop (the actual engine)
 ├── continuous-blocks     the block library (PID, state-space, PWM, coordinate transforms, ...)
+├── gsim-rules            the rule engine: watches named quantities during a run and reports a
+│                          violation as a pair of edge events (kind=rule, see rules-and-ratings.md)
 ├── cscript-ffi            the native (C ABI) scripting-block escape hatch
 ├── pyblock-ffi            the embedded-Python scripting-block escape hatch (kind=pyblock/pyfunc)
 ├── octave-ffi             the subprocess-Octave scripting-block escape hatch (kind=octfunc/octblock)
@@ -1090,6 +1114,7 @@ by *name* (as a `V`/`I` source's literal or a gate's `ctrl=`), never wired into 
 | `phys2sig` | the only way a circuit quantity (`V(node)`/`I(branch)`) enters the signal domain | 0 | 1 | `signals.md` |
 | `sig2phys` | the only legal target for a `V`/`I` source's magnitude or a gate's `ctrl=`; identity pass-through, consumed by name | 1 | 1 | `signals.md`, `gate-bindings.md` |
 | `measure` | ngspice `.measure`-style post-processing over a completed trace — stripped by the CLI before the solver sees the file; never a block | — | — (writes `<netlist stem>.log`) | `measurements.md` |
+| `rule` | a condition watched *during* the run — a rating, a bound, a balance — reported as a pair of edge events (enter and leave, the leave carrying duration, peak and the time of the peak), with a severity and an action; observes only, except `action=stop` | — (names a quantity) | — (writes the event stream; see `--events`) | `rules-and-ratings.md` |
 
 Two rows are worth reading before you write your first netlist: `ideal_switch` (its
 `(drain, source)` node-order convention — `pwl-devices.md` says "read this before wiring a
@@ -8817,7 +8842,7 @@ but one more instance of it.
 
 # Workspace layout
 
-The workspace (`Cargo.toml`, root of this repo) has eight members, built in a strict
+The workspace (`Cargo.toml`, root of this repo) has nine members, built in a strict
 dependency order that was also the order they were *verified* in — that ordering is not
 incidental bookkeeping, it is how the project trusts its own numerics (see
 `verification-discipline.md`):
@@ -8826,6 +8851,7 @@ incidental bookkeeping, it is how the project trusts its own numerics (see
 lcp-solver ──► pwl-devices ──► dae-runtime ──► general-simulator-cli
                   ▲                 ▲
                   │                 ├── continuous-blocks
+                  │                 ├── gsim-rules      (observes; never changes a run)
                   │                 ├── cscript-ffi
                   │                 ├── pyblock-ffi   (optional `python` feature)
                   │                 └── octave-ffi    (no build-time deps at all)
@@ -8843,10 +8869,17 @@ repositories *outside* this one (`crates/dae-runtime/Cargo.toml` pins them with 
   — consumed by `general-simulator-cli` alone, to evaluate `kind=measure` lines as a
   post-processing pass over a completed transient trace.
 
-What this repo *adds* to those two are exactly two things (`README.md`, "Relationship to the
-sibling repos"): PWL device segments resolved via LCP, and a continuous-block library compiled
-into descriptor-DAE fragments of the same $A x + K \dot x = B u$ shape `general-mna` already
-uses. Anything else — parsing, linear stamping — is deliberately not re-implemented here.
+What this repo *adds* to those two are three things (`README.md`, "Relationship to the sibling
+repos"): PWL device segments resolved via LCP, a continuous-block library compiled into
+descriptor-DAE fragments of the same $A x + K \dot x = B u$ shape `general-mna` already uses,
+and — since 0.6.0 — a rule engine that watches a run and reports what it finds. Anything else —
+parsing, linear stamping — is deliberately not re-implemented here.
+
+`gsim-rules` is its own crate rather than a module of `dae-runtime` for a reason worth knowing
+before you work on it: it **observes only**, the single exception being the `stop` action ending
+a run. Nothing in the solver depends on it, and it builds and is tested without a solver at all,
+reading named quantities through a trait the caller implements. A rule that could change the
+circuit would make every waveform conditional on the rules that were written against it.
 
 ## The build-up-trust order
 

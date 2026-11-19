@@ -63,6 +63,7 @@ by *name* (as a `V`/`I` source's literal or a gate's `ctrl=`), never wired into 
 | `phys2sig` | the only way a circuit quantity (`V(node)`/`I(branch)`) enters the signal domain | 0 | 1 | `signals.md` |
 | `sig2phys` | the only legal target for a `V`/`I` source's magnitude or a gate's `ctrl=`; identity pass-through, consumed by name | 1 | 1 | `signals.md`, `gate-bindings.md` |
 | `measure` | ngspice `.measure`-style post-processing over a completed trace — stripped by the CLI before the solver sees the file; never a block | — | — (writes `<netlist stem>.log`) | `measurements.md` |
+| `rule` | a condition watched *during* the run — a rating, a bound, a balance — reported as a pair of edge events (enter and leave, the leave carrying duration, peak and the time of the peak), with a severity and an action; observes only, except `action=stop` | — (names a quantity) | — (writes the event stream; see `--events`) | `rules-and-ratings.md` |
 
 Two rows are worth reading before you write your first netlist: `ideal_switch` (its
 `(drain, source)` node-order convention — `pwl-devices.md` says "read this before wiring a

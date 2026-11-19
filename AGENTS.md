@@ -1,6 +1,6 @@
 # Agent guidelines
 
-`general-simulator` is an educational Rust simulator for piecewise-linear (PWL) circuits and
+`general-simulator` is a Rust simulator for piecewise-linear (PWL) circuits and
 mixed circuit/block-diagram systems, designed to avoid Newton-Raphson + voltage limiting
 entirely by resolving which device segment is active, per timestep, as a Linear
 Complementarity Problem (LCP). See [`README.md`](README.md) and

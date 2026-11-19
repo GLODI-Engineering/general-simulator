@@ -10,7 +10,7 @@ For netlist authors: writing, running, and reading the output of a general-simul
 
 ### Getting started
 
-- [Installing and building](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/getting-started.md): There's no published binary yet — build from source.
+- [Installing and building](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/getting-started.md): Three ways in, cheapest first.
 - [Your first netlist](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/first-netlist.md): A general-simulator deck is one ordinary-looking text file.
 - [Reading the output](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/reading-output.md): general-simulator produces one waveform per run — the resolved circuit unknowns plus every declared block's own output(s), one row per point (--mode transient) or a single row (--mode dc) — serialized as either CSV (the
 
@@ -89,7 +89,7 @@ For contributors: the math, internal mechanism, and rationale behind every major
 
 ### Crate tour
 
-- [Workspace layout](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/dev-guide/src/crate-tour.md): The workspace (Cargo.toml, root of this repo) has eight members, built in a strict dependency order that was also the order they were *verified* in — that ordering is not incidental bookkeeping, it is how the project tru
+- [Workspace layout](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/dev-guide/src/crate-tour.md): The workspace (Cargo.toml, root of this repo) has nine members, built in a strict dependency order that was also the order they were *verified* in — that ordering is not incidental bookkeeping, it is how the project trus
 - [`lcp-solver`: Lemke's algorithm](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/dev-guide/src/crate-lcp-solver.md): The numerical primitive the whole project stands on: given M (n x n) and q (n), find w, z in R^n with
 - [`pwl-devices`: ideal-diode and ideal-switch models](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/dev-guide/src/crate-pwl-devices.md): Two device *curves*, and nothing else.
 - [`dae-runtime`: circuit assembly and the transient loop](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/dev-guide/src/crate-dae-runtime.md): The crate where a netlist becomes numbers: it assembles a circuit's linear MNA system (built by general-mna, including its 'D' stamp) together with PWL device segments (from pwl-devices) into one Linear Complementarity P

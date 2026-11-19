@@ -1,10 +1,24 @@
 # general-simulator
 
-`general-simulator` is an educational Rust simulator for piecewise-linear (PWL) circuits and
-mixed circuit/block-diagram systems that never runs Newton-Raphson on device physics, and
-therefore never needs SPICE-style voltage limiting.
+[![CI](https://github.com/GLODI-Engineering/general-simulator/actions/workflows/ci.yml/badge.svg)](https://github.com/GLODI-Engineering/general-simulator/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/general-simulator-cli.svg)](https://crates.io/crates/general-simulator-cli)
+[![docs.rs](https://img.shields.io/docsrs/dae-runtime)](https://docs.rs/dae-runtime)
+[![license: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+
+`general-simulator` is a Rust simulator for piecewise-linear (PWL) circuits and mixed
+circuit/block-diagram systems that never runs Newton-Raphson on device physics, and therefore
+never needs SPICE-style voltage limiting. Since 0.6.0 it also carries a rule engine, so a run
+that breaks a rating, a bound or a balance says so instead of returning a plausible waveform.
 
 ## Quick start
+
+```bash
+cargo install general-simulator-cli
+```
+
+Or take a prebuilt binary — Linux x86-64, Linux ARM64, macOS (Apple silicon), Windows x86-64 —
+from the [latest release](https://github.com/GLODI-Engineering/general-simulator/releases/latest),
+which is also where each version's notes live. To build from the repository instead:
 
 ```bash
 cargo build --release -p general-simulator-cli
@@ -104,16 +118,18 @@ Path deps, read-only, same convention `general-mna` already uses for `general-sp
 Électronique/
 ├── general-simulator/        (this repo)
 ├── general-mna/         symbolic MNA + converter averaging
-└── spice-lsp/            general-spice-core: the ngspice/Xyce parser
+├── spice-lsp/            general-spice-core: the ngspice/Xyce parser
+└── gs-waveform-measurements/  the measurement primitives `kind=measure` evaluates
 ```
 
 - `general-spice-core` remains the sole netlist-parsing authority.
 - `general-mna` remains the sole implementation of *linear*-device MNA stamping
   (R, C, L, V, I, G, E, F, H) and numeric Schur-complement reduction — this repo reuses those
   directly rather than re-deriving them.
-- `general-simulator` adds exactly two new things: PWL device segments resolved via LCP, and a
+- `general-simulator` adds three things: PWL device segments resolved via LCP, a
   continuous-block library (transfer function, state-space, PID, ...) compiled into descriptor
-  DAE fragments of the same `A x + K dx/dt = B u` shape `general-mna` already uses.
+  DAE fragments of the same `A x + K dx/dt = B u` shape `general-mna` already uses, and the rule
+  engine that watches a run (`crates/gsim-rules`).
 
 ## Status
 
@@ -132,7 +148,13 @@ including bugs caught and fixed along the way):
   `continuous-blocks` controller (e.g. a PID) driving a switching gate.
 - `crates/continuous-blocks` — transfer function / state-space / PID / integrator / math-op
   compilation into the same descriptor-DAE shape circuits use, standalone and verified.
-- `crates/general-simulator-cli` (binary `general-simulator`) — netlist-in/CSV-waveform-out runner.
+- `crates/gsim-rules` — the rule engine: a rule watches a named quantity, a condition decides
+  when it is violated, and each violation is reported as a pair of edge events — one when it
+  starts, one when it ends, the latter carrying the duration, the peak and when the peak
+  happened. It observes only; `action=stop` ending a run is the single exception. Built and
+  tested with no solver at all, reading quantities through a trait the caller implements.
+- `crates/general-simulator-cli` (binary `general-simulator`) — netlist-in/CSV-waveform-out
+  runner, which also strips `kind=measure` lines and writes the event stream (`--events`).
 
 Open: validation against the Xyce/ngspice baselines already captured in an internal
 validation-experiment archive maintained alongside this project, full converter benchmarks, and
