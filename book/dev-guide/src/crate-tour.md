@@ -1,6 +1,6 @@
 # Workspace layout
 
-The workspace (`Cargo.toml`, root of this repo) has eight members, built in a strict
+The workspace (`Cargo.toml`, root of this repo) has nine members, built in a strict
 dependency order that was also the order they were *verified* in — that ordering is not
 incidental bookkeeping, it is how the project trusts its own numerics (see
 `verification-discipline.md`):
@@ -9,6 +9,7 @@ incidental bookkeeping, it is how the project trusts its own numerics (see
 lcp-solver ──► pwl-devices ──► dae-runtime ──► general-simulator-cli
                   ▲                 ▲
                   │                 ├── continuous-blocks
+                  │                 ├── gsim-rules      (observes; never changes a run)
                   │                 ├── cscript-ffi
                   │                 ├── pyblock-ffi   (optional `python` feature)
                   │                 └── octave-ffi    (no build-time deps at all)
@@ -26,10 +27,17 @@ repositories *outside* this one (`crates/dae-runtime/Cargo.toml` pins them with 
   — consumed by `general-simulator-cli` alone, to evaluate `kind=measure` lines as a
   post-processing pass over a completed transient trace.
 
-What this repo *adds* to those two are exactly two things (`README.md`, "Relationship to the
-sibling repos"): PWL device segments resolved via LCP, and a continuous-block library compiled
-into descriptor-DAE fragments of the same $A x + K \dot x = B u$ shape `general-mna` already
-uses. Anything else — parsing, linear stamping — is deliberately not re-implemented here.
+What this repo *adds* to those two are three things (`README.md`, "Relationship to the sibling
+repos"): PWL device segments resolved via LCP, a continuous-block library compiled into
+descriptor-DAE fragments of the same $A x + K \dot x = B u$ shape `general-mna` already uses,
+and — since 0.6.0 — a rule engine that watches a run and reports what it finds. Anything else —
+parsing, linear stamping — is deliberately not re-implemented here.
+
+`gsim-rules` is its own crate rather than a module of `dae-runtime` for a reason worth knowing
+before you work on it: it **observes only**, the single exception being the `stop` action ending
+a run. Nothing in the solver depends on it, and it builds and is tested without a solver at all,
+reading named quantities through a trait the caller implements. A rule that could change the
+circuit would make every waveform conditional on the rules that were written against it.
 
 ## The build-up-trust order
 

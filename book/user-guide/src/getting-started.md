@@ -1,6 +1,28 @@
 # Installing and building
 
-There's no published binary yet — build from source.
+Three ways in, cheapest first.
+
+## From crates.io
+
+```bash
+cargo install general-simulator-cli
+```
+
+This builds and installs the `general-simulator` binary from the published crate. It needs a
+Rust toolchain and nothing else.
+
+## A prebuilt binary
+
+Every [release](https://github.com/GLODI-Engineering/general-simulator/releases) attaches four
+archives — Linux x86-64, Linux ARM64, macOS (Apple silicon) and Windows x86-64 — each holding
+the `general-simulator` binary built with default features. Download, unpack, put it on your
+`PATH`; no toolchain required.
+
+Both of the above give you the **default** build. If you need `kind=pyblock` or `kind=pyfunc`,
+which embed Python, you need the `python` Cargo feature and therefore a build of your own — see
+below.
+
+## From source
 
 ## Prerequisites
 
@@ -33,6 +55,8 @@ crates/
 ├── pwl-devices          ideal-diode / ideal-switch PWL models
 ├── dae-runtime           circuit assembly + the transient loop (the actual engine)
 ├── continuous-blocks     the block library (PID, state-space, PWM, coordinate transforms, ...)
+├── gsim-rules            the rule engine: watches named quantities during a run and reports a
+│                          violation as a pair of edge events (kind=rule, see rules-and-ratings.md)
 ├── cscript-ffi            the native (C ABI) scripting-block escape hatch
 ├── pyblock-ffi            the embedded-Python scripting-block escape hatch (kind=pyblock/pyfunc)
 ├── octave-ffi             the subprocess-Octave scripting-block escape hatch (kind=octfunc/octblock)
