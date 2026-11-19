@@ -411,8 +411,15 @@ Every rule appears, including the ones that found nothing. `passed` means the qu
 and the answer was no; `NOT EVALUATED` means the quantity was never there to read, which is a
 problem with the rule rather than with the circuit.
 
-Exit codes: `0` nothing above a warning, `2` something at `error` or `fatal`, `3` a rule stopped
-the run, `4` the run went non-finite and was abandoned.
+Exit codes: `0` nothing at or above the failing severity, `2` something at it or above, `3` a
+rule stopped the run, `4` the run went non-finite and was abandoned.
+
+**`--fail-on <severity>`** chooses which severity makes the process exit `2`. It defaults to
+`error`, so without the flag a warning is reported and the run still succeeds, which is what a
+`warning` is for. A CI job that wants warnings to fail the build passes `--fail-on warning`; one
+that only cares about a run being abandoned passes `--fail-on fatal`. A rule that *ends* the run
+still exits `3` and a non-finite state still exits `4` whatever this is set to — those are facts
+about the run, not judgements about severity.
 
 ## Stopping, adjusting, and carrying on
 

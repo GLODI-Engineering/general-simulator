@@ -97,6 +97,76 @@ fn a_violated_rule_logs_edges_and_reports_through_the_exit_code() {
 }
 
 #[test]
+fn fail_on_warning_makes_a_warning_fail_and_leaves_the_default_alone() {
+    // The same rule twice, at `warning`. By default a warning is reported and the process
+    // still succeeds -- that is the contract the exit-code table described before `--fail-on`
+    // existed, and a caller who does not pass the flag must see no change. With
+    // `--fail-on warning`, the same run exits 2, which is what a CI job wants.
+    let netlist = write(
+        "fail_on.cir",
+        &format!(
+            "{BUCK}\nR_isat kind=rule type=above target=I(L1) max=3 unit=A severity=warning\n"
+        ),
+    );
+    let args = [
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "3e-4",
+        "--dt",
+        "1e-7",
+    ];
+
+    let default = run(&args);
+    assert_eq!(
+        default.status.code(),
+        Some(0),
+        "a warning does not fail a run by default"
+    );
+
+    let mut strict: Vec<&str> = args.to_vec();
+    strict.extend(["--fail-on", "warning"]);
+    let output = run(&strict);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "--fail-on warning must make the same warning fail"
+    );
+
+    // And the rule really did fire in both runs, so the difference is the threshold rather
+    // than a run that behaved differently.
+    let events = fs::read_to_string(netlist.with_extension("events.jsonl")).expect("the log");
+    assert!(events.contains("\"severity\":\"warning\""), "{events}");
+}
+
+#[test]
+fn fail_on_rejects_a_severity_it_does_not_know() {
+    let netlist = write("fail_on_bad.cir", BUCK);
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "1e-5",
+        "--dt",
+        "1e-7",
+        "--fail-on",
+        "catastrophic",
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "an unknown severity is a usage error"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--fail-on takes info, warning, error or fatal"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn two_switches_of_a_leg_conducting_together_stops_the_run() {
     let netlist = write(
         "leg.cir",

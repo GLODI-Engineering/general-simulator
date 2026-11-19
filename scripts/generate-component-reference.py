@@ -2,7 +2,8 @@
 """Generates book/user-guide/src/component-reference.md from structured doc comments.
 
 Do not edit the generated file by hand -- edit the source doc comments instead and rerun this
-script (see scripts/README or the pre-commit hook that runs it).
+script. `.claude/skills/write-component-doc/SKILL.md` is the procedure for writing one of those
+doc comments, including testing every Example and Errors claim against a real run first.
 
 Primary source: general-mna's src/block_graph.rs (path-sibling repo) -- the netlist-facing
 `BlockKind`/`GateBinding` component reference (Purpose/Library/Description/Parameters/Errors/

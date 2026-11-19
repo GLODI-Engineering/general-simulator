@@ -249,6 +249,38 @@ jobs:
           python -m pip install --upgrade pytest
           python -m pytest doc-verify -q
 
+  llms-fresh:
+    # `book/llms.txt` and `book/llms-full.txt` are committed, and the docs workflow regenerates
+    # them at publish time -- so the published copies were always current while the tracked ones
+    # drifted for two months. That is worse than not committing them: a reader who opens the
+    # file in the repository cannot tell it is stale. This job makes staleness a failing check
+    # instead, which is the cheaper half of "untrack them or keep them current by a gate".
+    name: Docs (llms.txt is current)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: general-simulator
+    steps:
+      - name: Check out general-simulator
+        uses: actions/checkout@v4
+        with:
+          path: general-simulator
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Regenerate and compare
+        run: |
+          python3 scripts/generate-llms-txt.py
+          if ! git diff --quiet -- book/llms.txt book/llms-full.txt; then
+            echo "::error::book/llms.txt or book/llms-full.txt is out of date."
+            echo "Run 'python3 scripts/generate-llms-txt.py' and commit the result."
+            git diff --stat -- book/llms.txt book/llms-full.txt
+            exit 1
+          fi
+          echo "both files match their sources"
+
   windows-smoke:
     name: Windows (the released binary actually runs)
     runs-on: windows-2022
