@@ -51,7 +51,7 @@ use crate::{
 use general_mna::block_graph::block_kind_name;
 pub use general_mna::block_graph::{
     BlockInstance, BlockKind, ConstValue, GainValue, GateBinding, Phys2SigTarget, PhysicalDomain,
-    PidClamp, SampleTimeSpec, Signal, SignalValue,
+    PidClamp, SampleTimeSpec, Signal, SignalValue, WaveAfter, WaveInterp,
 };
 
 /// Hard ceiling on accepted [`TimeStep::Adaptive`] steps for one [`simulate_transient_with_blocks`]
@@ -382,7 +382,8 @@ fn block_index_by_name(blocks: &[BlockInstance]) -> Result<BTreeMap<&str, usize>
             | BlockKind::CoordinateTransform { output_names, .. }
             | BlockKind::Pmsm { output_names, .. }
             | BlockKind::Pwm { output_names, .. }
-            | BlockKind::PhaseShiftPwm { output_names, .. } => output_names,
+            | BlockKind::PhaseShiftPwm { output_names, .. }
+            | BlockKind::FileWave { output_names, .. } => output_names,
             _ => &[],
         };
         for name in extra.iter().skip(1) {
@@ -491,6 +492,121 @@ fn periodic_time(t: f64, points: &[(f64, f64)], repeat: bool) -> f64 {
         return t;
     }
     t0 + (t - t0) % period
+}
+
+/// The index of the last breakpoint at or before `t`, or `None` when `t` precedes them all.
+///
+/// # Why this is a binary search and not the loop it replaces
+///
+/// Both piecewise arms used to walk every window on every step. For the four-point ramp anyone
+/// writes by hand that is free, and it stayed free for as long as a breakpoint list could only
+/// be typed into a netlist. A `kind=filewave` capture is 100 000 samples off an instrument: the
+/// scan is then ~10^9 comparisons for one source over a 10 000-step run, doubled by a second
+/// channel, and the cost is invisible because it is spread one step at a time.
+///
+/// `partition_point` is `O(log n)` and makes no assumption about how `t` moves. A cursor that
+/// only advanced would be faster still and would be **wrong**: an adaptive step that is
+/// rejected re-runs the block graph at a smaller `dt`, so time genuinely goes backwards within
+/// a step, and a forward-only cursor would hold a stale segment for the retry.
+fn segment_before(points: &[(f64, f64)], t: f64) -> Option<usize> {
+    let count = points.partition_point(|(time, _)| *time <= t);
+    count.checked_sub(1)
+}
+
+/// A piecewise-constant lookup: the value of the last sample at or before `t`.
+fn hold_at(points: &[(f64, f64)], t: f64) -> f64 {
+    match segment_before(points, t) {
+        Some(index) => points[index].1,
+        // Before the first sample, hold the first value -- the pre-existing behaviour of both
+        // arms, preserved exactly.
+        None => points.first().map(|(_, value)| *value).unwrap_or(0.0),
+    }
+}
+
+/// A piecewise-linear lookup: interpolated between the samples bracketing `t`, held flat
+/// outside them.
+fn linear_at(points: &[(f64, f64)], t: f64) -> f64 {
+    match points {
+        [] => 0.0,
+        [(_, value)] => *value,
+        _ => {
+            if t <= points[0].0 {
+                return points[0].1;
+            }
+            let last = points.len() - 1;
+            if t >= points[last].0 {
+                return points[last].1;
+            }
+            let index = match segment_before(points, t) {
+                Some(index) if index < last => index,
+                // `t` is inside the span and not before the first point, so a segment always
+                // exists; this arm is unreachable and returns the endpoint rather than
+                // panicking on a future caller's behalf.
+                _ => return points[last].1,
+            };
+            let (t0, v0) = points[index];
+            let (t1, v1) = points[index + 1];
+            if (t1 - t0).abs() < f64::EPSILON {
+                // Two samples at one instant are a step, which a logger really does write.
+                v1
+            } else {
+                v0 + (v1 - v0) * ((t - t0) / (t1 - t0))
+            }
+        }
+    }
+}
+
+/// One output of a [`BlockKind::FileWave`] at `t`, under its `interp` and `after` rules.
+fn file_wave_at(points: &[(f64, f64)], t: f64, interp: WaveInterp, after: WaveAfter) -> f64 {
+    let Some((last_time, _)) = points.last().copied() else {
+        return 0.0;
+    };
+    let t_eval = match after {
+        // `Repeat` wraps into the capture's own span, exactly as `repeat=true` does for `Pwl`:
+        // one implementation of "periodic" rather than a second rule for files.
+        WaveAfter::Repeat => periodic_time(t, points, true),
+        WaveAfter::Zero if t > last_time => return 0.0,
+        // `Error` is enforced before the run starts -- see `check_wave_coverage`. Reaching here
+        // past the end means the run was allowed, so it holds like `Hold` rather than failing
+        // mid-step on a check that was already made.
+        WaveAfter::Hold | WaveAfter::Zero | WaveAfter::Error => t,
+    };
+    match interp {
+        WaveInterp::Linear => linear_at(points, t_eval),
+        WaveInterp::Hold => hold_at(points, t_eval),
+    }
+}
+
+/// Refuses a run that would outlast a capture declared `after=error`, **before** the first step.
+///
+/// A run that outlasts its data is driven by a held constant for the rest of its length, and
+/// nothing in the waveform says so -- the same class of silently-plausible result the rule
+/// engine exists to catch. Checked here rather than raised mid-step so it costs a millisecond
+/// instead of most of a run, and so the message can name both numbers.
+fn check_wave_coverage(blocks: &[BlockInstance], t_final: f64) -> Result<(), DaeError> {
+    for block in blocks {
+        if let BlockKind::FileWave {
+            columns,
+            after: WaveAfter::Error,
+            source,
+            ..
+        } = &block.kind
+        {
+            let covered = columns
+                .iter()
+                .filter_map(|points| points.last().map(|(time, _)| *time))
+                .fold(f64::NEG_INFINITY, f64::max);
+            if covered < t_final {
+                return Err(DaeError::WaveCaptureTooShort {
+                    block: block.name.clone(),
+                    source: source.display().to_string(),
+                    covered,
+                    t_final,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// <!-- doc-ref: phys2sig -->
@@ -862,39 +978,34 @@ fn evaluate_blocks(
             }
             (BlockKind::Pwc { points, repeat }, _) => {
                 let t_eval = periodic_time(t, points, *repeat);
-                let mut v = points.first().map(|(_, v)| *v).unwrap_or(0.0);
-                for &(t_i, v_i) in points {
-                    if t_i <= t_eval {
-                        v = v_i;
-                    } else {
-                        break;
-                    }
-                }
-                SignalValue::Scalar(v)
+                SignalValue::Scalar(hold_at(points, t_eval))
             }
             (BlockKind::Pwl { points, repeat }, _) => {
                 let t_eval = periodic_time(t, points, *repeat);
-                SignalValue::Scalar(match points.as_slice() {
-                    [] => 0.0,
-                    [(_, v)] => *v,
-                    _ if t_eval <= points[0].0 => points[0].1,
-                    _ if t_eval >= points[points.len() - 1].0 => points[points.len() - 1].1,
-                    _ => {
-                        let mut v = points[points.len() - 1].1;
-                        for window in points.windows(2) {
-                            let (t0, v0) = window[0];
-                            let (t1, v1) = window[1];
-                            if t_eval >= t0 && t_eval <= t1 {
-                                v = if (t1 - t0).abs() < f64::EPSILON {
-                                    v1
-                                } else {
-                                    v0 + (v1 - v0) * ((t_eval - t0) / (t1 - t0))
-                                };
-                                break;
-                            }
-                        }
-                        v
-                    }
+                SignalValue::Scalar(linear_at(points, t_eval))
+            }
+            (
+                BlockKind::FileWave {
+                    columns,
+                    output_names,
+                    interp,
+                    after,
+                    ..
+                },
+                _,
+            ) => {
+                // Every channel but the first is published under its own top-level name, the
+                // same convention `CoordinateTransform` and `CScript` use. The first is this
+                // block's own value, returned below.
+                for (name, points) in output_names.iter().zip(columns.iter()).skip(1) {
+                    outputs.insert(
+                        name.clone(),
+                        SignalValue::Scalar(file_wave_at(points, t, *interp, *after)),
+                    );
+                }
+                SignalValue::Scalar(match columns.first() {
+                    Some(points) => file_wave_at(points, t, *interp, *after),
+                    None => 0.0,
                 })
             }
             (BlockKind::Waveform(f), _) => SignalValue::Scalar(f.value_at(t)),
@@ -1952,6 +2063,9 @@ pub fn simulate_transient_with_blocks_checkpointed(
     mut checkpoints: CheckpointControl<'_>,
     mut on_step: impl FnMut(f64, OperatingPoint, BTreeMap<String, SignalValue>) -> Result<(), DaeError>,
 ) -> Result<Option<Checkpoint>, DaeError> {
+    // Before anything is parsed or solved: a capture declared `after=error` that does not reach
+    // the end of this run. Every other entry point delegates here, so one call covers them all.
+    check_wave_coverage(blocks, t_final)?;
     let statements = general_mna::parse_and_flatten(source, dialect).map_err(DaeError::Parse)?;
     let deck_hash = crate::checkpoint::deck_hash(&[
         &statements,
