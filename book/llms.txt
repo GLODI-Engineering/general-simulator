@@ -48,6 +48,7 @@ For netlist authors: writing, running, and reading the output of a general-simul
 ### Post-processing measurements
 
 - [`kind=measure`: ngspice/Xyce-style .measure statements](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/measurements.md): kind=measure is a netlist line that computes one scalar (or, for four, a small handful of related scalars) from an already-completed transient trace — the same job ngspice's .measure and Xyce's .MEASURE statements do, ex
+- [Measured waveforms: a capture as a source, and as a reference](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/measured-waveforms.md): A simulation agrees with the circuit you built, or it does not, and the only way to find out is to measure the circuit and compare.
 
 ### Worked examples
 
