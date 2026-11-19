@@ -77,6 +77,17 @@ for the measured demonstration.
 A trailing unit is ignored, so `1kOhm`, `1kohm` and `1k` are the same value, as are
 `10uF` and `10u`. The unit is for the reader; the parser stops at the suffix.
 
+**One grammar, everywhere.** A device value, a `kind=` block field, a `kind=rule` field and a
+`kind=measure` field are all read this way: `PWM1 kind=pwm freq=100k in=DUTY red=300n` and
+`M kind=measure type=rms out=S from=200u to=500u` mean what they look like. Until
+[#57](https://github.com/GLODI-Engineering/general-simulator/issues/57) the block and measure
+fields went through a plain floating-point parse instead, so `freq=100000` was accepted on the
+same line where `freq=100k` was refused with "is not a number", about a number.
+
+A suffixed value is also the *same* `f64` as its exponent spelling, not a rounding of it: the
+suffix is appended as an exponent and the literal parsed once, so `300n` and `300e-9` are one
+value rather than two that differ in the last bit.
+
 ## Blocks may reference each other in any order
 
 Blocks are *not* evaluated in file order. Each step's actual evaluation order is derived

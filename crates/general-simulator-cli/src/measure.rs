@@ -509,8 +509,7 @@ fn threshold(fields: &BTreeMap<&str, &str>, prefix: &str) -> Result<ThresholdCfg
     let ref_key = format!("{prefix}ref");
     match (fields.get(val_key.as_str()), fields.get(ref_key.as_str())) {
         (Some(v), None) => Ok(ThresholdCfg::Value(
-            v.parse::<f64>()
-                .map_err(|_| format!("'{val_key}' is not a number"))?,
+            crate::rules::parse_number(v).ok_or_else(|| format!("'{val_key}' is not a number"))?,
         )),
         (None, Some(r)) => Ok(ThresholdCfg::Ref(r.to_string())),
         (Some(_), Some(_)) => Err(format!(
@@ -557,16 +556,15 @@ fn get_str(fields: &BTreeMap<&str, &str>, key: &str) -> Result<String, String> {
 }
 
 fn get_f64(fields: &BTreeMap<&str, &str>, key: &str) -> Result<f64, String> {
-    get_str(fields, key)?
-        .parse::<f64>()
-        .map_err(|_| format!("field '{key}' is not a number"))
+    let raw = get_str(fields, key)?;
+    crate::rules::parse_number(&raw).ok_or_else(|| format!("field '{key}' is not a number"))
 }
 
 fn get_f64_opt(fields: &BTreeMap<&str, &str>, key: &str) -> Result<Option<f64>, String> {
     match fields.get(key) {
         Some(v) => Ok(Some(
-            v.parse::<f64>()
-                .map_err(|_| format!("field '{key}' is not a number"))?,
+            crate::rules::parse_number(v)
+                .ok_or_else(|| format!("field '{key}' is not a number"))?,
         )),
         None => Ok(None),
     }
@@ -877,4 +875,58 @@ fn evaluate_one(
         }
     };
     Ok(result)
+}
+
+#[cfg(test)]
+mod field_grammar_tests {
+    use super::{extract, MeasureKind, MeasureSpec};
+    use general_spice_core::dialect::Dialect;
+
+    /// `(from, to)` of whichever kind this spec is, as plain numbers.
+    fn window_of(spec: &MeasureSpec) -> (Option<f64>, Option<f64>) {
+        match &spec.kind {
+            MeasureKind::Rms { window, .. } => (window.from, window.to),
+            _ => panic!("expected an Rms measurement for {}", spec.name),
+        }
+    }
+
+    /// A `kind=measure` field takes the same SPICE suffixes every other field takes.
+    ///
+    /// general-simulator#57. `from=200u` used to fail with `field 'from' is not a number`,
+    /// measured against the built binary, because this module parsed its fields with a plain
+    /// `f64::parse` while `kind=rule` -- the other thing this CLI parses itself -- went through
+    /// the suffix grammar. A window written in microseconds is the natural way to write one.
+    #[test]
+    fn a_measure_window_takes_suffixes() {
+        let suffixed = "V1 1 0 5\nR1 1 0 1k\nS kind=phys2sig node=1\n                        M kind=measure type=rms out=S from=200u to=500u\n";
+        let plain = "V1 1 0 5\nR1 1 0 1000\nS kind=phys2sig node=1\n                     M kind=measure type=rms out=S from=200e-6 to=500e-6\n";
+
+        let (_, from_suffixed) = extract(suffixed, Dialect::Ngspice).expect("suffixed");
+        let (_, from_plain) = extract(plain, Dialect::Ngspice).expect("plain");
+
+        assert_eq!(from_suffixed.len(), 1);
+        // Bit-identical, not merely close: the parser appends the suffix as an exponent rather
+        // than multiplying, so `200u` and `200e-6` are one value.
+        assert_eq!(window_of(&from_suffixed[0]), window_of(&from_plain[0]));
+        assert_eq!(window_of(&from_suffixed[0]), (Some(200e-6), Some(500e-6)));
+    }
+
+    /// `M` is milli here too, as it is everywhere else in the grammar.
+    #[test]
+    fn a_measure_field_reads_m_as_milli() {
+        let source = "V1 1 0 5\nR1 1 0 1k\nS kind=phys2sig node=1\n                      M kind=measure type=rms out=S from=1m to=2m\n";
+        let (_, specs) = extract(source, Dialect::Ngspice).expect("parses");
+        assert_eq!(window_of(&specs[0]), (Some(1e-3), Some(2e-3)));
+    }
+
+    /// A field that is not a number in any grammar still says so, by name.
+    #[test]
+    fn a_measure_field_that_is_not_a_number_is_still_refused() {
+        let source = "V1 1 0 5\nR1 1 0 1k\nS kind=phys2sig node=1\n                      M kind=measure type=rms out=S from=soon\n";
+        let err = match extract(source, Dialect::Ngspice) {
+            Err(message) => message,
+            Ok(_) => panic!("'from=soon' should not parse"),
+        };
+        assert!(err.contains("'from' is not a number"), "{err}");
+    }
 }

@@ -1157,9 +1157,14 @@ fn parse_rule(
 
 /// A number in the netlist's own grammar, where `m` is milli and `MEG` is mega.
 ///
-/// Written here rather than reused because `kind=measure` parses its fields with a plain
-/// `f64::parse`, which silently rejects `200n` -- and a rule whose dead time has to be spelled
-/// `0.0000002` is a rule nobody will write correctly.
+/// The one number grammar for every field this CLI reads: `kind=rule`'s and, since
+/// general-simulator#57, `kind=measure`'s. A dead time that has to be spelled `0.0000002` is a
+/// dead time nobody will write correctly, and a reader should not have to know which field they
+/// are looking at to know how a number will be read.
+///
+/// `general-mna` applies the same grammar to device values and `kind=` block fields
+/// (`expression::parse_spice_number`), by the same exponent-rewriting method and for the same
+/// reason. Two implementations, one grammar, with a parity table on each side.
 pub fn parse_number(raw: &str) -> Option<f64> {
     let raw = raw.trim();
     if let Ok(value) = raw.parse::<f64>() {
