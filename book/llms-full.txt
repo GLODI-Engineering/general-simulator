@@ -47,9 +47,14 @@ netlists described here:
   across incompatible paradigms each raise at the line that caused them. The same package
   reads the output back and runs the measurements of
   [`kind=measure`](measurements.md) over non-uniformly sampled waveforms.
-- **[general-simulator-gui](https://github.com/GLODI-Engineering/general-simulator-gui)**
+- **[general-simulator-gui-for-vscode](https://github.com/GLODI-Engineering/general-simulator-gui-for-vscode)**
   — a schematic editor and waveform viewer as a VS Code extension, for drawing a circuit
-  rather than writing one.
+  rather than writing one. Install it from the `general-simulator-gui.vsix` attached to its
+  [latest release](https://github.com/GLODI-Engineering/general-simulator-gui-for-vscode/releases/latest):
+
+  ```console
+  $ code --install-extension general-simulator-gui.vsix
+  ```
 
 Both sit on
 **[gsim-core](https://github.com/GLODI-Engineering/gsim-core)**, the shared Rust document
@@ -152,7 +157,7 @@ resistor.
 ```text
 V1 a 0 5
 D1 a b idealswitchmodel
-D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1
+D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_f=0.7 g_on=1
 R1 b c 100
 C1 c 0 1e-3
 ```
@@ -166,7 +171,7 @@ Line by line:
 - `D1 kind=ideal_diode ...` — the second `D1` line is the *device-card* statement declaring what
   that model actually is: a piecewise-linear ideal diode with reverse-breakdown conductance
   `g_breakdown` (0 here — no reverse breakdown modeled), the breakdown voltage `v_breakdown`,
-  off-state conductance `g_off`, forward threshold `v_th`, and on-state conductance `g_on`. This
+  off-state conductance `g_off`, forward threshold `v_f`, and on-state conductance `g_on`. This
   is what replaces SPICE's own `.model` card and its exponential $I = I_S(e^{V/V_T}-1)$ — see the
   Introduction for why.
 - `R1 b c 100` / `C1 c 0 1e-3` — an ordinary resistor and capacitor, exactly as any SPICE tool
@@ -358,7 +363,7 @@ gives `name kind=<kind> field=value ...` genuine first-class syntax — no `*`-c
 needed:
 
 ```text
-D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1
+D1 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_f=0.7 g_on=1
 ONVAL kind=const value=1
 ONGATE kind=sig2phys domain=voltage in=ONVAL
 ```
@@ -582,16 +587,16 @@ construction (`crates/pwl-devices/src/ideal_diode.rs`):
 ```text
            g_breakdown          g_off (leakage)         g_on (forward)
   <---------------------|------------------------|-------------------->
-                    v_breakdown                 v_th
+                    v_breakdown                 v_f
 ```
 
 - **`v <= v_breakdown`**: reverse-breakdown conduction, slope `g_breakdown`.
-- **`v_breakdown < v < v_th`**: near-zero leakage, slope `g_off`.
-- **`v >= v_th`**: forward conduction, slope `g_on`.
+- **`v_breakdown < v < v_f`**: near-zero leakage, slope `g_off`.
+- **`v >= v_f`**: forward conduction, slope `g_on`.
 
 Both breakpoints are anchored so each segment meets its neighbor exactly, and `v_breakdown` must
-be strictly below `v_th` (`IdealDiode::new` asserts this — see [Your first netlist](first-netlist.md)
-for the example deck already using `g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.7 g_on=1`).
+be strictly below `v_f` (`IdealDiode::new` asserts this — see [Your first netlist](first-netlist.md)
+for the example deck already using `g_breakdown=0 v_breakdown=-100 g_off=0 v_f=0.7 g_on=1`).
 `v` is the diode's own $V = V_{\text{anode}} - V_{\text{cathode}}$, in netlist terms $V(n_1) -
 V(n_2)$ for `D1 n1 n2 ...`.
 
@@ -601,7 +606,7 @@ A real silicon diode's datasheet gives you roughly two numbers directly: a forwa
 `V_F` at some rated current, and a reverse breakdown/withstand voltage `V_R`. Mapping them onto
 this model:
 
-- `v_th = V_F` — the point where forward conduction begins.
+- `v_f = V_F` — the point where forward conduction begins.
 - `g_on` — pick so that the model's current at your circuit's typical forward current matches
   the datasheet at that same current:
 
@@ -647,7 +652,7 @@ step — never something an LCP resolves as part of the switch's own physics.
 Parameters combine the same 5 body-diode fields as `kind=ideal_diode` with one more:
 
 - `r_on` — on-state channel resistance, drain-source, conducting both directions.
-- `g_breakdown`, `v_breakdown`, `g_off`, `v_th`, `g_on` — the body diode's own curve, in its
+- `g_breakdown`, `v_breakdown`, `g_off`, `v_f`, `g_on` — the body diode's own curve, in its
   natural terms (forward conduction for $V(\text{source}) - V(\text{drain}) > v_{th}$).
 - `gate=`/`ctrl=` — how the gate state is resolved; see [Gate bindings](gate-bindings.md) for
   the full detail.
@@ -710,13 +715,82 @@ NAME kind=ideal_switch ... gate=block ctrl=<sig2phys_voltage_block_name>
 - `ctrl=<name>` — the name of a declared `domain=voltage` [`kind=sig2phys`](component-reference.md#sig2phys-signal-to-physical-converter)
   block. Every step, the switch reads that block's current output and is on while it's `>= 0.5`.
 
-Why it has to be a `sig2phys` converter specifically, rather than a raw `pid`/`pwm`/`hysteresis`
-block: a circuit quantity and a signal-domain value are treated as genuinely different kinds of
-thing throughout this grammar (see [Grammar overview](netlist-grammar.md) and
-[Component Reference: Sig2Phys](component-reference.md#sig2phys-signal-to-physical-converter)) —
-an ideal switch's gate is itself a voltage ($V_{GS}$ against $v_{th}$), not a distinct
-discrete-actuation signal domain, so it shares the same write-direction converter a `V`-source's
-own magnitude uses, not a dedicated gate-only type.
+### The gate threshold is `v_gs_th`, and the body diode's is `body_v_f`
+
+A `kind=ideal_switch` line describes **two devices**: a channel and a body diode. Every field
+that belongs to the diode says so:
+
+```text
+DSW in mid idealswitchmodel
+DSW kind=ideal_switch r_on=0.02 \
+    body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.5 body_g_on=100 \
+    gate=block ctrl=GH v_gs_th=0.5
+```
+
+- `r_on` — the channel. The switch's own, so it carries no prefix.
+- `body_*` — the intrinsic body diode's curve, in its own terms.
+- `v_gs_th` — the **gate** threshold, datasheet $V_{GS(th)}$. Optional, default `0.5`. The gate
+  turns the switch on while its driving signal is at or above this value.
+
+#### Why the names are this careful
+
+Until this was fixed, the body diode's forward threshold was spelled `v_th`, exactly as on a
+standalone diode — and `v_th` means $V_{GS(th)}$, the gate threshold, on every MOSFET datasheet
+there is. There was also no field at all for a real gate threshold, so anyone modelling a 5 V
+gate wrote the only plausible-looking thing:
+
+```text
+DSW kind=ideal_switch r_on=0.02 ... v_th=5 ...      # accepted, and wrong twice over
+```
+
+and got a switch that **still turned on at 0.5** *and* a body diode with a 5 V forward drop,
+silently changing how the converter freewheeled. The deck was valid, the run completed, and the
+numbers were wrong. The same buck run twice with nothing but that field changed produced output
+identical to the digit:
+
+```text
+v_th=5     V(out) range: 2.986 .. 5.521 V
+v_th=0.5   V(out) range: 2.986 .. 5.521 V
+```
+
+`v_th` no longer exists anywhere in the language. Writing it is an error that names the
+replacement, and on a switch it names *both* candidates, because only you know which you meant:
+
+```text
+error: line 7: device 'DSW' field 'v_th' no longer exists -- write 'body_v_f'. On a switch
+this field was never the gate threshold: it is the body diode's forward voltage, and the gate
+path never read it. If you meant the gate threshold, that is 'v_gs_th' and it defaults to 0.5.
+```
+
+The rule behind the vocabulary: **a field name says which device owns the parameter, and uses
+that device's own datasheet word for the quantity.** A diode's forward threshold is `v_f`
+($V_F$), never `v_th`; a gate's is `v_gs_th`. The two cannot be confused because no datasheet
+uses either word for the other.
+
+#### Using a real gate threshold
+
+`v_gs_th` is honoured, so a logic-level signal no longer has to be scaled to match:
+
+```text
+DSW kind=ideal_switch r_on=0.02 ... gate=block ctrl=GH v_gs_th=5
+```
+
+That switch stays off until its gate signal reaches 5. If your gate signal is logic-level (0 or
+1), leave `v_gs_th` alone — the `0.5` default is the midpoint, and keeping the gate driver's real
+behaviour in the block that produces the signal is clearer than encoding it in a threshold.
+
+A gate whose driving signal can never reach `v_gs_th` is reported before the run starts, when
+that is provable from the declaration (a constant, a gain over a constant), and by
+`type=switch_timing`'s never-commutated check when it is not — see
+[Rules and ratings](rules-and-ratings.md).
+
+Why the gate has to be a `sig2phys` converter specifically, rather than a raw `pid`/`pwm`/
+`hysteresis` block: a circuit quantity and a signal-domain value are treated as genuinely
+different kinds of thing throughout this grammar (see [Grammar overview](netlist-grammar.md) and
+[Component Reference: Sig2Phys](component-reference.md#sig2phys-signal-to-physical-converter)).
+An ideal switch's gate is itself a voltage — $V_{GS}$, compared against `v_gs_th` — not a
+distinct discrete-actuation signal domain, so it shares the same write-direction converter a
+`V`-source's own magnitude uses rather than a dedicated gate-only type.
 
 ## A "fixed" gate is just a `const` wired through `sig2phys`
 
@@ -728,7 +802,7 @@ ONVAL kind=const value=1
 ONGATE kind=sig2phys domain=voltage in=ONVAL
 V1 in 0 5
 D1 in out idealswitchmodel
-D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 \
+D1 kind=ideal_switch r_on=0.1 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.5 body_g_on=5 \
      gate=block ctrl=ONGATE
 R1 out 0 1k
 ```
@@ -1557,8 +1631,8 @@ itself allows that domain for `I`-source targets).
 
 **Netlist form**
 ```text
-NAME kind=ideal_switch r_on=<f64> g_breakdown=<f64> v_breakdown=<f64> g_off=<f64> \
-     v_th=<f64> g_on=<f64> gate=block ctrl=<sig2phys_voltage_block_name>
+NAME kind=ideal_switch r_on=<f64> body_g_breakdown=<f64> body_v_breakdown=<f64> body_g_off=<f64> \
+     body_v_f=<f64> body_g_on=<f64> gate=block ctrl=<sig2phys_voltage_block_name>
 ```
 
 **Example**
@@ -1573,7 +1647,7 @@ ONVAL kind=const value=1
 ONGATE kind=sig2phys domain=voltage in=ONVAL
 V1 in 0 5
 D1 in out idealswitchmodel
-D1 kind=ideal_switch r_on=0.1 g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.5 g_on=5 \
+D1 kind=ideal_switch r_on=0.1 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.5 body_g_on=5 \
      gate=block ctrl=ONGATE
 R1 out 0 1k
 ```
@@ -1709,7 +1783,7 @@ block's own just-computed output value into the circuit solve in that symbol's p
 Also the *only* legal target for a [`GateBinding::Block`]'s own named block, and there
 *only* the `domain=voltage` form — `dae-runtime` rejects a `GateBinding` naming anything
 else, including a `domain=current` `Sig2Phys`, with `DaeError::GateTargetNotSig2Voltage`.
-An ideal switch's gate is itself a voltage (`V_GS` against `v_th`), not a distinct
+An ideal switch's gate is itself a voltage (`V_GS` against `v_f`), not a distinct
 discrete-actuation signal domain, so there is no separate gate-only converter — one type,
 `Sig2Phys`, parameterized by [`PhysicalDomain`], is the whole Signal-to-PS boundary for
 "a signal-domain block's output drives a physical voltage or current," whether that
@@ -4654,6 +4728,7 @@ general-simulator <netlist> [--devices <file>] [--mode dc|transient] [--tfinal T
                    [--dt DT | --dt-max T --dt-min T --dt-init T --reltol R --abstol A]
                    [--max-steps N]
                    [--format csv|raw] [--out <path>] [--out-every N]
+                   [--events <path>] [--events-text <path>]
                    [--checkpoint-out <file>] [--checkpoint-every T] [--resume <file>]
 general-simulator (--help | -h)
 general-simulator (--version | -V)
@@ -4674,6 +4749,8 @@ is optional.
 | `--format csv\|raw` | Output serialization — see below. Default: `csv`. |
 | `--out <path>` | Destination file for `--format raw`. Ignored for `--format csv` (CSV always goes to stdout). |
 | `--out-every N` | Write only every Nth resolved point. Thins the output, never the computation — see below. Default: `1`. |
+| `--events <path>` | Where the JSONL event stream goes. Default: `<netlist stem>.events.jsonl`, beside the netlist. |
+| `--events-text <path>` | Where its human-readable twin goes, independently of `--events`. Default: `<netlist stem>.events.txt`. Both files are written only for a netlist that declares rules, and a path that cannot be created is an error — see below. |
 | `--checkpoint-out <file>` | Write the run's complete state at `--tfinal` so a later run can `--resume` it. See [Checkpoint and resume](checkpoint-resume.md). |
 | `--checkpoint-every T` | With `--checkpoint-out`: also rewrite that file every `T` seconds of simulated time, so a killed run loses at most `T`. |
 | `--resume <file>` | Continue from a checkpoint instead of from $t = 0$; `--tfinal` stays absolute. Only loads into the deck it was written from. |
@@ -4738,6 +4815,27 @@ Not a substitute for a coarser `--dt`, and not adaptive stepping. Adaptive stepp
 lengthen the step exactly across the flat dead band where the discharge is about to happen,
 which is the opposite of what a case like the above needs; `--out-every` keeps the guaranteed
 uniform step and thins only the record of it.
+
+
+## `--events`: asking for the event stream instead of finding it
+
+The two event files default to the netlist's own directory, which is right when you run the
+binary by hand and wrong for every tool. A front end compiles a schematic in memory and writes
+the `.cir` into a temporary directory; both files were then created inside it and deleted with
+it, so every event of every run was discarded — and nothing could have read them without
+reconstructing the `<deck>.events.*` convention from the outside.
+
+```bash
+general-simulator buck.cir --mode transient --tfinal 2e-3 --dt 1e-8 \
+  --events /tmp/run-17/events.jsonl --events-text /tmp/run-17/events.txt > /tmp/run-17/wave.csv
+```
+
+The two move independently on purpose: a tool reads the JSONL and a person reads the text, and a
+caller that redirects one should not be handed the other somewhere it never looks.
+
+A path whose directory does not exist is an error naming the path, and the run does not start.
+Losing the diagnostics channel in silence is the failure these flags exist to fix, so it is not
+something they will do themselves.
 
 ## `--format`: CSV vs. SPICE rawfile output
 
@@ -5101,6 +5199,872 @@ is not stable across format versions — a file from another version is refused 
 misread. Size is a few hundred bytes to a few kilobytes for typical decks.
 
 
+## Rules and diagnostics
+
+
+<!-- User Guide / Rules and ratings: making a wrong run say so -->
+
+# Rules and ratings: making a wrong run say so
+
+A transient simulation almost never refuses to produce an answer. Gate two switches of the same
+leg together and you get a waveform; run an inductor at six times its rating and you get a
+waveform; saturate a core the model knows nothing about and you get a waveform. Every one of
+them looks like the others, and the thing that makes them wrong is invisible in the output.
+
+A rule is a question asked of every solver step, whose answer is recorded with the time it
+became true. If nothing is asked, nothing is found — so a deck's rules are part of the deck,
+written in the netlist beside the circuit they describe.
+
+There are two syntaxes, and they compile to exactly the same thing:
+
+- a **`kind=rule` card**, which says everything explicitly and can watch anything;
+- a **rating on the device line**, which is shorter and is where a datasheet number belongs.
+
+## Ratings on the device line
+
+```text
+Ls a b 36u i_max=60 i_sat=70 on_violation=console
+```
+
+That is one inductor and two limits. The fields:
+
+| field | means |
+|---|---|
+| `i_max` | the element's current, in amps, may not exceed this magnitude |
+| `i_sat` | the same, as a second threshold — a part rated for 60 A may saturate at 70 A |
+| `v_max` | the voltage **across** the element may not exceed this magnitude |
+| `on_violation` | what to do: `log`, `console`, `stop`, `pause` |
+| `severity` | `info`, `warning`, `error`, `fatal` |
+| `hold` | ignore an excursion shorter than this |
+
+Three things about them are worth knowing before you write one.
+
+**A rating is a limit on magnitude.** `i_max=60` means $|i| \le 60$, not $i \le 60$. A buck
+inductor's current never goes negative and either reading would do; a dual-active-bridge
+inductor's current is symmetric about zero, and a signed limit would watch $-70$ A go past a
+60 A rating without a word.
+
+**A rating is an error by default**, where a `kind=rule` card defaults to a warning. The number
+came off a datasheet; exceeding it is not a matter of taste. The process exit code is therefore
+`2` after a run that violated one, and `0` after a run that did not — enough for a script to
+tell a trustworthy result from a plausible-looking one.
+
+**A current rating needs a device that has a current.** Only `V`, `L`, `E` and `H` contribute a
+branch current to the MNA unknowns; a resistor's, a capacitor's or an ideal switch's current is
+computed from the solution rather than solved for, so there is no `I(name)` column to watch.
+Writing `i_max=` on one of those is refused at load:
+
+```text
+line 9: device 'RL': a current rating needs a branch current, and device R does not have one
+(only V, L, E and H do -- a resistor's or a switch's current is computed from the solution,
+not solved for). Write a `kind=rule` card naming a current you do have, or probe this one first.
+```
+
+Refused rather than accepted-and-ignored, because in the end-of-run table a rating that was
+never evaluated reads exactly like a rating that was never exceeded. For a switch current,
+measure it with a `phys2sig` converter and write a card against that signal.
+
+## `kind=rule` cards
+
+A card can watch anything the waveform carries, and can express the conditions a rating cannot:
+
+```text
+R_ileg  kind=rule type=above  target=I(L1) max=60 unit=A severity=error
+R_bus   kind=rule type=outside min=390 max=410 target=V(bus) unit=V after=5m
+R_leg   kind=rule type=forbidden_state switches=DSH,DSL action=stop severity=fatal
+R_dead  kind=rule type=forbidden_state switches=DSH,DSL min_deadtime=200n
+R_path  kind=rule type=required_path switches=DSH,DSL current=I(L1) i_min=1
+```
+
+`type=` is one of `above`, `below`, `outside`, `inside`, `forbidden_state`, `required_path`,
+`switch_timing`, `rate_of_change`, `body_diode`, `commutation_order` or `per_period`.
+The first four take a `target=` naming any column the CSV has — a node voltage `V(node)`, a
+branch current `I(element)`, a voltage across a pair `V(p,n)`, or a block output by its own name.
+
+`forbidden_state` and `required_path` are the multi-component rules: they are about a
+*relationship* between switches rather than a quantity.
+
+- `forbidden_state switches=DSH,DSL` reports whenever more than `max_on` of them conduct at
+  once (default 1) — shoot-through on a bridge leg, which is the failure that destroys hardware
+  and which a simulation will otherwise simply absorb.
+- The same rule with `min_deadtime=200n` reports a *handover faster than* 200 ns, including a
+  handover with no dead time at all, where one switch turns on in the same step the other turns
+  off. There is no all-off interval to measure there, so the check looks for the handover
+  itself.
+- `required_path switches=D1,D2 current=I(L1) i_min=1` reports the opposite mistake: a current
+  of at least 1 A with no device left to carry it.
+
+### `switch_timing`: when a switch changes, not what state it is in
+
+```text
+T_sh kind=rule type=switch_timing switches=DSH,DSL min_on=300n min_off=300n \
+     f_min=18k f_max=22k
+```
+
+Three questions with one answer, because all three are read off the same record of resolved
+transitions:
+
+| field | reports |
+|---|---|
+| `min_on` | a conducting interval shorter than this |
+| `min_off` | a non-conducting interval shorter than this |
+| `f_min`, `f_max` | a measured switching frequency outside the band |
+| `require_commutation` | a switch that held one state for the whole run (default: yes) |
+
+**`require_commutation` defaults to yes**, and is the one to leave on. A gate that never
+reaches its switch is the most common cause of a converter simulation that produces a plausible
+wrong answer — a `ctrl=` naming the wrong block, a modulator whose output never crosses the
+gate's threshold, a constant left at zero during debugging. What then runs is a different
+circuit, usually one with a permanently open switch, which still charges and still settles. The
+waveform of such a run looks entirely reasonable:
+
+```text
+[100.0000 us] ERROR DSW.T_sw  at 0.0000 transition(s)  limit 1.0000 transition(s)
+              [DSW never commutated -- it stayed open for the whole run]
+```
+
+It also guards the other two checks: a switch that never commutated cannot have produced a
+measurable on-time or frequency either, so a rule that asked for those and stayed quiet would
+be reporting a pass it never established.
+
+**Minimum on and off times** are about the device rather than the circuit. A real switch needs
+driver propagation, bootstrap charging and current-sense blanking; a modulator asking for a
+50 ns on-pulse from a device that needs 300 ns does not get a short pulse, it gets an
+unpredictable one, and the duty cycle the simulation settled on describes a converter nobody
+can build. The report carries the pulse that was actually delivered:
+
+```text
+[14.4000 us] WARN DSW.T_sw  at 4.4000 us  limit 6.0000 us
+             [DSW was on for 4.4000e-6 s, 6.0000e-6 s required]
+```
+
+An interval already in progress at the first step is not judged — it began before anything was
+watching, so its length is not a measurement.
+
+**The switching frequency** is measured from the transitions, not read from the modulator's
+`freq=`. With a closed loop it is an outcome rather than a setting: a hysteretic or
+current-mode loop can double its frequency under one load and halve it under another, and the
+magnetics, the losses and the EMI filter were all designed for a number nobody checked
+afterwards. Two transitions make a period, and the window is the interval actually observed.
+
+### `rate_of_change`: how fast a quantity may change
+
+```text
+R_cut kind=rule type=rate_of_change target=I(L1) max_slope=1e7 unit=A/s
+```
+
+The general form of the cut-current check. Open every switch in an inductor's path and the
+current has nowhere to go; the solver answers with whatever voltage the stamp implies rather
+than with an error, and the result is the enormous spike everyone has seen and that is
+routinely blamed on the solver rather than on the netlist.
+
+`required_path` catches that case when the switches that should have been conducting can be
+named. This catches it from the other side, off the solution: a current step through an
+inductance implies $v = L \, \mathrm{d}i/\mathrm{d}t$, so a bound on the slope is a bound on
+that voltage. It is judged on magnitude, because a cut current collapses as violently as it
+surges.
+
+Pick the bound from the circuit, not from taste. A buck inductor with 9 V across 22 µH slews at
+$9/22\,\mu \approx 4.1 \times 10^5$ A/s, so a bound of $10^7$ A/s leaves ordinary operation
+alone and still catches a cut.
+
+### `body_diode`: a switch that is off and conducting anyway
+
+```text
+B_dsl kind=rule type=body_diode switches=DSL currents=I(VSL) i_min=10
+```
+
+Not a fault by itself — it is exactly how a synchronous bridge freewheels during dead time, and
+how every unsynchronised commutation is survived. It becomes a finding when the current is
+large, because then it is either a sync FET whose channel was never turned on (so the losses
+are the diode's, several times what the design assumed) or a path nobody intended.
+
+`currents=` names one current per switch, in the same order, because **a switch's own current is
+not an MNA unknown**. Only `V`, `L`, `E` and `H` carry one. The way to observe a switch current
+is the standard one, and the engine suggests it when asked for such a current directly: put a
+0 V source in series with the device and probe that.
+
+```text
+VSL mid sl 0
+DSL sl 0 idealswitchmodel
+```
+
+Only a commanded-*off* switch can produce this finding, and that is not a limitation of the
+rule but of what the question means: a switch commanded on is stamped as a plain resistance
+conducting in both directions, so it cannot fail to conduct.
+
+### `commutation_order`: the order switches take over the current in
+
+```text
+C_ord kind=rule type=commutation_order sequence=S1,S2,S3,S4
+```
+
+Multi-step commutation — a current-source inverter, a matrix converter, any four-step sequence
+— is correct only if the transitions happen in the stated order. Out of order it still
+simulates, and the answer is wrong in a way nothing in the waveform reveals.
+
+The order is cyclic, and its phase comes from the first turn-on observed rather than from the
+first entry of the list: a run that begins midway through a sequence has not got the order
+wrong. After a departure the rule resynchronises to what actually happened, so one mistake
+produces one finding rather than one per transition for the rest of the run.
+
+### `per_period`: the measures that only mean something over a cycle
+
+```text
+P_vs  kind=rule type=per_period target=V(p,n) measure=integral period=10u \
+      min=-1u max=1u unit=Vs
+P_rms kind=rule type=per_period target=I(L1) measure=rms sync=DSH max=60 unit=A
+```
+
+Every check above judges an instant. The quantities that actually say whether a converter is
+working are averages over a switching period, and the failure that motivated this one is a real
+one: a transformer's magnetising current drifting from 40 A to 245 A over a run, with every
+instantaneous rule passing throughout. Nothing was over a limit at any moment. What was wrong
+is that the volt-seconds applied to the winding did not sum to zero over a period, so each cycle
+left a little more flux than the last.
+
+$$\int_{t}^{t+T} v \, \mathrm{d}t \approx 0$$
+
+is the statement, and `measure=integral` with a tolerance is the rule.
+
+| `measure=` | computes |
+|---|---|
+| `integral` | $\int x \, \mathrm{d}t$ over the period — volt-seconds, for a winding |
+| `rms` | what a component is rated by, as opposed to its peak |
+| `mean` | for a DC-link current or an output voltage |
+| `abs_mean` | the mean of the magnitude, which is what a thermal estimate wants |
+
+**What a period is** must be said, one way or the other:
+
+- `period=10u` — stated outright, for an open-loop converter at a fixed frequency. The boundary
+  is *split*: the sample at the end of the period is interpolated between the two steps either
+  side of it, so the measure is over exactly one period. Closing at the step that noticed
+  instead would carry a stray step's worth of integral into the result, which for a near-zero
+  volt-second balance is not a small error.
+- `sync=DSH` — each period runs from one turn-on of that switch to the next. With a closed loop
+  the period is an outcome rather than a setting, so this is the only honest boundary. The
+  fragment before the first turn-on is not measured: it is part of a cycle that began before
+  anything was watching.
+
+**On the numbers agreeing with `kind=measure`.** These are accumulated as the run goes rather
+than computed over a stored trace — buffering a period per rule would be unbounded, and at
+10 ns steps a 50 Hz period is two million samples. The per-segment forms are
+`gs-waveform-measurements`' own, including the exact integral of a squared linear segment,
+$\frac{\Delta t}{3}(v_0^2 + v_0 v_1 + v_1^2)$, rather than a trapezoid of the square. A test
+asserts the streaming result and that library's batch result agree to twelve digits on the same
+data, so a `kind=measure` RMS and a per-period RMS over the same window do not disagree in their
+last digits by a quadrature rule nobody chose.
+
+One number worth expecting: on a sampled square wave the transition between two samples
+interpolates linearly through zero, and its contribution is exactly nothing — so a 60/40
+asymmetric square wave of ±10 V integrates to $1.9\,T$ rather than $2\,T$ volt-seconds. That
+is a property of the samples, not of the accumulator.
+
+### Qualifiers
+
+Available on any card, and `hold` on a rating:
+
+| field | means |
+|---|---|
+| `hold` | the condition must hold this long before it is reported |
+| `hyst` | leave only once the value has come back past the limit by this much |
+| `after`, `before` | ignore the rule outside this window — `after=5m` skips start-up |
+| `max_events` | stop writing records after this many; the summary still counts them all |
+| `stop_after` | turn `action=stop` into a stop only on the Nth violation |
+
+`hold` is the one to reach for first. A switch model can produce a 20 ns numerical spike that is
+not a real overload, and a rule that reports it trains its reader to ignore the log.
+
+## How a bound is named
+
+There is one rule, and every rule type follows it:
+
+> **A bound on whatever `target=` names is `min` or `max`. A bound on a quantity the card does
+> not name in `target=` carries that quantity's prefix.**
+
+So:
+
+| rule type | `target=` names | its bounds |
+| --- | --- | --- |
+| `above`, `below` | the quantity | `max`, `min` |
+| `outside`, `inside` | the quantity | `min` and `max` |
+| `per_period`, `efficiency` | the quantity | `min` and `max` |
+| `switch_timing` | switches | `f_min`, `f_max`, `t_min` ... |
+| `body_diode` | switches | `i_min` |
+| `zvs` | switches | `v_max` |
+| `rate_of_change` | the quantity | `max_slope` |
+
+The prefixed names are not inconsistencies. A card whose `target=` names *switches* cannot
+write a bare `max=5`, because nothing would say which quantity — a frequency, a current, a
+voltage — or which unit that 5 is in. `rate_of_change` is the subtle case: its `target=` is a
+quantity, but the bound is on the **derivative** of that quantity, so `max_slope` earns its
+prefix by naming something different from the target.
+
+`limit=`, `low=` and `high=` used to exist and are now errors that name their replacement:
+
+```text
+error: line 12: rule 'EXPECT': field 'low' no longer exists -- write 'min'. Every bound on a
+rule's own target is 'min' or 'max', on every rule type
+```
+
+They were removed rather than kept as aliases because three names for one concept is how
+somebody writes the obvious thing and gets a parse error from a feature that otherwise works
+perfectly.
+
+## A deck is its own regression test
+
+A rule whose bound is an *expectation* rather than a limit turns a deck into a test, because a
+violated rule at `error` severity exits non-zero:
+
+```text
+EXPECT kind=rule type=outside target=V(out) min=4.0 max=5.0 after=3e-3 severity=error
+```
+
+On a buck that settles to 4.8 V:
+
+```text
+  V(out).EXPECT                passed
+1 rule(s): 0 violated, 1 passed          → exit 0
+```
+
+With the expectation wrong on purpose (`min=9.0 max=10.0`):
+
+```text
+  V(out).EXPECT   ERROR  1 time(s), 2.0000 ms total, worst 4.4834 at 4.1838 ms
+1 rule(s): 1 violated, 0 passed          → exit 2
+```
+
+`general-simulator deck.cir` in CI needs no wrapper script and no separate assertion file.
+`after=` supplies the "after 5 ms" part of *"the bus is between 390 and 410 V after 5 ms"*, and
+`hold=` is there for an assertion that should tolerate a brief excursion.
+
+## The one check you do not have to ask for
+
+Every rule above compares a value against a limit, and **every comparison against a `NaN` is
+false** — `NaN > limit` and `NaN < limit` both. So a run whose state has stopped being made of
+numbers finds no violations, summarises as `passed`, and exits 0, while its waveform file
+carries a column of `NaN` that a plotting tool draws as a gap and a reader takes for a
+rendering artefact.
+
+So the finite check is on by default, on every step of every deck, and it needs no card:
+
+```text
+[100.0000 ns] FATAL BAD.finite  at NaN  limit inf
+              [BAD is not a number, so every later value is meaningless and every
+               rule comparing one is false. The run stops here.]
+abandoned at step 0 (t = 1e-7 s): 'BAD' is not a finite number.
+```
+
+It covers both the solved state and the block outputs. A block output is the worse case: it is
+not part of the solution, so nothing else examines it, and next step it reaches the circuit
+through a gate or a source value. `sqrt` of a negative, `inv` of zero and `ln` of zero all
+produce one, and none of them refuses.
+
+The exit code is **4**, its own, because 3 and 4 mean opposite things to whatever reads them: 3
+is a rule doing its job on a run that behaved as the deck said it would, and 4 is a run with no
+result at all.
+
+The rules engine has its own guard for the same problem: a non-finite sample counts as an
+*unreadable* one, so a rule watching a quantity that has gone to `NaN` reports `NOT EVALUATED`
+rather than `passed`. That matters for a block output nobody stops on, and for any other
+program using the engine.
+
+Why it is not opt-in, when everything else is: every other rule is written by someone who
+suspected something. Nobody suspects a `NaN`, and a run that produced one has no result to
+report, so there is nothing an opt-in would protect.
+
+## What a run produces
+
+Events are written as they happen, to `<deck>.events.jsonl` and `<deck>.events.txt`, and at
+`console` severity to stderr. Both paths can be asked for instead — `--events <path>` and
+`--events-text <path>`, independently; see
+[Command-line flags](cli-reference.md#--events-asking-for-the-event-stream-instead-of-finding-it).
+
+The `.jsonl` file is one JSON object per line, and **every line says which shape it is** as its
+first field:
+
+```json
+{"record":"event","time":6.93e-5,"step":69,"rule":"R_vb","target":"V(b)","kind":"enter", ...}
+{"record":"summary","rule":"R_vb","target":"V(b)","severity":"warning","entries":3, ...}
+```
+
+`record` is `"event"` for a violation edge during the run and `"summary"` for the one line per
+rule written at the end. Filter on it rather than on which fields happen to be present: an
+event always carries `kind`, a summary always carries `entries`, and the two shapes are
+otherwise free to grow.
+
+```text
+[33.7782 us] ERROR L1.i_max           enter  3.5079 A  limit 3.5000 A
+[34.8724 us] ERROR L1.i_max           leave  3.6528 A  for 1.0942 us (peak 3.6528 A)
+```
+
+The label is the component, then the rule. An `enter` carries the interpolated crossing time —
+the moment the limit was passed, found between solver steps, not the step that noticed — along
+with the step number, so the run can be reproduced to that step. A `leave` carries how long the
+excursion lasted and its peak.
+
+Then the table, which is the part worth reading first:
+
+```text
+--- rules ---
+  L1.i_max                     ERROR   3 time(s), 4.8928 us total, worst 3.8190 A at 44.1000 us
+  L1.i_sat                     passed
+  C1.v_max                     ERROR   2 time(s), 195.5163 us total, worst 5.5207 V at 96.0000 us
+3 rule(s): 2 violated, 1 passed
+```
+
+Every rule appears, including the ones that found nothing. `passed` means the question was asked
+and the answer was no; `NOT EVALUATED` means the quantity was never there to read, which is a
+problem with the rule rather than with the circuit.
+
+Exit codes: `0` nothing above a warning, `2` something at `error` or `fatal`, `3` a rule stopped
+the run, `4` the run went non-finite and was abandoned.
+
+## Stopping, adjusting, and carrying on
+
+`action=stop` (or `on_violation=stop`) ends the run at the violation — and still writes the
+waveform, the event log and, if asked, the checkpoint. So the interesting workflow is:
+
+```bash
+general-simulator deck.cir --mode transient --tfinal 3e-4 --dt 1e-7 \
+    --checkpoint-out run.ckpt
+# → exit 3: stopped by rule 'L1.i_max'
+
+# raise the limit, or widen the dead time, in deck.cir — then:
+general-simulator deck.cir --mode transient --tfinal 3e-4 --dt 1e-7 \
+    --resume run.ckpt
+```
+
+Editing a limit does not invalidate the checkpoint. A checkpoint refuses to load into a deck it
+did not come from, and that identity is a hash over the deck's statements — but rule cards and
+device ratings are removed before the hash is taken, precisely so that adjusting a limit and
+resuming is possible. Editing the *circuit* does invalidate it, which is correct: that state
+belongs to the circuit it came from.
+
+The resumed run continues bit-identically: stopping at a violation and resuming reproduces the
+uninterrupted trace exactly, row for row.
+
+
+<!-- User Guide / Ports and efficiency: is this a converter at all? -->
+
+# Ports and efficiency: is this a converter at all?
+
+Every rule in [Rules and ratings](rules-and-ratings.md) bounds one quantity: a current, a
+voltage, a dead time, a volt-second balance. None of them can ask the question that matters most
+about a converter, which is whether it conserves energy.
+
+That question has an awkward property: **every individual waveform can sit inside its own limit
+while the circuit as a whole invents energy.** A transformer stamped with the wrong turns ratio,
+a dependent source with the wrong gain, a coupling coefficient out of range, a port wired to the
+wrong node — each produces a run that completes, a waveform that looks plausible, and an answer
+that is wrong by a factor. Nothing in the trace says so.
+
+## Why power needs a declaration
+
+The rules engine reads *named* quantities. `I(L1)` is a name the solver resolves; so is
+`V(out,0)`. Power is
+
+$$p = v \cdot i$$
+
+which is a product of two names, and the engine has no arithmetic. There was nothing to write in
+a rule's `target=`.
+
+Rather than give the rule grammar an expression language — which would have turned every field
+into a parser, and every error message into a parser's error message — power is declared as an
+object:
+
+```text
+P_IN  kind=port v=(in,0)  i=-VIN
+P_OUT kind=port v=(out,0) i=VSENSE
+```
+
+A **port** is a boundary with a voltage across it and a current through it. `v=(p,n)` is the node
+pair the voltage is measured across, where `0` is ground. `i=` names the element whose branch
+current is the port's current — one the solver actually solves a current for, which means a `V`,
+`L`, `E` or `H`. To put a port anywhere else, put a zero-volt source in series and name that:
+
+```text
+VSENSE out load 0
+R1 load 0 5
+```
+
+A zero-volt source changes nothing about the circuit and gives the solver a branch to report.
+
+Once declared, a port's name **is** a quantity, so every existing rule type can watch it. A
+power limit is an ordinary `type=above` card:
+
+```text
+P_SW kind=rule type=above target=P_IN max=50 unit=W severity=error
+```
+
+## The sign, and the one minus you have to write
+
+A port's power is the plain product
+
+$$p = V(\text{positive}, \text{negative}) \times I(\text{branch})$$
+
+with the solver's own sign, and no hidden negation anywhere. The one control is a leading minus
+on `i=`, which negates the branch current.
+
+You need it on a source and not on a sense element, and the reason is worth seeing once. The
+solver reports a branch current in the **passive convention** — positive *into* the element's
+first node. Solve `VIN in 0 12` feeding `R1 in 0 12` and you get
+
+```text
+t,V(in),I(VIN)
+0,12,-1
+```
+
+`I(VIN) = -1 A`, while 1 A plainly flows out of `in` and through the resistor. A source's current
+leaves its positive terminal, so an input port negates it:
+
+```text
+P_IN kind=port v=(in,0) i=-VIN     →  12 × 1 = +12 W
+```
+
+A series sense element is the other way round: current *enters* its positive terminal, so
+`I(VSENSE)` is already the load current and no minus is wanted:
+
+```text
+P_OUT kind=port v=(out,0) i=VSENSE →  V_out × I_load, positive
+```
+
+Those two lines are the whole vocabulary. A port declared the wrong way round reports a negative
+power, and an efficiency rule with `min=0` reports *that* rather than quietly inverting the
+answer.
+
+## The efficiency rule
+
+```text
+ETA kind=rule type=efficiency in=P_IN out=P_OUT min=0 max=1 period=2e-3 severity=error
+```
+
+$$\eta = \frac{\overline{p_\text{out}}}{\overline{p_\text{in}}}$$
+
+Both powers are averaged over the same period, and `max=1` is the card that says "this is a
+converter": above it, energy is being created.
+
+The quantity is deliberately a **ratio** rather than a bounded difference between the two powers.
+A difference needs a tolerance, and a tolerance needs a reference — a percentage of the input, of
+the larger side, of the rated power — and each choice makes a different claim. On a converter at
+5% load, 2% of the input power is a different statement from 2% of the rating, and neither is the
+one anyone means. A ratio is dimensionless and self-normalising, so $\eta \le 1$ is the same
+correct claim at full load and at no load.
+
+It also catches the lossless mistakes that an efficiency *floor* would miss. A transformer with
+the wrong turns ratio does not look lossy — it looks like a gain. A band of
+
+```text
+ETA kind=rule type=efficiency in=P_PRI out=P_SEC min=0.99 max=1.01 sync=DSW
+```
+
+across such an element reports it.
+
+Both quantities are averaged because instantaneous power changes sign inside a switching cycle:
+the useful statement is about the cycle, not the instant. `period=` and `sync=` work exactly as
+they do for [per-period measures](rules-and-ratings.md), and the same rule applies — with a
+closed loop, use `sync=` so the period is the one the circuit actually produced.
+
+## The one thing this rule does not know: stored energy
+
+**A per-period efficiency can legitimately exceed 1.** This is not a defect in the rule and not
+energy creation, and if you write `max=1` without knowing it you will be told your working
+converter is broken.
+
+$\eta$ accounts for no *stored* energy. While the output filter rings, the capacitor spends half
+of each ring cycle delivering into the load energy that the input supplied on an earlier cycle —
+so for that half-cycle the load genuinely receives more power than the source provides.
+
+The buck in the test suite shows it plainly. With $L = 1$ mH and $C = 100\ \mu$F,
+
+$$f_0 = \frac{1}{2\pi\sqrt{LC}} = 503\ \text{Hz}, \qquad T_0 = 1.99\ \text{ms}$$
+
+and measured over **one switching period** (20 µs) it reports efficiencies up to 1.29 during
+start-up. Over a 1 ms window — half a ring period — it reports 1.36. Over 2 ms, one full ring
+period, it passes across the entire run including start-up.
+
+So:
+
+> **Choose an averaging window long compared with the slowest energy-storage cycle in the
+> circuit, not with the switching period.**
+
+If you want the switching-period resolution anyway, use `after=` to start the rule once the
+transient has decayed — but note that an underdamped output filter rings for many milliseconds,
+so `after=` has to clear the ringing and not merely the first cycle.
+
+## Ports are not sugar for a product block
+
+The netlist can already compute a power without any of this: probe the node and the branch into
+the signal domain and multiply them.
+
+```text
+VPROBE kind=phys2sig node=in
+IPROBE kind=phys2sig branch=VIN
+NEG kind=const value=-1
+P_PRODUCT kind=product inputs=VPROBE,IPROBE,NEG
+```
+
+That works, and it is not equivalent. A block output is evaluated with a one-step lag, so the
+product trails the port by one step and only converges to it as the step shrinks. Measured on the
+buck above, with start-up excluded, the product's disagreement with the port was
+
+| step | $P_\text{product} / P_\text{port}$ | error |
+| --- | --- | --- |
+| 400 ns | 0.9763 | 2.37% |
+| 200 ns | 0.9882 | 1.18% |
+| 100 ns | inside 1% | — |
+
+halving with the step: first order, which is exactly what a one-step lag gives. The port reads
+the solved values at the step itself, so it has no lag to converge away.
+
+
+<!-- User Guide / Losses: what a converter is really limited by -->
+
+# Losses: what a converter is really limited by
+
+A design that passes every rating can still be thermally impossible. Current and voltage limits
+say whether a device survives an instant; loss says whether it survives the hour. This chapter
+covers the loss the tool can compute **exactly**, which is conduction loss in a switch's channel.
+
+## `P_cond(NAME)` is a quantity, not a new rule type
+
+A switch's conduction power is exposed as a named quantity, so every rule type, every qualifier
+and every per-period measure already applies to it:
+
+```text
+LOSS_H kind=rule type=per_period target=P_cond(DSH) measure=mean period=2e-3 max=5 unit=W
+```
+
+That is the whole feature. There is no `type=conduction_loss`, because there did not need to be
+one — a loss is a quantity, and [per-period measures](rules-and-ratings.md) already average a
+quantity over a cycle.
+
+An instantaneous bound works the same way, and is a different question — peak dissipation rather
+than average:
+
+```text
+PEAK_H kind=rule type=above target=P_cond(DSH) max=200 unit=W severity=error
+```
+
+## Nothing has to be declared, and nothing is restated
+
+```text
+DSH in mid idealswitchmodel
+DSH kind=ideal_switch r_on=0.02 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.5 body_g_on=100 gate=block ctrl=GH
+```
+
+Those two lines are all `P_cond(DSH)` needs. The device line gives the node pair, the
+`kind=ideal_switch` line gives `r_on`, and the rule card restates neither — an `r_on` written
+twice can drift from the device's, and would then report a loss the circuit does not have.
+
+In particular **no sense source is required.** A switch commanded on is stamped as a plain `r_on`
+resistance between its declared nodes, so its current is not an unknown the solver has to carry —
+it is exactly computable:
+
+$$i = \frac{V_a - V_b}{r_{on}}, \qquad p_{cond} = \frac{(V_a - V_b)^2}{r_{on}} = i^2 r_{on}$$
+
+Checked against a zero-volt sense source in series with the switch of a buck, the worst relative
+disagreement across a run was $2.7 \times 10^{-9}$.
+
+## The state gates the expression, and that is the whole correctness argument
+
+$p_{cond}$ is **exactly zero while the switch is commanded off**, and not because that is
+convenient. While off, the device is no longer a resistance and the voltage across it is the full
+blocking voltage, so the same arithmetic gives nonsense: on the run above it computed 1240 A
+against a true 0 A.
+
+Two consequences worth knowing:
+
+- A per-period **mean** of `P_cond` comes out as the duty-weighted average automatically, because
+  the off time contributes zeros. You do not have to tell the rule what the duty is — which
+  matters most in a closed loop, where the duty is an outcome.
+- **Body-diode conduction is not counted.** While a switch is commanded off, any current flows
+  through its body diode, where the loss is $v_f i + i^2 / g_{on}$ — a different expression on a
+  different state. `P_cond` is the channel only. A synchronous rectifier whose channel is never
+  turned on therefore reports *zero* conduction loss while dissipating substantially in its
+  diode, which is exactly the failure
+  [`type=body_diode`](rules-and-ratings.md) exists to catch, and the two rules belong together on
+  a sync leg.
+
+## A worked check: the duty split across a synchronous leg
+
+At duty $D$, the high-side switch carries the inductor current for $D$ of each period and the
+low-side for $1 - D$, both at the same $r_{on}$. So their conduction losses must be in the ratio
+
+$$\frac{P_{cond,L}}{P_{cond,H}} = \frac{1 - D}{D}$$
+
+On the test deck ($V_{in} = 12$ V, $D = 0.4$, $R = 5\ \Omega$, $r_{on} = 20$ m$\Omega$, 200 ns
+dead time) the measured figures are 0.0069 W high-side and 0.0105 W low-side, a ratio of 1.52
+against the required 1.50. The hand estimate from the ideal duty, $0.4 \times 0.96^2 \times 0.02 =
+0.00737$ W and $0.6 \times 0.96^2 \times 0.02 = 0.01106$ W, sits a few percent above the measured
+values because it ignores the dead time and the conduction drops.
+
+The *ratio* is the check worth making. An absolute figure can be right for both switches while
+being attributed to the wrong one; the ratio cannot.
+
+## A warning about the complement
+
+Writing a synchronous leg's low-side gate as PWM of $1 - D$ rather than as the complement of the
+high-side's PWM makes both switches conduct together on every cycle. The first version of the test
+deck did exactly that, and the conduction loss came out as **721 W** in a 12 V converter.
+
+That number was correct. 12 V across two 20 mΩ channels is 300 A, and
+$300^2 \times 0.02 \times 0.4 = 720$ W. Use the complement output the modulator already provides:
+
+```text
+PWMH kind=pwm freq=50000 in=DUTY red=200e-9 fed=200e-9
+GH kind=sig2phys domain=voltage in=PWMH
+GL kind=sig2phys domain=voltage in=PWMH_comp
+```
+
+and put a [`type=forbidden_state`](rules-and-ratings.md) rule on the leg so the deck says it for
+you.
+
+# Was it really ZVS?
+
+```text
+ZVS kind=rule type=zvs switches=DSH,DSL v_max=5 severity=error
+```
+
+At each turn-on, report the voltage that was still standing across the switch. You name only the
+switches — the voltages come from each switch's own declared node pair, because two parallel lists
+in a deck can fall out of step, and the failure mode would be a rule silently reporting the wrong
+switch's voltage.
+
+A **bound** rather than a yes-or-no, because partial ZVS is the interesting case. A converter
+commutating to 40 V on a 400 V bus is doing 1% of the hard-switching loss and is a design that
+works; one reaching 380 V will fail thermally. A boolean cannot tell those apart.
+
+## One leg, both answers
+
+A synchronous buck at $D = 0.4$ with dead time gives both results at once, which is worth running
+yourself:
+
+```text
+ERROR DSH.ZVS_H   at 12.5071 V   limit 5.0000 V   [DSH turned on with V(in,mid) still across it]
+      DSL.ZVS_L   passed
+```
+
+The two switches of the *same leg* commutate completely differently:
+
+- **DSH** turns on into the full bus. Nothing has discharged the switching node, so it sees 12 V
+  plus the freewheeling diode's drop. Hard switching.
+- **DSL** turns on *behind its own body diode*, which has been freewheeling throughout the dead
+  time, so the voltage across it is already down to a diode drop. That is textbook ZVS, and it is
+  free — it is the reason synchronous rectification with dead time soft-switches the low side
+  without any resonant element.
+
+Tightening the low side's bound to `v_max=0.01` shows the pass is a real measurement and not a
+skipped one:
+
+```text
+ERROR DSL.ZVS_L   at 0.5080 V   limit 0.0100 V
+```
+
+0.508 V is the body diode's own forward drop — $v_{th} = 0.5$ plus $i/g_{on} = 0.96/100$, agreeing
+to a millivolt.
+
+## Why there is no switching-energy rule
+
+The obvious companion to this rule would be the energy per edge:
+
+$$E_{sw} = \int_{\text{edge}} v\,i\,\mathrm{d}t$$
+
+It is not offered, because it is not measurable at a step size anyone can afford. Measured on a
+400 V hard-switched leg:
+
+| deck | `dt` | $E_{sw}$ measured |
+| --- | --- | --- |
+| no $C_{oss}$ | 1 ns | 1.592e-9 J |
+| no $C_{oss}$ | 250 ps | 3.968e-10 J |
+| 400 pF across the switch | 1 ns | 1.634e-9 J |
+| 400 pF across the switch | 250 ps | 5.681e-10 J |
+
+against $\tfrac{1}{2} C V^2 = 3.2 \times 10^{-5}$ J.
+
+Quartering the step quarters the figure, in **both** decks. Without $C_{oss}$ that is expected —
+an ideal switch commutates in a single step, so there is no interval to integrate over and the
+number is a discretisation artifact converging to zero. With $C_{oss}$ it is still proportional to
+the step and still five decades low, because the discharge time constant is
+
+$$\tau = r_{on} C_{oss} = 0.01\ \Omega \times 400\ \text{pF} = 4\ \text{ps}$$
+
+and at any step above that the discharge completes inside one step, so the dissipation is absorbed
+algebraically instead of resolved. Resolving it needs $\Delta t \ll 4$ ps — millions of steps
+across one commutation, which is exactly what the CLI's own `--out-every` help text has always
+said about verifying ZVS.
+
+So the tool reports the **voltage**, and $\tfrac{1}{2} C_{oss} V^2$ is your multiplication, with a
+$C_{oss}$ you have from a datasheet and the simulator does not have at all. That is a better
+division of labour than a number that looks like an energy and is really a step size.
+
+# Does the loss model describe the circuit at all?
+
+Every rule so far bounds one device's loss. None of them can answer the question that decides
+whether the whole budget is worth anything: **is the loss model accounting for the power the
+circuit is actually losing?**
+
+```text
+P_IN  kind=port v=(in,0)  i=-VIN
+P_OUT kind=port v=(out,0) i=VSENSE
+CLOSE kind=rule type=loss_closure in=P_IN out=P_OUT devices=DSW,D1 max=0.002 \
+      period=2e-3 after=6e-3 severity=error
+```
+
+$$\text{unaccounted} = \frac{\left|\,\overline{p_\text{in}} - \overline{p_\text{out}}
+- \sum_k \overline{p_k}\,\right|}{\overline{p_\text{in}}}$$
+
+The measured deficit between the ports minus everything the model claims to explain, as a
+fraction of the input power. You name the devices; their conduction quantities are filled in, so
+switches and diodes are listed the same way and a name the netlist does not have is refused
+rather than quietly counted as zero.
+
+Scaled by input power rather than bounded in watts for the same reason efficiency is a ratio: a
+0.2 W residual means something very different on a 4 W converter and a 4 kW one, and a deck
+should not have to restate its own power level inside a tolerance. `max` is therefore a fraction
+in $0..1$, and a `max=5` is refused — it would read as 5 W and would never fire.
+
+## Why this is the most useful rule in the chapter
+
+**Every per-device figure can be individually correct while the model explains almost nothing.**
+On the buck in the test suite:
+
+| | deficit $\overline{p_\text{in}} - \overline{p_\text{out}}$ | modelled | unaccounted |
+| --- | --- | --- | --- |
+| `devices=DSW,D1` | 0.2433 W | 0.2391 W | **0.097%** |
+| `devices=DSW` | 0.2433 W | 0.0165 W | **5.62%** |
+
+The switch's 0.0165 W is a *true number about the switch* in both rows. In the second it is also
+7% of the real loss, because the freewheeling diode dissipates 0.2227 W — **93% of the
+conduction loss in this converter.** A loss report counting only switches would have made a
+synchronous rectifier look like a pointless complication.
+
+That 0.097% is cross-checked rather than trusted: integrating the same waveform in Python with a
+plain trapezoid gives the same deficit, the same modelled total and 0.0969% unaccounted, from a
+completely different code path than the engine's interpolating accumulator.
+
+## The same stored-energy caveat as efficiency
+
+`after=6e-3` in the card above is not decoration. The closure residual is **not** small until the
+circuit settles:
+
+| window | unaccounted |
+| --- | --- |
+| 2 – 4 ms (still ringing) | 3.48% |
+| 4 – 6 ms | 0.51% |
+| 6 – 8 ms (settled) | 0.097% |
+
+Nothing is wrong with the model in the first row. The balance accounts for no *stored* energy, so
+while the output filter rings, part of the deficit is energy going into $L$ and $C$ rather than
+into heat — exactly the effect that lets a per-period efficiency exceed 1. Use `after=` to start
+the check once the transient has decayed, and remember that an underdamped output filter rings
+for many milliseconds.
+
+A residual that *stays* large after settling is the real finding, and it means one of three
+things: a device is missing from `devices=`, a loss mechanism is not modelled at all (an ESR, a
+core loss), or a port is wired to the wrong node.
+
+
 ## Post-processing measurements
 
 
@@ -5437,10 +6401,10 @@ actively-driven switch):
 ```text
 V1 vin 0 24
 D1 vin vx idealswitchmodel
-D1 kind=ideal_switch r_on=0.01 g_breakdown=0 v_breakdown=-1e6 g_off=1e-6 v_th=1e6 g_on=0 \
+D1 kind=ideal_switch r_on=0.01 body_g_breakdown=0 body_v_breakdown=-1e6 body_g_off=1e-6 body_v_f=1e6 body_g_on=0 \
      gate=block ctrl=D1_GATE
 D2 0 vx dmodel
-D2 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_th=0.6 g_on=100
+D2 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_f=0.6 g_on=100
 L1 vx vout 100u
 C1 vout 0 100u
 R1 vout 0 5
@@ -5451,7 +6415,7 @@ D1_GATE kind=sig2phys domain=voltage in=MOD1
 ```
 
 Line by line, against the real component docs: `D1`'s body-diode fields are set so it never
-conducts on its own (`v_th=1e6`, an unreachably high threshold — see
+conducts on its own (`v_f=1e6`, an unreachably high threshold — see
 [PWL devices](../pwl-devices.md#kindideal_switch-on-resistance-plus-body-diode)), so `D1`
 behaves like an ideal MOSFET with no body diode, and `D2` (an ordinary
 [`kind=ideal_diode`](../pwl-devices.md#kindideal_diode-the-3-segment-curve)) is the real
@@ -6598,7 +7562,7 @@ already internalized it, and to work one small example by hand.
 ## The canonical decomposition, one diode at a time
 
 `pwl_devices::IdealDiode` models a three-segment diode — reverse breakdown below `v_breakdown`,
-near-zero leakage between `v_breakdown` and `v_th`, forward conduction above `v_th`
+near-zero leakage between `v_breakdown` and `v_f`, forward conduction above `v_f`
 (`crates/pwl-devices/src/ideal_diode.rs:1-21`). The direct piecewise formula (`IdealDiode::current`,
 `ideal_diode.rs:42-52`) evaluates whichever segment `v` falls into. That's the physically obvious
 representation, but it's useless for circuit assembly: which formula applies depends on `v`,
@@ -6697,13 +7661,13 @@ Sandia PCNR paper this project's own "why not Newton-Raphson" motivation cites (
 PWL ones:
 
 ```text
-  e1 (source, 5V) --+-- D1 (v_th=1V) --+
+  e1 (source, 5V) --+-- D1 (v_f=1V) --+
                      |                  |
-                     +-- D2 (v_th=2V) --+-- e2 --[ R=1ohm ]-- ground
+                     +-- D2 (v_f=2V) --+-- e2 --[ R=1ohm ]-- ground
 ```
 
 Both diodes are anode-at-`e1`, ideal (`g_breakdown = g_off = 0`), `g_on = 1`, differing only in
-threshold: `v_th1 = 1V`, `v_th2 = 2V`. There's only one non-source node, `e2`, and both diodes
+threshold: `v_f1 = 1V`, `v_f2 = 2V`. There's only one non-source node, `e2`, and both diodes
 see the same voltage `V = e1 - e2`, so KCL at `e2` is `I_D1(V) + I_D2(V) = e2/R = (e1-V)/R`.
 
 **By hand** (`two_ideal_diode_circuit.rs:16-27`): guess both diodes end up forward-conducting
@@ -7028,7 +7992,7 @@ gated-off ideal switch's own body diode reuses it unchanged.
 
 `pwl_devices::IdealSwitch` (`crates/pwl-devices/src/ideal_switch.rs:49-59`) carries a `body_diode:
 IdealDiode` field — an ordinary `IdealDiode`, declared in its own natural terms: anode at the
-switch's source, cathode at its drain, forward conduction for `V(source) - V(drain) > v_th`, the
+switch's source, cathode at its drain, forward conduction for `V(source) - V(drain) > v_f`, the
 same body-diode orientation every real N-channel MOSFET has. When `dae-runtime` builds the
 circuit for a step where a given switch is gated off, it doesn't invent a separate mechanism for
 this diode — it inserts it directly into the same `diodes: BTreeMap<String, IdealDiode>` every
@@ -7046,7 +8010,7 @@ The netlist declares an ideal switch's two terminals in plain SPICE-conventional
 source)` order — not `(source, drain)`, which is the order `IdealDiode`'s own `body_diode` field
 is defined in. Stamping `body_diode` directly against nodes declared `(drain, source)` would
 evaluate the diode's curve against `V = V(drain) - V(source)`, but the diode's own forward
-direction is defined for `V(source) - V(drain) > v_th` — exactly backwards.
+direction is defined for `V(source) - V(drain) > v_f` — exactly backwards.
 
 `IdealSwitch::body_diode_for_drain_source_stamping` (`ideal_switch.rs:66-74`) fixes this by
 mirroring the *curve*, not the netlist's own node order: it returns `self.body_diode.reversed()`
@@ -8075,10 +9039,10 @@ voltage/current; folding a set of devices into a whole circuit's `(M, q)` LCP is
 ## `IdealDiode`: the 3-segment curve
 
 `src/ideal_diode.rs`. Reverse-breakdown conduction below `v_breakdown`, near-zero leakage
-(`g_off`) between `v_breakdown` and `v_th`, forward conduction (`g_on`) above `v_th` — five
+(`g_off`) between `v_breakdown` and `v_f`, forward conduction (`g_on`) above `v_f` — five
 parameters, continuous at both breakpoints by construction (each segment's offset anchors it
 to the leakage segment at the shared boundary). `IdealDiode::new` asserts
-`v_breakdown < v_th` (a reversed ordering would silently swap the curve's meaning).
+`v_breakdown < v_f` (a reversed ordering would silently swap the curve's meaning).
 
 Two independent evaluations of the same curve, and the crate keeps both deliberately:
 
@@ -8091,7 +9055,7 @@ z_1 = \max(0,\, v_{breakdown} - v), \qquad z_2 = \max(0,\, v - v_{th})$$
 
   with `delta_on = g_on - g_off`, `delta_br = g_breakdown - g_off`. The `max(0, ...)` terms
   are exactly the LCP `z` variables this diode contributes, each complementary to a guard
-  slack (`w1 = v - v_breakdown + z1`, `w2 = v_th - v + z2`); `docs/architecture.md` derives
+  slack (`w1 = v - v_breakdown + z1`, `w2 = v_f - v + z2`); `docs/architecture.md` derives
   why that is equivalent to "exactly one segment active," and `lcp-formulation.md` carries the
   fold into `(M, q)` — not re-derived here. The two formulas agreeing at many sample points
   (the `canonical_matches_direct_piecewise_evaluation` test, including both breakpoints
@@ -8106,8 +9070,8 @@ $$\mathrm{reversed}()\mathrm{.current}(v) = -\mathrm{self.current}(-v) \quad \te
 Derived by substituting `u = -v` into each of the three segments and negating — the result is
 a new 3-segment curve with the same shape but mirrored breakpoints and swapped slopes, which
 is exactly what `IdealDiode::new` already builds, just called with
-`(g_on, -v_th, g_off, -v_breakdown, g_breakdown)`. The invariant `v_breakdown < v_th`
-guarantees the reversed curve's own `-v_th < -v_breakdown`, so it is automatically valid.
+`(g_on, -v_f, g_off, -v_breakdown, g_breakdown)`. The invariant `v_breakdown < v_f`
+guarantees the reversed curve's own `-v_f < -v_breakdown`, so it is automatically valid.
 
 Why it exists: every PWL device in this crate defines its curve in terms of
 `V = V(n1) - V(n2)`, but the *caller's* terminal-order convention can be the mirror image. The
@@ -8155,7 +9119,7 @@ a genuinely self-triggering switch is tracked in `open-questions.md`.
 
 The netlist declares the device's two terminals **`(drain, source)`** — plain SPICE
 convention. The `body_diode` field is declared in its own natural terms (forward conduction
-for `V(source) - V(drain) > v_th`), which means the curve as literally stamped between
+for `V(source) - V(drain) > v_f`), which means the curve as literally stamped between
 `(drain, source)`-ordered nodes needs mirroring first. Hence
 `IdealSwitch::body_diode_for_drain_source_stamping()`, which returns
 `body_diode.reversed()`: every caller stamping the off-state should go through it, never
@@ -9577,6 +10541,300 @@ known analytic fundamental magnitude/phase and near-zero THD on that same non-un
 This is the direct, CLI-level proof of the entire reason this architecture (and
 `gs-waveform-measurements` itself) exists — a measurement that assumed uniform spacing would get
 a subtly wrong answer here, and this test would catch it.
+
+
+## The output contract
+
+
+<!-- Developer Guide / What a run produces, and what a displayer may rely on -->
+
+# The output contract
+
+A run produces four things: an **identity map**, a **status**, a **waveform**, and an **event
+stream**. This chapter specifies all four, field by field, and says for each whether this engine
+produces it today.
+
+It exists because the displayer is not this repository. A schematic editor has to show what a run
+found, and it must be able to show a run that `ngspice` produced, or Xyce, or whatever is written
+next. That only works if the engine's output is a contract rather than "whatever the CSV parser
+happened to accept". Writing it down is also what lets the two sides be built independently: a
+front end implements *this*, not `general-simulator`.
+
+The contract is deliberately small. Everything in it is something a displayer cannot work without,
+and nothing in it describes how a display should look.
+
+## The four layers
+
+| Layer | Answers | Produced by |
+|---|---|---|
+| **L0 — Identity** | which drawn object is `Rload`? | the **compiler**, not the engine |
+| **L1 — Status** | did the run finish, and is its result usable? | the engine's exit code and stderr |
+| **L2 — Waveform** | what were the values over time? | the engine's result file |
+| **L3 — Events** | what did the engine *notice*? | the engine's event stream |
+
+L0 is listed first because the other three are useless without it, and because it is the layer
+most easily forgotten: each of L1–L3 names things — `Rload`, `V(n_Rload_p2)`, `target: "DSW"` —
+and a name is not a document object.
+
+---
+
+## L0 — Identity
+
+**The engine does not know what the user drew.** It receives a netlist, in which every device is a
+name. The map from those names back to the schematic belongs to whoever *generated* the netlist,
+which for this project is `gsim-core`'s compiler, and it must travel with the run.
+
+This is not a convenience. The compiler's naming function is not injective: a block id is prefixed
+with its device letter only when it does not already start with it, so blocks `load` and `Rload`
+both compile to the element name `Rload`. A front end cannot recover the map by reimplementing
+that function, however faithfully — the information is gone. Two consequences, both now settled:
+
+- the compiler refuses a name claimed twice (`gsim-core` `CompileError::DuplicateName`), and
+  `general-mna` refuses a duplicate element name whatever the device letter (0.5.1 — before that,
+  only the letters whose name becomes an unknown were checked, so two resistors of one name
+  compiled, solved, and produced the right voltages in silence);
+- the compiler **emits** the map, as `CompileOutput.provenance`, through both of its bindings.
+
+### Shape
+
+```json
+{
+  "elements": [
+    {"element": "Rload",    "blocks": ["load"],      "role": "element"},
+    {"element": "DSW",      "blocks": ["SW"],        "role": "element_and_block"},
+    {"element": "FT1_pri",  "blocks": ["T1"],        "role": "part", "suffix": "pri"},
+    {"element": "X2.Rin",   "blocks": ["X2", "in"],  "role": "element", "def": "LEAF"}
+  ],
+  "nets": [
+    {"net": "n_Rbot_p1", "ports": [{"blocks": ["Rload"], "port": "p2"},
+                                   {"blocks": ["Rbot"],  "port": "p1"}]}
+  ]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `element` | the name as the **flattened** deck spells it, which is what L2 and L3 carry: `X1.Rin`, not the body-local `Rin` |
+| `blocks` | block ids from the top sheet inward; the last is the block that produced the card, the ones before it are the instances it sits inside |
+| `role` | `element`, `block`, `element_and_block`, `part`, `instance` — what kind of card claimed the name |
+| `suffix` | on a `part` only: which half of a composite (a transformer's `pri`/`sec`) |
+| `def` | the `.SUBCKT` whose body it came from, absent at the top level |
+| `nets[].ports` | every drawn port on that node, including a ground symbol's and a subsheet connector's |
+
+### Rules
+
+1. A name appears **at most once** in `elements`. A displayer may index by it.
+2. `blocks` is never empty, and every id in it exists in the document the run came from.
+3. Matching is **case-insensitive**: `general-mna` upper-cases element names internally, so a
+   displayer comparing an event's `target` with an `element` must do the same.
+4. An engine that is handed a netlist written by hand has no L0 at all. That is a legitimate run;
+   a displayer must then show names and not pretend to know components.
+
+**Status today:** produced by `gsim-core` ≥ the provenance change, through `gsim_py.compile` and
+the wasm `compile`. **Not yet threaded** into the result document — see
+[What does not exist yet](#what-does-not-exist-yet).
+
+---
+
+## L1 — Status
+
+An exit code, and stderr for the human-readable part.
+
+| Code | Meaning | Is there a result? |
+|---|---|---|
+| `0` | finished; nothing to report, or warnings only | yes |
+| `1` | the run failed — bad arguments, an unreadable netlist, a solver error | no |
+| `2` | finished, and a rule of severity `error` or `fatal` fired | **yes** |
+| `3` | a rule ended the run early, cleanly: the current step finished, every file was flushed | **yes, up to the stop** |
+| `4` | the solved state went non-finite and the run was abandoned | no |
+
+The three distinctions that matter to a consumer:
+
+- **2 and 3 are not failures.** They are completed runs whose results are exactly what the user
+  needs to see, because something was found in them. A consumer that treats a non-zero code as a
+  crash throws away the run that matters most.
+- **3 is not 4.** A rule stopping a run is the deck behaving as written; a non-finite state is a
+  run with no result at all. Reporting them the same way tells the user nothing.
+- **1 keeps its old meaning.** It has always meant "this run failed" to every script and to the
+  GUI's own solver discovery, so warnings did not take it.
+
+### Rules
+
+1. A displayer must classify on the code, not on the presence of output.
+2. For `2` and `3` it must show the waveform **and** the events, with the run marked as having
+   found something, not as broken.
+3. For `3` it must say the run was stopped and by which rule — the event stream names it.
+4. stderr is for a person. A displayer may show it verbatim; it must not parse it.
+
+**Status today:** all five codes are implemented in the CLI (`mod exit`).
+
+---
+
+## L2 — Waveform
+
+One named signal per column, all sharing one sweep axis.
+
+| Field | Meaning | Required |
+|---|---|---|
+| `name` | the signal's name: `V(<node>)`, `I(<branch>)`, or a block's own output name | yes |
+| `samples` | one value per point of the sweep axis, in axis order | yes |
+| `unit` | the SI unit `samples` are in (`V`, `A`, `W`, `s`, ``) | yes |
+| `quantity` | what kind of thing it is (`voltage`, `current`, `signal`) | no |
+| `block` / `port` | the document object, resolved through L0 | no |
+
+and one axis: `name` (`t`), `unit` (`s`), `samples`.
+
+### Rules
+
+1. **Values are exact.** CSV renders each `f64` with its own `Display`, which is the shortest
+   decimal that round-trips, so a reader gets the solver's bits back. A displayer may narrow for
+   rendering; it must not narrow before computing anything.
+2. **Decimation is a count, not a resample.** `--out-every N` emits every Nth resolved point.
+   Points are dropped, never averaged or interpolated, so a decimated waveform is a subset of the
+   full one and a peak may be missing from it. A displayer that measures must say which it
+   measured.
+3. **Row order is axis order**, and the axis is monotonic.
+4. A name is unique within one run.
+5. The first column is the axis (`t` in CSV, `time` in a rawfile — SPICE's own name for it).
+
+### Rules for the identity link
+
+A signal's `block`/`port` is **derived**, never guessed:
+
+- `V(<net>)` resolves through `nets` to every port on that node.
+- `I(<element>)` and a block output resolve through `elements` to one block path.
+- Anything that resolves to nothing stays a bare name. A placeholder is worse than a blank: it
+  looks like an answer.
+
+**Status today:** CSV (default) and SPICE rawfile (`--format raw`) both carry name and samples,
+built from the same in-memory data, directly comparable row for row. **Neither carries a unit**,
+and no writer fills `block`/`port`. The GUI's `.gsim_sim_result` v2 document has all four fields
+(`signals[].unit`, `.quantity`, `.block`, `.port`) and is where they belong.
+
+---
+
+## L3 — Events
+
+What the engine noticed, as a stream. One record shape feeds the JSONL log, the console line, the
+summary table and (eventually) the viewer's markers, so those four can never disagree about what
+happened.
+
+### The event record
+
+```json
+{"record": "event", "time": 4.9992e-4, "step": 4999, "step_time": 5.0e-4, "rule": "deadtime",
+ "target": "lega",
+ "kind": "instant", "severity": "warning", "action": "console", "value": 0.0, "limit": 1.0e-7,
+ "unit": "s", "detail": "lega_high, lega_low"}
+```
+
+| Field | Meaning | Required |
+|---|---|---|
+| `time` | simulation time, **interpolated** to where the quantity crossed the limit inside the step | yes |
+| `step` | the solver step the crossing was noticed in | yes |
+| `step_time` | the solver's own time at the end of that step, before interpolation | yes |
+| `rule` | the rule's name, as the deck spells it | yes |
+| `target` | the component, switch or signal watched — an **L0 name** | yes |
+| `record` | `event` — what shape this line is, so a reader never discriminates on a missing field | yes |
+| `kind` | `enter`, `leave`, `instant` | yes |
+| `severity` | `info`, `warning`, `error`, `fatal` | yes |
+| `action` | what was actually **done**, which is not always what the rule asked for | yes |
+| `value`, `limit` | what the rule compared | yes |
+| `unit` | the unit `value` and `limit` are in | no (empty = dimensionless) |
+| `duration`, `peak`, `peak_time` | the interval that just ended — on a `leave` only | no |
+| `truncated` | set when the run ended with the condition still true, so `duration` is a lower bound | no |
+| `detail` | which components are responsible, when the rule spans several | no |
+
+### Rules
+
+1. **`time` is not `step_time`.** The interpolated time is the answer; the step time is there so a
+   reader can tell a crossing placed inside a step from one that landed on a boundary, and so the
+   record can be lined up against a waveform whose rows sit on those boundaries. A displayer
+   puts the marker at `time` and seeks to `step`.
+2. **A violation is two records**, `enter` then `leave`, and the second carries the measurement.
+   An `enter` has no duration because it is not known yet; that is the honest encoding, which is
+   why a leave is a separate record rather than a mutation.
+3. **`severity` and `action` are independent.** The same over-current is a `warning` someone reads
+   afterwards and a `fatal` that stops a regression run; the rule should not have to be rewritten
+   between the two. A displayer colours on `severity` and explains on `action`.
+4. **`action` is what happened.** A `pause` in a batch run is recorded as the `console` it became.
+   A displayer must not infer the configured action from the record.
+5. `unit` travels on the record, not with whoever prints it: one rule can report in two units — a
+   leg rule's violation is a count of switches and its dead-time finding is a time. Printing the
+   second in the first's unit produced `0.0000 conducting`, which is how the field came to exist.
+6. **Every rule reports, including the quiet ones.** A rule that saw nothing, a rule whose
+   quantity was missing from the sample, and a rule whose findings a budget suppressed are three
+   different states and none of them is "passed".
+
+### The per-rule summary
+
+One record per rule at the end of the run, tagged `"record": "summary"`: `entries`, `filtered` (excursions a hold time
+discarded), `suppressed` (records a `max_events` budget kept out of the log), `total_time`,
+`worst_value`, `worst_time`, `missing_samples`, `instants`, `shortest_deadtime`.
+
+`missing_samples` above zero means the rule was partly or wholly **blind**, which a displayer must
+not render as a pass. `filtered` above zero means the hold time is hiding something.
+
+**Status today:** written to `<netlist stem>.events.jsonl` (one JSON object per line) and
+`<netlist stem>.events.txt` — or wherever `--events <path>` / `--events-text <path>` ask for them,
+independently — plus the console for anything whose action earns it. Both shapes are tagged:
+every line carries `record`, `"event"` or `"summary"`, as its first field.
+
+---
+
+## Versioning
+
+1. The result document carries `schema_version`. A displayer refuses a version it does not know,
+   by number, rather than guessing from the fields present.
+2. **Adding an optional field is not a version change.** A consumer ignores fields it does not
+   know, and therefore an older displayer keeps working against a newer engine.
+3. Removing a field, renaming one, or changing a unit **is** a version change.
+4. A field's absence has one meaning: *this engine does not produce it*. It never means zero, and
+   never means false.
+
+## What an engine must provide to join
+
+A new engine — `ngspice` first — needs, in this order:
+
+1. **L1**: a documented mapping from its own exit status onto the five codes above. Anything else
+   makes "it worked" unanswerable.
+2. **L2**: names, samples, one monotonic axis, and units. The rawfile reader already in this
+   repository covers `ngspice`'s native output; units come from the rawfile's own variable types.
+3. **L0**: whatever its netlist generator knows. For a deck this project compiled, the compiler's
+   provenance map applies unchanged, because it describes the *document*, not the engine.
+4. **L3**: optional. An engine with no event stream is a usable engine with an empty event list —
+   not a broken one. A displayer must render that case without a placeholder that looks like a
+   pass.
+
+## What does not exist yet
+
+Each of these is a gap in the contract's implementation, not in the contract. They are listed here
+because specifying them as though they were done is how a contract becomes fiction.
+
+- **A solver failure is not an event.** A Lemke `RayTermination` carries no time, no step and no
+  switch state, so there is nothing to put a marker on and nothing to tell the user which switch
+  configuration failed to solve. L1 reports the run died; L3 cannot say where.
+- **`pause` is accepted and then downgraded.** `Action::Pause` is recorded and treated as
+  `Console`, because a command-line run has nobody to resume it. Holding at an event with the
+  state intact is Phase 5.
+- **L0 is not threaded through.** The compiler emits the map; nothing carries it into the result
+  document, so `signals[].block`/`.port` are unfilled.
+- **L2 carries no unit.** Neither CSV nor the rawfile writer emits one, though the result document
+  has the field.
+
+## Evidence: what the current adapter loses
+
+The three claims above are measured, not predicted. The GUI's existing adapter
+(`general-simulator-gui-for-vscode`, `packages/simulator/src/simulator/solvers/`):
+
+- writes the netlist into a `tempfile.TemporaryDirectory()`, so `<stem>.events.jsonl` and
+  `<stem>.events.txt` are **deleted with it** — every event of every run is discarded;
+- raises on any non-zero exit code, so a run that a rule stopped (`3`) or in which a rule fired
+  (`2`) is shown as a crash with no waveform;
+- fills `Signal(block_id="general_simulator", port_id=f"signal_{index}")` — a placeholder in
+  fields the result format defines, because nothing told it which block `Rload` is.
+
+None of the three is a bug in that adapter. All three are what a missing contract costs.
 
 
 ## Contributing
