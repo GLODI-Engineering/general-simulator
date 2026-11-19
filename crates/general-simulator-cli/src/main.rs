@@ -358,9 +358,9 @@ fn main() -> ExitCode {
 /// reclassify every existing failure. The codes below add to the contract instead of rewriting
 /// it -- a rule-free netlist still returns 0 or 1 exactly as before.
 mod exit {
-    /// Nothing to report, or warnings only (see `--fail-on`).
+    /// Nothing to report, or nothing at or above `--fail-on` (default `error`).
     pub const OK: u8 = 0;
-    /// A rule of severity `error` or `fatal` fired.
+    /// A rule fired at or above `--fail-on` — by default `error` or `fatal`.
     pub const RULE_ERROR: u8 = 2;
     /// A rule ended the run.
     pub const STOPPED_BY_RULE: u8 = 3;
@@ -423,6 +423,7 @@ fn run() -> Result<u8, String> {
     let mut out_path: Option<String> = None;
     let mut events_jsonl: Option<String> = None;
     let mut events_text: Option<String> = None;
+    let mut fail_on = gsim_rules::Severity::Error;
     let mut out_every: usize = 1;
     let mut checkpoint_out: Option<String> = None;
     let mut checkpoint_every: Option<f64> = None;
@@ -515,6 +516,24 @@ fn run() -> Result<u8, String> {
                         .ok_or("--events-text needs a value")?
                         .clone(),
                 );
+                i += 2;
+            }
+            // Which severity makes the process fail. The default is `error`, which is what
+            // the exit-code contract described before this flag existed, so a caller that
+            // does not pass it sees no change.
+            "--fail-on" => {
+                let value = args.get(i + 1).ok_or("--fail-on needs a value")?;
+                fail_on = match value.to_ascii_lowercase().as_str() {
+                    "info" => gsim_rules::Severity::Info,
+                    "warning" | "warn" => gsim_rules::Severity::Warning,
+                    "error" => gsim_rules::Severity::Error,
+                    "fatal" => gsim_rules::Severity::Fatal,
+                    other => {
+                        return Err(format!(
+                            "--fail-on takes info, warning, error or fatal, not '{other}'"
+                        ))
+                    }
+                };
                 i += 2;
             }
             other => return Err(format!("unrecognized argument '{other}'\n{}", usage())),
@@ -831,6 +850,7 @@ fn run() -> Result<u8, String> {
                 &switch_channels,
                 &diode_curves,
                 &event_paths,
+                fail_on,
                 CheckpointArgs {
                     out: checkpoint_out.as_deref().map(Path::new),
                     every: checkpoint_every,
@@ -982,6 +1002,8 @@ fn run_transient_streamed(
     switch_channels: &BTreeMap<String, rules::SwitchChannel>,
     diode_curves: &BTreeMap<String, rules::DiodeCurve>,
     event_paths: &rules::EventPaths,
+    // The lowest severity that makes this process exit `RULE_ERROR` (`--fail-on`).
+    fail_on: gsim_rules::Severity,
     checkpoints: CheckpointArgs<'_>,
 ) -> Result<u8, String> {
     let resume_from = match checkpoints.resume {
@@ -1318,7 +1340,7 @@ fn run_transient_streamed(
         return Ok(exit::STOPPED_BY_RULE);
     }
     match reporter.as_ref().and_then(|r| r.worst) {
-        Some(severity) if severity >= gsim_rules::Severity::Error => Ok(exit::RULE_ERROR),
+        Some(severity) if severity >= fail_on => Ok(exit::RULE_ERROR),
         _ => Ok(exit::OK),
     }
 }
@@ -1464,6 +1486,10 @@ EVENTS
     --events-text <path>      Where its human-readable twin goes. Moves independently of
                               --events. [default: <netlist stem>.events.txt]
                               Both are written only for a netlist that declares rules.
+    --fail-on <severity>      The lowest severity that makes this process exit 2:
+                              info, warning, error or fatal. [default: error]
+                              A rule that ends the run still exits 3, and a
+                              non-finite state still exits 4, whatever this is set to.
 
 CHECKPOINTS
     --checkpoint-out <file>   Write the run's complete state at --tfinal, so a later run
@@ -1501,7 +1527,7 @@ fn usage() -> String {
     "usage: general-simulator <netlist> [--devices <file>] [--mode dc|transient] [--tfinal T] \
      [--dt DT | --dt-max T --dt-min T --dt-init T --reltol R --abstol A] [--max-steps N] \
      [--format csv|raw] [--out <path>] [--out-every N]\n\
-     [--events <path>] [--events-text <path>]\n\
+     [--events <path>] [--events-text <path>] [--fail-on <severity>]\n\
      [--checkpoint-out <file>] [--checkpoint-every T] [--resume <file>]\n\
      \n\
      --checkpoint-out writes the run's complete state at --tfinal (and, with --checkpoint-every T, \
