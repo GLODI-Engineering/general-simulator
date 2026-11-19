@@ -144,7 +144,7 @@ fn main() {
     // CSV export (t, V(vout), V(vx)) for the cross-simulator waveform plot -- see the internal
     // boost/LLC-vs-Xyce/ngspice validation experiment's own writeup.
     // Same `t,unknown1,unknown2,...` column convention as general-simulator-cli's own CSV output.
-    let out_path = "llc_elspice_pwl_out.csv";
+    let out_path = "llc_out.csv";
     let mut f = std::fs::File::create(out_path).unwrap();
     writeln!(f, "t,V(vout),V(vx)").unwrap();
     for (t, point) in &trace {

@@ -156,10 +156,13 @@ including bugs caught and fixed along the way):
 - `crates/general-simulator-cli` (binary `general-simulator`) — netlist-in/CSV-waveform-out
   runner, which also strips `kind=measure` lines and writes the event stream (`--events`).
 
-Open: validation against the Xyce/ngspice baselines already captured in an internal
-validation-experiment archive maintained alongside this project, full converter benchmarks, and
-the smaller scope notes recorded in each milestone's own journal entry (per-instance ideal-switch
-`Ron`, non-diode-only transient variants, etc.).
+Validated against ngspice and Xyce on real converter topologies: the comparisons, the metric
+each one used and the places where the three engines disagree are in the User Guide's
+[Validation](book/user-guide/src/validation.md) chapter.
+
+Open: the smaller scope notes recorded in each milestone's own journal entry (per-instance
+ideal-switch `Ron`, non-diode-only transient variants, etc.), and the remaining phases of the
+rule engine, which are tracked as issues.
 
 ## Development
 
