@@ -75,7 +75,7 @@ the node in question.
 - The grammar chapter now has a **Number suffixes** section with this table, so the
   rule is stated where someone looks up how to write a value rather than only being
   discoverable by being bitten.
-- `general-simulator-gui`'s parameter editor mirrors this parser and has a parity
+- Omni Schematics' parameter editor mirrors this parser and has a parity
   test over a shared table of cases, so the editor and the engine cannot drift on
   it; it also echoes the parsed SI value back under the field, which turns the
   silent divergence into something visible at entry time.
