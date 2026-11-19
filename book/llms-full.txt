@@ -6042,6 +6042,49 @@ So the tool reports the **voltage**, and $\tfrac{1}{2} C_{oss} V^2$ is your mult
 $C_{oss}$ you have from a datasheet and the simulator does not have at all. That is a better
 division of labour than a number that looks like an energy and is really a step size.
 
+## Why there is no reverse-recovery rule either, and what to multiply instead
+
+Reverse recovery is the charge $Q_{rr}$ that flows backwards through a diode after its current
+reaches zero, and in a hard-switched leg with a slow body diode it is the dominant switching
+loss. There is no rule for it, for the same reason and with the same division of labour.
+
+**Measuring the charge is the switching-energy problem again.** $Q_{rr}$ is
+$\int i\,\mathrm{d}t$ over the recovery interval, and this engine's diode is piecewise-linear
+and ideal: it conducts or it does not, and the commutation happens inside one step. There is no
+interval to integrate over, so the figure would be a discretisation artifact exactly as
+$E_{sw}$ is above.
+
+**What the engine does know is the voltage**, and it already reports it. A diode recovers into
+the voltage that appears across it when the opposing switch turns on — which is the same
+instant, and the same voltage, that [`type=zvs`](#was-it-really-zvs) measures on that switch. On
+a 400 V hard-switched buck leg at 100 kHz:
+
+```text
+ZVS kind=rule type=zvs switches=DSW v_max=5 severity=warning
+```
+
+```text
+[10.0000 us] WARN  DSW.ZVS  at 400.8791 V  limit 5.0000 V  [DSW turned on with V(vin,sw) still across it]
+[20.0010 us] WARN  DSW.ZVS  at 400.9561 V  limit 5.0000 V
+[30.0010 us] WARN  DSW.ZVS  at 401.0291 V  limit 5.0000 V
+...
+```
+
+Six commutations in 60 us — one per switching period — each with the voltage the freewheeling
+diode `D1` recovered into. So
+
+$$E_{rr} = Q_{rr} V \approx 80\,\text{nC} \times 400.9\,\text{V} = 32.1\ \mu\text{J}$$
+
+per commutation, or 3.2 W at 100 kHz, with a $Q_{rr}$ from a datasheet the simulator does not
+have. The multiplication is yours; the voltage, the count and the instants are the engine's.
+
+**Worth noticing in those numbers:** the voltage is not 400 V. It is 400.88 V and rising, because
+the freewheeling node sits slightly below ground while the diode conducts, so the switch — and
+the diode — stand off a little more than the bus. A hand calculation assuming the nominal bus is
+0.2% low on the first commutation and drifting. That is precisely the kind of thing worth
+measuring rather than assuming, and it is why the tool reports the voltage instead of a product
+it would have to take a datasheet number for.
+
 # Does the loss model describe the circuit at all?
 
 Every rule so far bounds one device's loss. None of them can answer the question that decides
