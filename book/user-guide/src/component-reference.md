@@ -495,13 +495,19 @@ CT1 kind=clarke inputs=A,B,C
 **Description**
 This is not a `kind=` block itself — it's the `gate=`/`ctrl=` field pair on a
 `kind=ideal_switch` device line. `GateBinding` has exactly one variant and exactly one
-job: reading a named block's current output and thresholding it at `>= 0.5`. No
+job: reading a named block's current output and thresholding it at `>= v_gs_th`. No
 non-block-driven variant exists — even a permanently-off gate is an explicit `Const(0.0)`
 wired through a `domain=voltage` [`BlockKind::Sig2Phys`], the same as every other gate.
 The named block (`ctrl=`) must itself be a `domain=voltage` [`BlockKind::Sig2Phys`] — an
-ideal switch's gate is itself a voltage ($V_{GS}$ against $v_{th}$), not a distinct
+ideal switch's gate is itself a voltage ($V_{GS}$, compared against this binding's
+own `v_gs_th`), not a distinct
 discrete-actuation signal domain (and never `domain=current`, even though `Sig2Phys`
 itself allows that domain for `I`-source targets).
+
+This comment used to say the gate was compared against `v_th`, which was **false**:
+`v_th` on a `kind=ideal_switch` line is the *body diode's* forward threshold and the
+gate path never read it. The comparison was a hard-coded `0.5`. That is the double
+meaning `v_gs_th` and the `body_` prefix exist to remove.
 
 **Parameters**
 - `gate=block` — the only accepted value; every gate is block-driven.
@@ -519,8 +525,9 @@ itself allows that domain for `I`-source targets).
 
 **Netlist form**
 ```text
-NAME kind=ideal_switch r_on=<f64> body_g_breakdown=<f64> body_v_breakdown=<f64> body_g_off=<f64> \
-     body_v_f=<f64> body_g_on=<f64> gate=block ctrl=<sig2phys_voltage_block_name>
+NAME kind=ideal_switch r_on=<f64> body_g_breakdown=<f64> body_v_breakdown=<f64> \
+     body_g_off=<f64> \
+     body_v_f=<f64> body_g_on=<f64> gate=block ctrl=<name> [v_gs_th=<f64>]
 ```
 
 **Example**
@@ -535,12 +542,13 @@ ONVAL kind=const value=1
 ONGATE kind=sig2phys domain=voltage in=ONVAL
 V1 in 0 5
 D1 in out idealswitchmodel
-D1 kind=ideal_switch r_on=0.1 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.5 body_g_on=5 \
+D1 kind=ideal_switch r_on=0.1 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 \
+     body_v_f=0.5 body_g_on=5 \
      gate=block ctrl=ONGATE
 R1 out 0 1k
 ```
 
-On while the named block's current output is `>= 0.5`.
+On while the named block's current output is at or above `v_gs_th`.
 
 ### Phys2Sig (Physical-to-Signal Converter)
 
@@ -671,7 +679,8 @@ block's own just-computed output value into the circuit solve in that symbol's p
 Also the *only* legal target for a [`GateBinding::Block`]'s own named block, and there
 *only* the `domain=voltage` form — `dae-runtime` rejects a `GateBinding` naming anything
 else, including a `domain=current` `Sig2Phys`, with `DaeError::GateTargetNotSig2Voltage`.
-An ideal switch's gate is itself a voltage (`V_GS` against `v_f`), not a distinct
+An ideal switch's gate is itself a voltage (`V_GS` against the gate's own
+`v_gs_th`), not a distinct
 discrete-actuation signal domain, so there is no separate gate-only converter — one type,
 `Sig2Phys`, parameterized by [`PhysicalDomain`], is the whole Signal-to-PS boundary for
 "a signal-domain block's output drives a physical voltage or current," whether that
@@ -1553,6 +1562,80 @@ A scalar setpoint and a constant vector offset, unchanged at every step:
 ```text
 SETPOINT kind=const value=5
 OFFSETS kind=const value=[1,2,3]
+```
+
+### File-Backed Source (filewave)
+
+**Purpose:** a measured waveform — an oscilloscope capture, or a table a microcontroller
+printed over a serial link — as a source the solver can drive a circuit with, and as a
+reference a run can be graded against.
+**Library:** Sources
+
+**Description**
+Reads a text table once, at build time, and becomes one output per value column. Between
+samples it is exactly [`BlockKind::Pwl`] (`interp=linear`, the default) or
+[`BlockKind::Pwc`] (`interp=hold`): the file supplies breakpoints and the existing
+interpolation answers every question about what the waveform is between them, so a
+capture and a hand-written `points=` list of the same numbers are the same waveform.
+
+**This is the only file-backed source, and it is in the signal domain on purpose.** A
+`V`/`I` source's magnitude may name nothing but a [`BlockKind::Sig2Phys`], so a measured
+voltage source is this block plus a `sig2phys` — not a second kind of source element. A
+`FILE(...)` form on the element card would be a second path into the solver that this
+project deliberately does not have.
+
+Multi-output, following the [`BlockKind::CScript`] convention: `output_names[0]` aliases
+this block's own name, and **the rest are top-level signal names of their own** — not
+`<block>.<name>`. A two-channel capture read as `SCOPE` therefore offers `SCOPE` (the
+first channel) and `CH2` (the second), each nameable anywhere a signal is.
+
+That makes a header-derived name a claim on the signal namespace, so a capture whose
+second column is headed `OUT` claims `OUT`. A clash with a block that already has that
+name is a hard error (`DuplicateBlockName`) rather than one silently winning, and
+`outputs=` is how it is resolved.
+
+**Parameters**
+- `path=<file>` — required. A relative path resolves against the **process's working
+  directory**, not the netlist's directory: the same rule `kind=cscript`'s `lib=` and
+  `kind=pyblock`'s `path=` already follow.
+- `outputs=<n1,n2,...>` — optional; names the outputs, overriding the file's header.
+- `time=<column>` / `cols=<c1,c2>` — optional; which column is time (default: the
+  first), and which become outputs (default: all the others). Either may be a 1-based
+  position or a name from the header.
+- `interp=linear|hold` — optional (default `linear`).
+- `after=hold|repeat|zero|error` — optional (default `hold`); what the source does past
+  the capture's last sample. `error` refuses a run that would outlast the data, which is
+  the one case where holding silently is a wrong simulation that looks right.
+- `tshift=auto|none|<seconds>` — optional (default `auto`, which subtracts the first
+  sample's time so the capture starts at `t = 0`). A scope export is centred on its
+  trigger and starts negative; a capture that silently began at `t = -5 ms` would put a
+  whole comparison half a window out of phase.
+- `scale=` / `offset=` — optional; `scale * v + offset` per value, for a ×10 probe or a
+  removed DC offset.
+- `skip=<n>` / `delim=<char>` — optional; override the preamble detection (any leading
+  line whose first field is not a number) and the separator detection.
+
+**Errors**
+Every refusal names the file and, where there is one, the line: a missing file, a ragged
+row, a non-numeric field, a time column that decreases, a one-column file, a column that
+is not there (listing the ones that are), and a number written with a decimal comma —
+which is refused rather than guessed at, because `0,001;1,23` is four fields with a
+comma separator and two numbers without one. See [`crate::wave_file::WaveFileError`].
+
+**Netlist form**
+```text
+NAME kind=filewave path=<file> [outputs=<n1,n2>] [time=<col>] [cols=<c1,c2>]
+     [interp=linear|hold] [after=hold|repeat|zero|error] [tshift=auto|none|<s>]
+     [scale=<k>] [offset=<v>] [skip=<n>] [delim=<char>]
+```
+
+**Example**
+A measured gate drive driving the real switch, and the measured output graded against
+the simulated one:
+```text
+SCOPE kind=filewave path=capture.csv outputs=VGS,VOUT
+GATE  kind=sig2phys domain=voltage in=SCOPE
+M_fit kind=measure type=error out=V(out) ref=VOUT norm=l2
 ```
 
 ### Piecewise-Constant Source (pwc)

@@ -42,6 +42,7 @@
 # Post-processing measurements
 
 - [`kind=measure`: ngspice/Xyce-style .measure statements](measurements.md)
+- [Measured waveforms: a capture as a source, and as a reference](measured-waveforms.md)
 
 # Worked examples
 

@@ -340,6 +340,32 @@ enum OutputFormat {
     Raw,
 }
 
+/// A `DaeError` as a line a user can act on.
+///
+/// Every variant is a `{e:?}` dump by default, which keeps the variant name greppable in stderr
+/// and is the right default for an error whose fields already read as a sentence. Two do not:
+/// the one a silent failure used to look like (`Sig2PhysUsedAsCircuitNode`, spelled out at its
+/// own call site below), and this one -- a run that outlasts its capture is the ordinary mistake
+/// with a file-backed source, and `covered: 0.001999, t_final: 0.003` makes a reader work out
+/// what to do about it. The variant name is kept in front either way.
+fn dae_message(error: &DaeError) -> String {
+    match error {
+        DaeError::WaveCaptureTooShort {
+            block,
+            source,
+            covered,
+            t_final,
+        } => format!(
+            "{error:?}: '{block}' reads '{source}', which ends at {covered:e} s, but the run \
+             goes to {t_final:e} s. Past its last sample a capture holds its final value, so \
+             the rest of the run would be driven by a flat line -- which is what `after=error` \
+             exists to refuse. Shorten the run to {covered:e} s, capture more data, or choose \
+             `after=hold`/`repeat`/`zero` if a held, repeated or zero tail is what you meant."
+        ),
+        other => format!("{other:?}"),
+    }
+}
+
 fn main() -> ExitCode {
     match run() {
         Ok(code) => ExitCode::from(code),
@@ -748,7 +774,7 @@ fn run() -> Result<u8, String> {
 
     let (waveform, plot_name) = if mode == "dc" {
         let point = if ideal_switches.is_empty() {
-            solve_dc(&netlist, dialect, &diodes).map_err(|e| format!("{e:?}"))?
+            solve_dc(&netlist, dialect, &diodes).map_err(|e| dae_message(&e))?
         } else {
             // Every gate is block-driven (gate=block) -- a DC operating point has no notion of
             // a block's time-stepped state, so any ideal switch at all makes --mode dc unsupported.
@@ -805,7 +831,7 @@ fn run() -> Result<u8, String> {
             && declared_rules.is_empty()
         {
             let trace = simulate_transient(&netlist, dialect, &diodes, None, t_final, step)
-                .map_err(|e| format!("{e:?}"))?;
+                .map_err(|e| dae_message(&e))?;
             let headers = match trace.first() {
                 Some((_, first)) => {
                     let mut headers = vec!["t".to_string()];
@@ -1007,7 +1033,7 @@ fn run_transient_streamed(
     checkpoints: CheckpointArgs<'_>,
 ) -> Result<u8, String> {
     let resume_from = match checkpoints.resume {
-        Some(path) => Some(Checkpoint::read_from(path).map_err(|e| format!("{e:?}"))?),
+        Some(path) => Some(Checkpoint::read_from(path).map_err(|e| dae_message(&e))?),
         None => None,
     };
     // Written on every periodic hand-out and again at the end -- the same file, atomically
@@ -1018,10 +1044,15 @@ fn run_transient_streamed(
             None => Ok(()),
         }
     };
-    // A cscript, coordinate-transform, pmsm, pwm, or pspwm block registers extra named outputs
-    // beyond its own block name (see block_graph::evaluate_blocks) -- list those too, so they
-    // show up as their own CSV columns instead of only being reachable via Signal::Block from
-    // another declared block. Doesn't need a single row resolved -- purely a function of `blocks`
+    // A cscript, coordinate-transform, pmsm, pwm, pspwm or filewave block registers extra named
+    // outputs beyond its own block name (see block_graph::evaluate_blocks) -- list those too, so
+    // they show up as their own CSV columns instead of only being reachable via Signal::Block
+    // from another declared block.
+    //
+    // `filewave` is the one where leaving it out is not merely inconvenient: the whole reason to
+    // read a capture is to compare a run against it, and a `kind=measure type=error ref=` can
+    // only name a column. A second channel that evaluated but never reached the waveform was
+    // reachable by nothing at all. Doesn't need a single row resolved -- purely a function of `blocks`
     // itself -- so, unlike the header's own vector-arity expansion below, this part is known
     // upfront.
     let mut block_names: Vec<String> = blocks.iter().map(|b| b.name.clone()).collect();
@@ -1035,7 +1066,8 @@ fn run_transient_streamed(
             | BlockKind::CoordinateTransform { output_names, .. }
             | BlockKind::Pmsm { output_names, .. }
             | BlockKind::Pwm { output_names, .. }
-            | BlockKind::PhaseShiftPwm { output_names, .. } => {
+            | BlockKind::PhaseShiftPwm { output_names, .. }
+            | BlockKind::FileWave { output_names, .. } => {
                 block_names.extend(output_names.iter().skip(1).cloned());
             }
             _ => {}
@@ -1239,7 +1271,7 @@ fn run_transient_streamed(
             Ok(())
         },
     )
-    .map_err(|e| format!("{e:?}"))?;
+    .map_err(|e| dae_message(&e))?;
 
     // Close every rule out before the files are flushed, so a violation still in progress when
     // the run ended is reported as a truncated leave rather than vanishing, and the summary
@@ -1256,7 +1288,7 @@ fn run_transient_streamed(
     if let (Some(path), Some(final_checkpoint)) = (checkpoints.out, final_checkpoint) {
         final_checkpoint
             .write_to(path)
-            .map_err(|e| format!("{e:?}"))?;
+            .map_err(|e| dae_message(&e))?;
     }
 
     if let Some(w) = &mut csv_writer {

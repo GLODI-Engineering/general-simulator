@@ -36,7 +36,8 @@ pub use block_graph::{
     simulate_transient_with_blocks_capped, simulate_transient_with_blocks_checkpointed,
     simulate_transient_with_blocks_streamed, BlockInstance, BlockKind, CheckpointControl,
     CheckpointSink, ConstValue, GainValue, GateBinding, Phys2SigTarget, PhysicalDomain, PidClamp,
-    SampleTimeSpec, Signal, SignalValue, TransientWithBlocksStep, ADAPTIVE_STEP_HARD_CAP,
+    SampleTimeSpec, Signal, SignalValue, TransientWithBlocksStep, WaveAfter, WaveInterp,
+    ADAPTIVE_STEP_HARD_CAP,
 };
 pub use closed_loop::{sawtooth_carrier, simulate_closed_loop};
 pub use step_control::{AdaptiveConfig, TimeStep};
@@ -304,6 +305,23 @@ pub enum DaeError {
     /// the later one win, so a `Signal::Block(name)` reference would silently resolve to the
     /// wrong block instead of failing loudly.
     DuplicateBlockName(String),
+    /// A `kind=filewave` block declared `after=error` whose capture ends before the run does.
+    ///
+    /// Raised **before the first step**, not mid-run: past its last sample a file-backed source
+    /// holds a constant, so a run that outlasts its data is driven by a flat line for the rest
+    /// of its length and the waveform looks perfectly plausible. `after=error` exists for the
+    /// user who would rather be told, and telling them costs nothing if it happens up front --
+    /// so this names both numbers and is checked once, at setup.
+    WaveCaptureTooShort {
+        /// The `kind=filewave` block.
+        block: String,
+        /// The file it read.
+        source: String,
+        /// The last sample time in it, in seconds.
+        covered: f64,
+        /// The run's own end time, in seconds.
+        t_final: f64,
+    },
     /// A checkpoint file is not one, or is a version this build does not read — see
     /// `checkpoint`'s own module doc comment for the format.
     CheckpointFormat(String),
