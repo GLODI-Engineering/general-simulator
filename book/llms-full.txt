@@ -5257,6 +5257,35 @@ There are two syntaxes, and they compile to exactly the same thing:
 - a **`kind=rule` card**, which says everything explicitly and can watch anything;
 - a **rating on the device line**, which is shorter and is where a datasheet number belongs.
 
+## If you drew the circuit instead of writing it
+
+This chapter is about a netlist, and a netlist is not the only way to reach this engine: a
+schematic drawn in [Omni Schematics](https://github.com/GLODI-Engineering/omni-schematics)
+compiles to one. Not everything below survives that trip yet, and the half that does not is
+worth knowing before you plan around it.
+
+| | from a drawing | by writing the netlist |
+|---|---|---|
+| `i_max`, `i_sat` on a device with a branch current | **yes** | yes |
+| `v_max` on any two-terminal device | **yes** | yes |
+| `hold`, `on_violation`, `severity` beside a limit | **yes** | yes |
+| `above`, `outside` on an arbitrary expression | not yet | yes |
+| `switch_timing`, `forbidden_state`, `required_path` | not yet | yes |
+| `body_diode`, `commutation_order`, `rate_of_change` | not yet | yes |
+| `per_period` — `rms`, `integral`, … over a cycle | not yet | yes |
+| every `kind=measure` type | not yet | yes |
+
+The split is not arbitrary. A rating is a property of one component, so it is written on the
+component — in the editor's inspector, in the same place as its inductance. Every form in the
+lower half names two or more devices, or an expression, or a window in time, and belongs to none
+of them; the editor will carry those in a list beside the schematic rather than on any symbol,
+which is a panel that is not built yet. The reasoning is recorded in
+[`gsim-core`'s decision 0004](https://github.com/GLODI-Engineering/gsim-core/blob/master/docs/decisions/0004-how-a-drawn-schematic-carries-a-rule.md).
+
+Nothing in the lower half is *unavailable* to a drawn circuit: compile the schematic to a
+netlist, add the cards, and run that. What is missing is the round trip — edit the drawing and
+the cards are not in it.
+
 ## Ratings on the device line
 
 ```text
