@@ -61,7 +61,7 @@ fn main() {
     )
     .unwrap();
 
-    let out_path = "boost_pid_elspice_pwl_out.csv";
+    let out_path = "boost_pid_out.csv";
     let mut f = std::fs::File::create(out_path).unwrap();
     writeln!(f, "t,V(vout),duty").unwrap();
     for (t, point, duty) in &trace {

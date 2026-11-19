@@ -1,5 +1,14 @@
 # Architecture
 
+> **Superseded, 2026-11-19.** The [Developer Guide](../book/dev-guide/) is the maintained
+> description of how this engine works, and the [User Guide](../book/user-guide/) of how to drive
+> it. This file is kept for the design rationale in its first sections — why not Newton-Raphson,
+> why an LCP, what the numeric stack is — which the books reference rather than repeat. **Where
+> this file and a book chapter disagree, the book is right**, because the books are rebuilt and
+> published on every change to `book/` and this file was last revised in September. Two
+> disagreements were found and corrected in place rather than left to be discovered by a reader;
+> they are marked below.
+
 ## Why not Newton-Raphson
 
 SPICE-family simulators solve `g(x) = 0` (KCL/KVL plus device equations) via Newton-Raphson:
@@ -192,9 +201,13 @@ worked comparison this was built for.
 over `dae-runtime`'s public API, with a small hand-rolled device-params/block-graph format (no
 serde/TOML dependency for something this simple). **The netlist is the one file**: PWL device
 parameters and any controller block graph are written directly inside it, as ordinary SPICE
-comment lines (`*`-prefixed — `general-spice-core` enforces real SPICE grammar with no syntax for
-`kind=ideal_switch`/`kind=tf`/etc., so these can't be bare netlist lines) that only `general-simulator-cli`
-additionally reads as device/block declarations; any other tool sees just comments. `--devices
+**bare netlist lines** — genuine first-class syntax, not `*`-comments. (Corrected 2026-11-19:
+this paragraph used to say declarations had to be `*`-prefixed comments, which
+`book/user-guide/src/netlist-grammar.md` has contradicted for some time. Measured against the
+built binary on the quick-start deck: with `D1 kind=ideal_diode …` as a bare line the run
+produces the CSV the book documents; with the same line commented out, it fails with
+`Evaluate(MissingSymbol("D1_G"))` — the diode's parameters are simply gone. A reader following
+the old text got that error with nothing to connect it to.) `--devices
 <file>` remains available for sharing one controller file across several netlists, but is the
 exception, not the default — splitting the controller into a second file by convention alone,
 when nothing about the circuit requires it, was a real mistake caught and corrected during this
@@ -203,9 +216,11 @@ binary against fixture netlists that are the exact circuits already hand-verifie
 this workspace — a cross-check, not a fresh derivation.
 
 All six original milestones, plus everything explicitly deferred from them, are now
-implemented. See the journal for what remains genuinely open (validation against Xyce/ngspice
-baselines, full converter benchmarks, per-instance ideal-switch `Ron`, and the smaller scope notes
-scattered through each milestone's own entry).
+implemented. (Corrected 2026-11-19: this paragraph used to list validation against ngspice and
+Xyce baselines as open work. It has been done, and the numbers are in the User Guide's
+[Validation](../book/user-guide/src/validation.md) chapter. What remains open is the smaller
+scope notes in each milestone's journal entry — per-instance ideal-switch `Ron` among them — and
+the rule-engine phases tracked in the issue tracker.)
 
 ## Numeric stack
 
