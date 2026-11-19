@@ -52,7 +52,7 @@ For netlist authors: writing, running, and reading the output of a general-simul
 ### Worked examples
 
 - [Buck converter (open-loop and PID)](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/examples/buck.md): A buck converter is the simplest place to see general-simulator's PWL/LCP approach and its block-graph controller layer working together: a hard-switched power stage (an kind=ideal_switch plus a freewheeling kind=ideal_d
-- [Boost/LLC resonant converter](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/examples/boost-llc.md): A boost converter uses the same Gate bindings PWM-driven pattern as the buck chapter — one actively-driven switch, one freewheeling diode, sum -> pid -> pwm if closed-loop — just with the inductor moved to the input side
+- [Boost and LLC: when duty is the wrong control variable](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/examples/boost-llc.md): What this chapter is.
 - [Three-phase PFC active front end](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/examples/pfc.md): A three-phase active-front-end power-factor-correction (PFC) rectifier exercises more of general-simulator at once than any other example in this guide: the Clarke/Park coordinate transforms, a synchronous-reference-fram
 - [PMSM field-oriented-control drive](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/examples/pmsm-drive.md): An id=0 field-oriented-control (FOC) speed loop driving a kind=pmsm block directly.
 

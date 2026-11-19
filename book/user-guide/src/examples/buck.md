@@ -70,7 +70,7 @@ series, feeding the same `gate=block ctrl=...` target as before:
 REF        kind=pwc points=[[0,12],[0.015,9]]
 VOUT_PROBE kind=phys2sig node=vout
 ERR        kind=sum inputs=REF,VOUT_PROBE signs=1,-1
-PID1       kind=pid in=ERR kp=<Kp> ki=<Ki> kd=<Kd> n=<N> clamp_lo=0 clamp_hi=1
+PID1       kind=pid in=ERR kp=0.2 ki=40 kd=1e-5 n=20000 clamp_lo=0 clamp_hi=1
 MOD1       kind=pwm freq=100000 in=PID1
 D1_GATE    kind=sig2phys domain=voltage in=MOD1
 ```
@@ -101,14 +101,62 @@ specifically to roll off loop gain before the loop ever reaches the plant's own 
 the callout below for why the filter has to sit below `wn` rather than on top of it. With that
 filter in place, a filtered-derivative PID (`Kp=0.2, Ki=40, Kd=1e-5, N=20000`, realized as a
 [`kind=tf`](../component-reference.md#transfer-function) block over the common-denominator
-form `C(s) = Kp + Ki/s + Kd*N*s/(s+N)`) regulates the output cleanly:
+form `C(s) = Kp + Ki/s + Kd*N*s/(s+N)`) regulates the output cleanly.
+
+### The complete deck
+
+The fragment above is the *pattern*. This is the whole file, power stage included — the one the
+numbers below come from, with nothing left out and nothing to substitute:
+
+```text
+V1 vin 0 24
+D1 vin vx idealswitchmodel
+D1 kind=ideal_switch r_on=0.01 body_g_breakdown=0 body_v_breakdown=-1e6 body_g_off=1e-6 body_v_f=1e6 body_g_on=0 \
+     gate=block ctrl=D1_GATE
+D2 0 vx dmodel
+D2 kind=ideal_diode g_breakdown=0 v_breakdown=-100 g_off=0 v_f=0.6 g_on=100
+L1 vx vout 100u
+C1 vout 0 100u
+R1 vout 0 5
+
+REF        kind=pwc points=[[0,12],[0.015,9]]
+VOUT_PROBE kind=phys2sig node=vout
+ERR        kind=sum inputs=REF,VOUT_PROBE signs=1,-1
+FILT       kind=statespace a=[[-1000]] b=[1000] c=[1] d=0 in=ERR
+COMP       kind=tf num=[0.4,4040,800000] den=[1,20000,0] in=FILT
+MOD1       kind=pwm freq=100000 in=COMP
+D1_GATE    kind=sig2phys domain=voltage in=MOD1
+```
+
+`FILT` is the low-pass filter as a one-state state space: $\dot x = -\omega_c x + \omega_c u$,
+$y = x$, with $\omega_c = 1000$ rad/s. `COMP` is $C(s) = K_p + K_i/s + K_d N s/(s+N)$ over the
+common denominator $s(s+N)$, which for $K_p = 0.2$, $K_i = 40$, $K_d = 10^{-5}$, $N = 20000$ is
+
+$$C(s) = \frac{0.4\,s^2 + 4040\,s + 800000}{s^2 + 20000\,s}$$
+
+— the coefficients in the `num=`/`den=` vectors, in that order. Run it with
+
+```bash
+general-simulator buck-closed.cir --mode transient --tfinal 0.03 --dt 2e-7 --out-every 25
+```
+
+and the run produces:
 
 ![Closed-loop buck converter: V(vout) tracking a reference that steps from 12V to 9V at t=15ms](../images/buck-closedloop-vout.png)
 
-Real numbers from that run: peak overshoot on the initial 12V setpoint drops from about 20.0 V
-open-loop to about 15.2 V closed-loop, both setpoints settle to within roughly 1.3% of their
-reference (11.84 V vs. 12 V; 8.99 V vs. 9 V), and duty never saturates over the whole run
-(range 0.0-0.627). A circuit with a less resonant `LC` combination (higher `R`, or a `C`/`L`
+| quantity | measured |
+|---|---|
+| peak `V(vout)` over the run | **15.586 V** (against about 20.0 V open-loop) |
+| mean `V(vout)`, 10–15 ms (reference 12 V) | **11.883 V** — 1.0% low |
+| mean `V(vout)`, 25–30 ms (reference 9 V) | **9.082 V** — 0.9% high |
+| duty command range | **0.001 → 0.551**, so the clamp is never reached |
+
+Two things that table says and a settling figure would not. The *mean* tracks the reference to
+about one per cent, but the instantaneous output does not sit still: switching and the plant's
+own resonance leave **5.6 V peak-to-peak** on the 12 V setpoint and 3.8 V on the 9 V one. That
+is this `L`/`C`/`R`'s $\zeta = 0.1$ showing through the loop, not a compensator defect — and it
+is the reason the chapter spends a paragraph on where the filter corner goes. A converter spec
+written against the mean alone would pass this circuit and ship a supply that rings. A circuit with a less resonant `LC` combination (higher `R`, or a `C`/`L`
 ratio giving `zeta` closer to 1) would regulate cleanly with the plain `sum -> pid -> pwm` chain
 above and no extra filter block at all — the filter is this specific plant's own requirement,
 not a mandatory part of the pattern.
