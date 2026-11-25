@@ -311,9 +311,9 @@ use std::process::ExitCode;
 
 use dae_runtime::checkpoint::Checkpoint;
 use dae_runtime::{
-    simulate_transient, simulate_transient_with_blocks_checkpointed, solve_dc, AdaptiveConfig,
-    BlockInstance, BlockKind, CheckpointControl, CheckpointSink, DaeError, GateBinding, TimeStep,
-    ADAPTIVE_STEP_HARD_CAP,
+    simulate_transient_streamed, simulate_transient_with_blocks_checkpointed, solve_dc,
+    AdaptiveConfig, BlockInstance, BlockKind, CheckpointControl, CheckpointSink, DaeError,
+    GateBinding, TimeStep, ADAPTIVE_STEP_HARD_CAP,
 };
 use general_spice_core::Dialect;
 use pwl_devices::{IdealDiode, IdealSwitch};
@@ -820,14 +820,29 @@ fn run() -> Result<u8, String> {
             "DC transfer characteristic",
         )
     } else if mode == "transient" {
-        // Either an ideal switch or a block alone is enough to need the block-graph-aware path below:
-        // a block-only netlist (no ideal switch at all, e.g. a pure controller/signal-processing
-        // study with nothing to gate) must still run its block graph, and an ideal switch-only netlist
-        // (no blocks) already did. `run_transient_streamed`/`simulate_transient_with_blocks_streamed`
-        // itself tolerates empty `ideal_switches`/`gates` maps and an empty `blocks` slice equally well
-        // (see its own doc comment) -- only the truly block-free, ideal switch-free case still uses
-        // the plain `simulate_transient` path, since that's the one case with nothing for a
-        // block-graph step to resolve at all.
+        // Every transient run streams, whatever is in the deck.
+        //
+        // There used to be a second, buffered path here, taken when a deck had no ideal
+        // switches, no blocks, no checkpointing and no declared rules: it called
+        // `simulate_transient`, collected the whole trace, and built a `Waveform` for the
+        // shared serialization below. The condition grew by subtraction -- blocks, then
+        // switches, then checkpointing, then rules -- because each feature turned out to be
+        // wired into the streamed path only, and each time the comment here recorded that the
+        // streamed path handled the plain case identically anyway.
+        //
+        // It had to go because `Waveform` holds `Vec<Vec<f64>>`: the entire run, plus one heap
+        // allocation per row. At four million rows and seventy signals that is about 2.2 GB of
+        // samples and four million allocations, and ten grid periods is ten times that, so the
+        // process died before writing anything. The limit was invisible because it depended on
+        // the deck's *features* rather than its size -- every power-electronics deck has
+        // switches and already streamed -- so what could not be run was a long sweep of a plain
+        // linear deck: a thermal network, a finely resolved filter. Nothing in the flags hinted
+        // that the longest run you could do depended on whether your circuit happened to
+        // contain a switch (#106).
+        //
+        // `simulate_transient_with_blocks_streamed` tolerates empty `ideal_switches`, `gates`
+        // and `blocks` equally well (see its own doc comment), so the plain case is now the
+        // streamed path with nothing for a block-graph step to resolve. Peak memory is one row.
         let checkpointing = checkpoint_out.is_some() || resume.is_some();
         if checkpoint_every.is_some() && checkpoint_out.is_none() {
             return Err("--checkpoint-every needs --checkpoint-out <file>".to_string());
@@ -835,76 +850,40 @@ fn run() -> Result<u8, String> {
         if checkpointing && mode != "transient" {
             return Err("--checkpoint-out/--resume only apply to --mode transient".to_string());
         }
-        // Checkpointing always goes through the block-graph path (the plain path has no
-        // checkpoint support and would only ever be picked for a block-free, switch-free deck,
-        // which that path handles identically).
-        // `declared_rules` is in this condition because the rules engine is wired into the
-        // streamed path only. Without it, a deck with no switches and no blocks took the plain
-        // path and every rule on it -- card or device rating -- was accepted at load and then
-        // never evaluated, which is the one outcome this whole feature exists to prevent: the
-        // summary table reads the same for "never exceeded" as for "never looked at". The
-        // streamed path handles a block-free, switch-free deck identically, as the comment
-        // below already notes, so there is nothing to lose by preferring it.
-        if ideal_switches.is_empty()
-            && blocks.is_empty()
-            && !checkpointing
-            && declared_rules.is_empty()
-        {
-            let trace = simulate_transient(&netlist, dialect, &diodes, None, t_final, step)
-                .map_err(|e| dae_message(&e))?;
-            let headers = match trace.first() {
-                Some((_, first)) => {
-                    let mut headers = vec!["t".to_string()];
-                    headers.extend(first.unknowns.iter().cloned());
-                    headers
-                }
-                None => vec!["t".to_string()],
-            };
-            let rows = trace
-                .iter()
-                .map(|(t, point)| {
-                    let mut row = vec![*t];
-                    row.extend(point.x.iter().copied());
-                    row
-                })
-                .collect();
-            (Waveform { headers, rows }, "Transient Analysis")
-        } else {
-            // Streams CSV/raw output directly and writes its own measurement log, rather than
-            // building the shared (waveform, plot_name) tuple this match falls through to below
-            // -- see run_transient_streamed's own doc comment for why. Returns from `run`
-            // immediately, skipping the shared print_csv/write_raw_file/write_measurements_log
-            // block entirely, since it already did the equivalent work incrementally.
-            return run_transient_streamed(
-                &netlist,
-                dialect,
-                &diodes,
-                &ideal_switches,
-                &gates,
-                &blocks,
-                shared_r_on,
-                t_final,
-                step,
-                max_steps.unwrap_or(ADAPTIVE_STEP_HARD_CAP),
-                output_format,
-                out_every,
-                raw_out_path.as_deref(),
-                samples_out_path.as_deref(),
-                netlist_path,
-                &measurements,
-                declared_rules,
-                &declared_ports,
-                &switch_channels,
-                &diode_curves,
-                &event_paths,
-                fail_on,
-                CheckpointArgs {
-                    out: checkpoint_out.as_deref().map(Path::new),
-                    every: checkpoint_every,
-                    resume: resume.as_deref().map(Path::new),
-                },
-            );
-        }
+        // Streams CSV/raw/samples output directly and writes its own measurement log, rather
+        // than building the shared (waveform, plot_name) tuple this match falls through to
+        // below -- see run_transient_streamed's own doc comment for why. Returns from `run`
+        // immediately, skipping the shared print_csv/write_raw_file/write_measurements_log
+        // block entirely, since it already did the equivalent work incrementally.
+        return run_transient_streamed(
+            &netlist,
+            dialect,
+            &diodes,
+            &ideal_switches,
+            &gates,
+            &blocks,
+            shared_r_on,
+            t_final,
+            step,
+            max_steps.unwrap_or(ADAPTIVE_STEP_HARD_CAP),
+            output_format,
+            out_every,
+            raw_out_path.as_deref(),
+            samples_out_path.as_deref(),
+            netlist_path,
+            &measurements,
+            declared_rules,
+            &declared_ports,
+            &switch_channels,
+            &diode_curves,
+            &event_paths,
+            fail_on,
+            CheckpointArgs {
+                out: checkpoint_out.as_deref().map(Path::new),
+                every: checkpoint_every,
+                resume: resume.as_deref().map(Path::new),
+            },
+        );
     } else {
         return Err(format!(
             "unknown --mode '{mode}' (expected 'dc' or 'transient')"
@@ -1102,6 +1081,24 @@ fn run_transient_streamed(
     fail_on: gsim_rules::Severity,
     checkpoints: CheckpointArgs<'_>,
 ) -> Result<u8, String> {
+    // Which solver drives the output below. The block-graph solver handles an empty
+    // `ideal_switches`/`gates`/`blocks` perfectly well, but it is not free to do so: measured on
+    // a two-million-step plain RC deck with the output thinned a million-fold, so that only the
+    // solve is timed, it took 12.69 s against the plain solver's 5.56 s. That is 2.3x per step
+    // for machinery with nothing to resolve, which is too much to charge a deck that has no
+    // blocks in it.
+    //
+    // So the choice of solver stays, and what went is the buffering. Both now drive the same
+    // `on_step` closure -- the writers, `--out-every`, the measurement capture -- so there is
+    // one output pipeline and the solver is an implementation detail of it. Rules and
+    // checkpointing are wired into the block-graph path only, which is why their absence is
+    // part of the condition.
+    let plain = ideal_switches.is_empty()
+        && blocks.is_empty()
+        && declared_rules.is_empty()
+        && checkpoints.out.is_none()
+        && checkpoints.resume.is_none();
+
     let resume_from = match checkpoints.resume {
         Some(path) => Some(Checkpoint::read_from(path).map_err(|e| dae_message(&e))?),
         None => None,
@@ -1194,174 +1191,189 @@ fn run_transient_streamed(
     // the run can report it after the loop, beside a rule stop.
     let mut non_finite: Option<(String, usize, f64)> = None;
 
-    let final_checkpoint = simulate_transient_with_blocks_checkpointed(
-        netlist,
-        dialect,
-        diodes,
-        ideal_switches,
-        blocks,
-        gates,
-        shared_r_on,
-        None,
-        t_final,
-        step,
-        max_steps,
-        CheckpointControl {
-            resume: resume_from.as_ref(),
-            every: checkpoints.every,
-            on_checkpoint: checkpoints
-                .every
-                .map(|_| &mut write_checkpoint as &mut CheckpointSink<'_>),
-            final_snapshot: checkpoints.out.is_some(),
-        },
-        |t, point, outputs| {
-            if headers.is_none() {
-                // A name whose value is a SignalValue::Vector expands into one CSV column per
-                // element (NAME[0], NAME[1], ...) rather than one column holding the whole vector
-                // -- arity is fixed for the whole run once a block declares it (see
-                // book/dev-guide/src/vector-signals.md), so deriving each name's own column count
-                // from the *first* row's resolved shape is exactly as valid as a separate static
-                // analysis would be.
-                let mut h = vec!["t".to_string()];
-                h.extend(point.unknowns.iter().cloned());
-                if !block_names.is_empty() {
-                    h.extend(block_names.iter().flat_map(|name| {
-                        match outputs.get(name) {
-                            Some(dae_runtime::SignalValue::Vector(v)) => (0..v.len())
-                                .map(|i| format!("{name}[{i}]"))
-                                .collect::<Vec<_>>(),
-                            _ => vec![name.clone()],
-                        }
-                    }));
-                }
-                referenced_index = referenced
-                    .iter()
-                    .filter_map(|name| {
-                        h.iter()
-                            .position(|c| c == name)
-                            .map(|idx| (name.clone(), idx))
-                    })
-                    .collect();
-                if let Some(w) = &mut csv_writer {
-                    writeln!(w, "{}", h.join(",")).map_err(|e| DaeError::Io(e.to_string()))?;
-                }
-                // Here rather than before the loop because the columns are
-                // not known until the first row resolves: a vector-valued
-                // block signal expands into one column per element, and its
-                // arity comes from that row (see the comment above).
-                if let Some(path) = samples_out_path {
-                    let file = fs::File::create(path)
-                        .map_err(|e| DaeError::Io(format!("creating {}: {e}", path.display())))?;
-                    samples_writer = Some(
-                        samples_writer_for(BufWriter::new(file), &h)
-                            .map_err(|e| DaeError::Io(e.to_string()))?,
-                    );
-                }
-                headers = Some(h);
-            }
-
-            let mut row = vec![t];
-            row.extend(point.x.iter().copied());
+    let mut on_step = |t: f64,
+                       point: dae_runtime::OperatingPoint,
+                       outputs: BTreeMap<String, dae_runtime::SignalValue>|
+     -> Result<(), DaeError> {
+        if headers.is_none() {
+            // A name whose value is a SignalValue::Vector expands into one CSV column per
+            // element (NAME[0], NAME[1], ...) rather than one column holding the whole vector
+            // -- arity is fixed for the whole run once a block declares it (see
+            // book/dev-guide/src/vector-signals.md), so deriving each name's own column count
+            // from the *first* row's resolved shape is exactly as valid as a separate static
+            // analysis would be.
+            let mut h = vec!["t".to_string()];
+            h.extend(point.unknowns.iter().cloned());
             if !block_names.is_empty() {
-                row.extend(block_names.iter().flat_map(|name| match outputs.get(name) {
-                    Some(dae_runtime::SignalValue::Scalar(x)) => vec![*x],
-                    Some(dae_runtime::SignalValue::Vector(v)) => v.clone(),
-                    None => vec![f64::NAN],
+                h.extend(block_names.iter().flat_map(|name| {
+                    match outputs.get(name) {
+                        Some(dae_runtime::SignalValue::Vector(v)) => (0..v.len())
+                            .map(|i| format!("{name}[{i}]"))
+                            .collect::<Vec<_>>(),
+                        _ => vec![name.clone()],
+                    }
                 }));
             }
-
-            for (name, idx) in &referenced_index {
-                if let Some((ts, vs)) = measured.get_mut(name) {
-                    ts.push(t);
-                    vs.push(row[*idx]);
-                }
-            }
-
-            // Before the rules, because every one of them compares a value against a limit and
-            // every such comparison against a `NaN` is false: a run that has gone non-finite
-            // would otherwise report nothing, summarise as `passed` and exit 0. Checked on
-            // every step whether or not any rule was declared -- see `finite`'s module doc for
-            // why this one is not opt-in.
-            if non_finite.is_none() {
-                let broken = finite::first_non_finite(&point)
-                    .map(|(name, value)| (name.to_string(), value))
-                    .or_else(|| finite::first_non_finite_output(&outputs));
-                if let Some((name, value)) = broken {
-                    let record = finite::event(&name, value, steps_seen, t);
-                    eprintln!("{}", record.console_line());
-                    if let Some(reporter) = &mut reporter {
-                        reporter.record(&record).map_err(DaeError::Io)?;
-                    }
-                    non_finite = Some((name, steps_seen, t));
-                }
-            }
-
-            // Rules see every step, not every *written* point. `--out-every` thins the
-            // waveform file, and an edge or a peak falling between two written points is
-            // exactly what a rule exists to catch -- so this sits above the thinning return
-            // below, not beside the writers.
-            if let Some(reporter) = &mut reporter {
-                let gate_states = rules::gate_states(gates, &outputs);
-                let sample = rules::StepSample {
-                    point: &point,
-                    outputs: &outputs,
-                    gates: &gate_states,
-                    ports: declared_ports,
-                    switches: switch_channels,
-                    diodes: diode_curves,
-                };
-                for event in engine.observe(steps_seen, t, &sample) {
-                    reporter.record(&event).map_err(DaeError::Io)?;
-                }
-                steps_seen += 1;
-            }
-            // Asked for here, acted on at the end of this closure: the step that tripped the
-            // rule has already been solved, its state is what the checkpoint will carry, and a
-            // resume continues from *after* it -- so its row belongs in the waveform. Returning
-            // here instead would leave a one-row hole exactly at the interesting moment.
-            let stop_now = engine.stop_requested().is_some() || non_finite.is_some();
-
-            // `--out-every N` thins what is *written*, never what is computed: every step is
-            // still taken, every measurement above still sees every point, and the solution is
-            // bit-identical to the same run without the flag. Only serialization is skipped.
-            //
-            // The counter is over resolved points rather than time, so a decimated adaptive run
-            // stays readable (uneven in time, but that is what adaptive stepping already is).
-            // Point 0 is always emitted; the final point is emitted only if its index happens to
-            // land on the stride, which keeps the rule to one sentence -- "every Nth point" --
-            // rather than a special case a reader has to remember.
-            let emit = n_resolved.is_multiple_of(out_every);
-            n_resolved += 1;
-            if !emit {
-                // A stop landing on a thinned-out point still stops; it just has no row.
-                return if stop_now {
-                    Err(DaeError::StopRequested)
-                } else {
-                    Ok(())
-                };
-            }
-
+            referenced_index = referenced
+                .iter()
+                .filter_map(|name| {
+                    h.iter()
+                        .position(|c| c == name)
+                        .map(|idx| (name.clone(), idx))
+                })
+                .collect();
             if let Some(w) = &mut csv_writer {
-                let values: Vec<String> = row.iter().map(|v| v.to_string()).collect();
-                writeln!(w, "{}", values.join(",")).map_err(|e| DaeError::Io(e.to_string()))?;
+                writeln!(w, "{}", h.join(",")).map_err(|e| DaeError::Io(e.to_string()))?;
             }
-            if let Some(w) = &mut raw_tmp_writer {
-                raw_format::write_row(w, &row, row.len())
-                    .map_err(|e| DaeError::Io(e.to_string()))?;
+            // Here rather than before the loop because the columns are
+            // not known until the first row resolves: a vector-valued
+            // block signal expands into one column per element, and its
+            // arity comes from that row (see the comment above).
+            if let Some(path) = samples_out_path {
+                let file = fs::File::create(path)
+                    .map_err(|e| DaeError::Io(format!("creating {}: {e}", path.display())))?;
+                samples_writer = Some(
+                    samples_writer_for(BufWriter::new(file), &h)
+                        .map_err(|e| DaeError::Io(e.to_string()))?,
+                );
             }
-            if let Some(w) = &mut samples_writer {
-                w.push(row[0], &row[1..])
-                    .map_err(|e| DaeError::Io(e.to_string()))?;
+            headers = Some(h);
+        }
+
+        let mut row = vec![t];
+        row.extend(point.x.iter().copied());
+        if !block_names.is_empty() {
+            row.extend(block_names.iter().flat_map(|name| match outputs.get(name) {
+                Some(dae_runtime::SignalValue::Scalar(x)) => vec![*x],
+                Some(dae_runtime::SignalValue::Vector(v)) => v.clone(),
+                None => vec![f64::NAN],
+            }));
+        }
+
+        for (name, idx) in &referenced_index {
+            if let Some((ts, vs)) = measured.get_mut(name) {
+                ts.push(t);
+                vs.push(row[*idx]);
             }
-            n_points += 1;
-            // Cooperative: the loop finishes this step, leaves normally and still builds the
-            // final checkpoint, so the run can be resumed from exactly here.
-            if stop_now {
-                return Err(DaeError::StopRequested);
+        }
+
+        // Before the rules, because every one of them compares a value against a limit and
+        // every such comparison against a `NaN` is false: a run that has gone non-finite
+        // would otherwise report nothing, summarise as `passed` and exit 0. Checked on
+        // every step whether or not any rule was declared -- see `finite`'s module doc for
+        // why this one is not opt-in.
+        if non_finite.is_none() {
+            let broken = finite::first_non_finite(&point)
+                .map(|(name, value)| (name.to_string(), value))
+                .or_else(|| finite::first_non_finite_output(&outputs));
+            if let Some((name, value)) = broken {
+                let record = finite::event(&name, value, steps_seen, t);
+                eprintln!("{}", record.console_line());
+                if let Some(reporter) = &mut reporter {
+                    reporter.record(&record).map_err(DaeError::Io)?;
+                }
+                non_finite = Some((name, steps_seen, t));
             }
-            Ok(())
-        },
-    )
+        }
+
+        // Rules see every step, not every *written* point. `--out-every` thins the
+        // waveform file, and an edge or a peak falling between two written points is
+        // exactly what a rule exists to catch -- so this sits above the thinning return
+        // below, not beside the writers.
+        if let Some(reporter) = &mut reporter {
+            let gate_states = rules::gate_states(gates, &outputs);
+            let sample = rules::StepSample {
+                point: &point,
+                outputs: &outputs,
+                gates: &gate_states,
+                ports: declared_ports,
+                switches: switch_channels,
+                diodes: diode_curves,
+            };
+            for event in engine.observe(steps_seen, t, &sample) {
+                reporter.record(&event).map_err(DaeError::Io)?;
+            }
+            steps_seen += 1;
+        }
+        // Asked for here, acted on at the end of this closure: the step that tripped the
+        // rule has already been solved, its state is what the checkpoint will carry, and a
+        // resume continues from *after* it -- so its row belongs in the waveform. Returning
+        // here instead would leave a one-row hole exactly at the interesting moment.
+        let stop_now = engine.stop_requested().is_some() || non_finite.is_some();
+
+        // `--out-every N` thins what is *written*, never what is computed: every step is
+        // still taken, every measurement above still sees every point, and the solution is
+        // bit-identical to the same run without the flag. Only serialization is skipped.
+        //
+        // The counter is over resolved points rather than time, so a decimated adaptive run
+        // stays readable (uneven in time, but that is what adaptive stepping already is).
+        // Point 0 is always emitted; the final point is emitted only if its index happens to
+        // land on the stride, which keeps the rule to one sentence -- "every Nth point" --
+        // rather than a special case a reader has to remember.
+        let emit = n_resolved.is_multiple_of(out_every);
+        n_resolved += 1;
+        if !emit {
+            // A stop landing on a thinned-out point still stops; it just has no row.
+            return if stop_now {
+                Err(DaeError::StopRequested)
+            } else {
+                Ok(())
+            };
+        }
+
+        if let Some(w) = &mut csv_writer {
+            let values: Vec<String> = row.iter().map(|v| v.to_string()).collect();
+            writeln!(w, "{}", values.join(",")).map_err(|e| DaeError::Io(e.to_string()))?;
+        }
+        if let Some(w) = &mut raw_tmp_writer {
+            raw_format::write_row(w, &row, row.len()).map_err(|e| DaeError::Io(e.to_string()))?;
+        }
+        if let Some(w) = &mut samples_writer {
+            w.push(row[0], &row[1..])
+                .map_err(|e| DaeError::Io(e.to_string()))?;
+        }
+        n_points += 1;
+        // Cooperative: the loop finishes this step, leaves normally and still builds the
+        // final checkpoint, so the run can be resumed from exactly here.
+        if stop_now {
+            return Err(DaeError::StopRequested);
+        }
+        Ok(())
+    };
+
+    let final_checkpoint = if plain {
+        // The plain solver hands its step back by reference and has no block outputs, so the
+        // closure sees an empty map -- exactly what it would have seen from the block-graph
+        // solver on a deck with no blocks. One clone per step, where the old buffered path
+        // cloned every step and then kept it.
+        simulate_transient_streamed(netlist, dialect, diodes, None, t_final, step, |t, point| {
+            on_step(t, point.clone(), BTreeMap::new())
+        })
+        .map(|()| None)
+    } else {
+        simulate_transient_with_blocks_checkpointed(
+            netlist,
+            dialect,
+            diodes,
+            ideal_switches,
+            blocks,
+            gates,
+            shared_r_on,
+            None,
+            t_final,
+            step,
+            max_steps,
+            CheckpointControl {
+                resume: resume_from.as_ref(),
+                every: checkpoints.every,
+                on_checkpoint: checkpoints
+                    .every
+                    .map(|_| &mut write_checkpoint as &mut CheckpointSink<'_>),
+                final_snapshot: checkpoints.out.is_some(),
+            },
+            &mut on_step,
+        )
+    }
     .map_err(|e| dae_message(&e))?;
 
     // Close every rule out before the files are flushed, so a violation still in progress when
