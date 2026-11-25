@@ -29,6 +29,7 @@ dae-runtime = { path = "../dae-runtime", version = "0.6.0" }
 pwl-devices = { path = "../pwl-devices", version = "0.6.0" }
 general-spice-core = { path = "../../../spice-lsp/servers/core", version = "0.1.0" }
 general-mna = { path = "../../../general-mna", version = "0.6.0" }
+gsim-samples = { path = "../gsim-samples" }
 gs-waveform-measurements = { path = "../../../gs-waveform-measurements", version = "0.1.0" }
 gsim-rules = { path = "../gsim-rules", version = "0.6.0" }
 # The end-of-run summary is written to the JSONL log as well as to the text one, so a tool

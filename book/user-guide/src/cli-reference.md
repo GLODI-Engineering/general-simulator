@@ -4,7 +4,7 @@
 general-simulator <netlist> [--devices <file>] [--mode dc|transient] [--tfinal T]
                    [--dt DT | --dt-max T --dt-min T --dt-init T --reltol R --abstol A]
                    [--max-steps N]
-                   [--format csv|raw] [--out <path>] [--out-every N]
+                   [--format csv|raw|samples] [--out <path>] [--out-every N]
                    [--events <path>] [--events-text <path>]
                    [--checkpoint-out <file>] [--checkpoint-every T] [--resume <file>]
 general-simulator (--help | -h)
@@ -23,8 +23,8 @@ is optional.
 | `--dt-max`/`--dt-min`/`--dt-init` | Override individual defaults of the adaptive step-size controller (`dae_runtime::AdaptiveConfig::from_t_final`), used when `--dt` is omitted. |
 | `--reltol`/`--abstol` | Override the adaptive controller's relative/absolute local-truncation-error tolerances. |
 | `--max-steps N` | Caps how many accepted adaptive steps one run may take (default `10,000,000`) before aborting with `DaeError::AdaptiveStepStalled`. Each accepted step holds a row in memory for the rest of the run, so a stalled controller would otherwise grow memory without limit. Adaptive stepping only — a `--dt` run takes a precomputed number of steps and cannot stall this way. See [Fixed vs. adaptive time stepping](time-stepping.md). |
-| `--format csv\|raw` | Output serialization — see below. Default: `csv`. |
-| `--out <path>` | Destination file for `--format raw`. Ignored for `--format csv` (CSV always goes to stdout). |
+| `--format csv\|raw\|samples` | Output serialization — see below. Default: `csv`. |
+| `--out <path>` | Destination file for `--format raw` and `--format samples`. Ignored for `--format csv` (CSV always goes to stdout). |
 | `--out-every N` | Write only every Nth resolved point. Thins the output, never the computation — see below. Default: `1`. |
 | `--events <path>` | Where the JSONL event stream goes. Default: `<netlist stem>.events.jsonl`, beside the netlist. |
 | `--events-text <path>` | Where its human-readable twin goes, independently of `--events`. Default: `<netlist stem>.events.txt`. Both files are written only for a netlist that declares rules, and a path that cannot be created is an error — see below. |
@@ -114,7 +114,7 @@ A path whose directory does not exist is an error naming the path, and the run d
 Losing the diagnostics channel in silence is the failure these flags exist to fix, so it is not
 something they will do themselves.
 
-## `--format`: CSV vs. SPICE rawfile output
+## `--format`: CSV, SPICE rawfile, or samples
 
 `--format csv` (the default, and the only format this crate produced before `--format raw`
 existed) prints `t,V(node1),V(node2),...,<block names>` to stdout, one row per resolved point —
@@ -129,6 +129,13 @@ terminal, `--format raw` always writes to a file:
 - `--out <path>` names it explicitly, or
 - if `--out` is omitted, it defaults to `<netlist stem>.raw` next to the input file (e.g.
   `general-simulator buck.cir --mode transient --format raw` writes `buck.raw`).
+
+`--format samples` writes the same data again, into a `.gsim_samples` container: each signal
+stored separately, with a precomputed min/max pyramid over it, so a plot reads a screen's worth
+of points rather than the whole run. It follows the same file rule as `--format raw` — `--out
+<path>`, or `<netlist stem>.gsim_samples` beside the input. Reach for it when a run is large
+enough that opening it is the problem; [Runs too large to open](large-runs.md) has the measured
+numbers and says why `--out-every` is not the same thing.
 
 `--out` given alongside `--format csv` is accepted but ignored — CSV output is always to stdout.
 

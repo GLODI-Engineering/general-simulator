@@ -7,6 +7,7 @@
 - [Installing and building](getting-started.md)
 - [Your first netlist](first-netlist.md)
 - [Reading the output](reading-output.md)
+- [Runs too large to open](large-runs.md)
 
 # The netlist and device-file grammar
 

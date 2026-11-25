@@ -338,6 +338,14 @@ struct Waveform {
 enum OutputFormat {
     Csv,
     Raw,
+    /// A `.gsim_samples` container (see the `gsim-samples` crate). The only
+    /// one of the three a viewer can read without loading the run: signals
+    /// are addressable one at a time, time windows are addressable, and a
+    /// min/max pyramid means the points read are set by a screen's budget
+    /// rather than by the length of the run. CSV and the rawfile are both
+    /// row-major, so neither can answer "these five signals over this
+    /// window" without a scan from byte zero.
+    Samples,
 }
 
 /// A `DaeError` as a line a user can act on.
@@ -569,9 +577,10 @@ fn run() -> Result<u8, String> {
     let output_format = match format.as_str() {
         "csv" => OutputFormat::Csv,
         "raw" => OutputFormat::Raw,
+        "samples" => OutputFormat::Samples,
         other => {
             return Err(format!(
-                "unknown --format '{other}' (expected 'csv' or 'raw')"
+                "unknown --format '{other}' (expected 'csv', 'raw' or 'samples')"
             ))
         }
     };
@@ -587,6 +596,17 @@ fn run() -> Result<u8, String> {
         Some(match &out_path {
             Some(p) => PathBuf::from(p),
             None => default_raw_path(netlist_path),
+        })
+    } else {
+        None
+    };
+    // Same rule as the rawfile, for the same reason: a binary container has
+    // nothing to show a terminal, so it needs a destination, and defaulting
+    // to the netlist's own stem keeps `--format samples` a one-flag change.
+    let samples_out_path: Option<PathBuf> = if output_format == OutputFormat::Samples {
+        Some(match &out_path {
+            Some(p) => PathBuf::from(p),
+            None => PathBuf::from(netlist_path).with_extension("gsim_samples"),
         })
     } else {
         None
@@ -869,6 +889,7 @@ fn run() -> Result<u8, String> {
                 output_format,
                 out_every,
                 raw_out_path.as_deref(),
+                samples_out_path.as_deref(),
                 netlist_path,
                 &measurements,
                 declared_rules,
@@ -900,6 +921,11 @@ fn run() -> Result<u8, String> {
         OutputFormat::Raw => {
             let out_path = raw_out_path.expect("raw_out_path is Some when output_format is Raw");
             write_raw_file(&out_path, &out_waveform, plot_name, netlist_path)?;
+        }
+        OutputFormat::Samples => {
+            let out_path =
+                samples_out_path.expect("samples_out_path is Some when output_format is Samples");
+            write_samples_file(&out_path, &out_waveform)?;
         }
     }
 
@@ -950,6 +976,49 @@ fn decimate(waveform: &Waveform, stride: usize) -> Waveform {
         headers: waveform.headers.clone(),
         rows: waveform.rows.iter().step_by(stride).cloned().collect(),
     }
+}
+
+/// Writes a finished waveform to a `.gsim_samples` container.
+///
+/// Only the buffered path reaches this -- a deck with no switches, no blocks
+/// and no rules, whose whole trace is already in memory. Every run large
+/// enough for this format to be the reason you chose it takes the streamed
+/// path instead and never materialises a waveform at all, which is the
+/// point: see `run_transient_streamed`.
+fn write_samples_file(out_path: &Path, waveform: &Waveform) -> Result<(), String> {
+    let file = fs::File::create(out_path)
+        .map_err(|e| format!("creating samples output file {}: {e}", out_path.display()))?;
+    let mut writer = samples_writer_for(BufWriter::new(file), &waveform.headers)
+        .map_err(|e| format!("writing {}: {e}", out_path.display()))?;
+    for row in &waveform.rows {
+        writer
+            .push(row[0], &row[1..])
+            .map_err(|e| format!("writing {}: {e}", out_path.display()))?;
+    }
+    writer
+        .finish()
+        .map_err(|e| format!("writing {}: {e}", out_path.display()))?;
+    Ok(())
+}
+
+/// A samples writer over `sink`, named from a waveform's column headers.
+///
+/// `headers[0]` is the sweep axis by the same convention `Waveform` and both
+/// other writers already use. Units are not carried here because this
+/// solver's column headers do not have any -- the editor's manifest beside
+/// the file is where a unit comes from, and inventing one here would be a
+/// second, disagreeing source for it.
+fn samples_writer_for<W: io::Write>(
+    sink: W,
+    headers: &[String],
+) -> Result<gsim_samples::Writer<W>, gsim_samples::Error> {
+    let sweep = gsim_samples::VectorMeta::new(headers.first().map(String::as_str).unwrap_or("t"));
+    let signals = headers
+        .iter()
+        .skip(1)
+        .map(|name| gsim_samples::VectorMeta::new(name.as_str()))
+        .collect();
+    gsim_samples::Writer::new(sink, sweep, signals)
 }
 
 fn write_raw_file(
@@ -1021,6 +1090,7 @@ fn run_transient_streamed(
     output_format: OutputFormat,
     out_every: usize,
     raw_out_path: Option<&Path>,
+    samples_out_path: Option<&Path>,
     netlist_path: &str,
     measurements: &[measure::MeasureSpec],
     declared_rules: Vec<gsim_rules::Rule>,
@@ -1091,6 +1161,11 @@ fn run_transient_streamed(
     let stdout = io::stdout();
     let mut csv_writer =
         (output_format == OutputFormat::Csv).then(|| BufWriter::new(stdout.lock()));
+
+    // No temporary file and no second pass, unlike the rawfile above: a
+    // `.gsim_samples` footer is written last by design, precisely so that a
+    // run can be streamed into it without knowing its length in advance.
+    let mut samples_writer: Option<gsim_samples::Writer<BufWriter<fs::File>>> = None;
 
     let raw_tmp_path = raw_out_path.map(|p| p.with_extension("raw.tmp"));
     let mut raw_tmp_writer = match &raw_tmp_path {
@@ -1169,6 +1244,18 @@ fn run_transient_streamed(
                     .collect();
                 if let Some(w) = &mut csv_writer {
                     writeln!(w, "{}", h.join(",")).map_err(|e| DaeError::Io(e.to_string()))?;
+                }
+                // Here rather than before the loop because the columns are
+                // not known until the first row resolves: a vector-valued
+                // block signal expands into one column per element, and its
+                // arity comes from that row (see the comment above).
+                if let Some(path) = samples_out_path {
+                    let file = fs::File::create(path)
+                        .map_err(|e| DaeError::Io(format!("creating {}: {e}", path.display())))?;
+                    samples_writer = Some(
+                        samples_writer_for(BufWriter::new(file), &h)
+                            .map_err(|e| DaeError::Io(e.to_string()))?,
+                    );
                 }
                 headers = Some(h);
             }
@@ -1262,6 +1349,10 @@ fn run_transient_streamed(
                 raw_format::write_row(w, &row, row.len())
                     .map_err(|e| DaeError::Io(e.to_string()))?;
             }
+            if let Some(w) = &mut samples_writer {
+                w.push(row[0], &row[1..])
+                    .map_err(|e| DaeError::Io(e.to_string()))?;
+            }
             n_points += 1;
             // Cooperative: the loop finishes this step, leaves normally and still builds the
             // final checkpoint, so the run can be resumed from exactly here.
@@ -1294,6 +1385,13 @@ fn run_transient_streamed(
     if let Some(w) = &mut csv_writer {
         w.flush()
             .map_err(|e| format!("writing CSV to stdout: {e}"))?;
+    }
+
+    if let Some(writer) = samples_writer {
+        let path = samples_out_path.expect("a writer exists only when a path was given");
+        writer
+            .finish()
+            .map_err(|e| format!("writing {}: {e}", path.display()))?;
     }
 
     if let Some(tmp_path) = &raw_tmp_path {
@@ -1504,13 +1602,26 @@ TIME STEPPING                 Fixed or adaptive -- these two groups are mutually
                               Adaptive only. [default: 10000000]
 
 OUTPUT
-    --format csv|raw          `csv` prints to stdout; `raw` writes a binary SPICE rawfile,
-                              which ngspice and PySpice read. [default: csv]
-    --out <path>              Destination for --format raw. Ignored for csv, which always
-                              goes to stdout -- redirect it.
+    --format csv|raw|samples  `csv` prints to stdout; `raw` writes a binary SPICE rawfile,
+                              which ngspice and PySpice read; `samples` writes a
+                              .gsim_samples container. [default: csv]
+                              Pick `samples` for a long run you intend to look at. The
+                              other two are row-major, so plotting five of seventy signals
+                              means reading and parsing all seventy, and showing one
+                              millisecond out of two hundred means scanning from the start.
+                              `samples` stores each signal separately with a min/max
+                              pyramid over it, so a viewer reads a screen's worth of points
+                              whatever the run's length.
+    --out <path>              Destination for --format raw and --format samples. Ignored
+                              for csv, which always goes to stdout -- redirect it.
     --out-every N             Write only every Nth resolved point. Thins the file, never
                               the computation: every step is still taken and kind=measure
                               still sees every point. [default: 1]
+                              Prefer --format samples over this for a run you will plot:
+                              a stride keeps one sample per interval and drops the rest,
+                              so a switching overshoot between two kept points is simply
+                              absent from the file. The pyramid keeps both extremes of
+                              every interval instead, at about 3% of the run's size.
 
 EVENTS
     --events <path>           Where the JSONL event stream goes.
@@ -1558,7 +1669,7 @@ NOTES
 fn usage() -> String {
     "usage: general-simulator <netlist> [--devices <file>] [--mode dc|transient] [--tfinal T] \
      [--dt DT | --dt-max T --dt-min T --dt-init T --reltol R --abstol A] [--max-steps N] \
-     [--format csv|raw] [--out <path>] [--out-every N]\n\
+     [--format csv|raw|samples] [--out <path>] [--out-every N]\n\
      [--events <path>] [--events-text <path>] [--fail-on <severity>]\n\
      [--checkpoint-out <file>] [--checkpoint-every T] [--resume <file>]\n\
      \n\

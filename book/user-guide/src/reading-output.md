@@ -8,6 +8,12 @@ column layout described below applies to both, and running the same netlist with
 is directly comparable row for row, value for value (see `tests/raw-output-python/` for exactly
 that comparison against two independent readers).
 
+There is a third, `--format samples`, which carries the same columns and values but is organised
+so that a viewer can read a few signals over a time window without reading the run. Both formats
+on this page are row-major, which is fine until a run is large enough that plotting it means
+scanning gigabytes to find the five signals you asked for — see
+[Runs too large to open](large-runs.md).
+
 ## Column layout
 
 - **`t`** (CSV) / **`time`** (rawfile — SPICE's own conventional name for the leading axis,
