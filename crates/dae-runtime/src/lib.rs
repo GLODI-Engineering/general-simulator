@@ -589,7 +589,8 @@ pub fn simulate_transient_streamed(
             let steps = (t_final / dt).round() as usize;
             for step_index in 0..steps {
                 t += dt;
-                let forced = step_index == 0 || ringing_cooldown > 0;
+                let fresh_reason = step_index == 0;
+                let forced = fresh_reason || ringing_cooldown > 0;
                 let (point, used_backward_euler) = step_with_fallback(
                     &system,
                     &statements,
@@ -604,11 +605,8 @@ pub fn simulate_transient_streamed(
                     &BTreeMap::new(),
                     &BTreeMap::new(),
                 )?;
-                if used_backward_euler && !forced {
-                    ringing_cooldown = RINGING_COOLDOWN_STEPS;
-                } else if ringing_cooldown > 0 {
-                    ringing_cooldown = ringing_cooldown.saturating_sub(1);
-                }
+                ringing_cooldown =
+                    next_ringing_cooldown(ringing_cooldown, used_backward_euler, fresh_reason);
 
                 prev_segments = Some(classify_segments(&point));
                 prev_diode_raw_ioff = point
@@ -626,7 +624,8 @@ pub fn simulate_transient_streamed(
             let mut step_index = 0usize;
             while t < t_final {
                 let dt_trial = dt_next.min(t_final - t);
-                let forced = step_index == 0 || ringing_cooldown > 0;
+                let fresh_reason = step_index == 0;
+                let forced = fresh_reason || ringing_cooldown > 0;
                 let (point, used_backward_euler, dt_used, next_dt) = step_control::adaptive_step(
                     &system,
                     &statements,
@@ -640,11 +639,8 @@ pub fn simulate_transient_streamed(
                     &config,
                     t,
                 )?;
-                if used_backward_euler && !forced {
-                    ringing_cooldown = RINGING_COOLDOWN_STEPS;
-                } else if ringing_cooldown > 0 {
-                    ringing_cooldown = ringing_cooldown.saturating_sub(1);
-                }
+                ringing_cooldown =
+                    next_ringing_cooldown(ringing_cooldown, used_backward_euler, fresh_reason);
 
                 t += dt_used;
                 dt_next = next_dt;
@@ -703,6 +699,11 @@ fn classify_segments(point: &OperatingPoint) -> Vec<Segment> {
 /// physically reasonable throughout — falling back to backward Euler (which has no such
 /// weakness) the instant this is detected fixes it, consistent with backward Euler already
 /// being this crate's answer to every other kind of transient stiffness.
+///
+/// Known limitation, tracked as issue #116: the test is on each unknown's *sign*, so it only
+/// detects an oscillation that straddles zero. A switching node ringing about a 400 V rail
+/// never changes sign and is invisible here, which is why [`next_ringing_cooldown`]'s job is to
+/// keep the stiff modes settled rather than to rely on this catching them afterwards.
 fn is_ringing(x_prev_prev: &[f64], x_prev: &[f64], trial: &[f64]) -> bool {
     const NOISE_FLOOR: f64 = 1e-9;
     x_prev_prev
@@ -728,6 +729,38 @@ fn is_ringing(x_prev_prev: &[f64], x_prev: &[f64], trial: &[f64]) -> bool {
 /// steps lets the correction actually settle first.
 const RINGING_COOLDOWN_STEPS: u32 = 3;
 
+/// Applies the [`RINGING_COOLDOWN_STEPS`] policy, in one place because all five transient
+/// loops in this crate have to apply it identically (and all five silently did not).
+///
+/// A backward-Euler step restarts the cooldown unless the only thing that put it on backward
+/// Euler was the cooldown itself — which would never let the cooldown end. `fresh_reason` is a
+/// reason known *before* solving that is not the cooldown: the first step of a run, or a gate
+/// state that just changed. A diode segment change and detected ringing are discovered only
+/// after the trapezoidal trial, so they arrive here as `used_backward_euler` with
+/// `fresh_reason` false and the cooldown already at zero.
+///
+/// Restarting the cooldown after a *gate* change, and after the first step, is the correction
+/// for the clamp-overshoot bug. Either used to get exactly one backward-Euler step, after
+/// which trapezoidal resumed on a switching node whose stiff $R_{on} C_{node}$ mode was not
+/// yet settled; being A-stable but not L-stable, trapezoidal then rang on that mode at the
+/// Nyquist frequency about the node's own rail — tens of volts past the clamp its conducting
+/// body diode is supposed to hold it to, and worse at a smaller step, because the smaller the
+/// step the less of that mode the one corrective step removes. The first step is the same
+/// situation for the same reason: `x_initial` need not satisfy the circuit's algebraic
+/// constraints (see [`Scheme::Trapezoidal`]), and one backward-Euler step does not make it
+/// consistent in the stiff modes, only in the slow ones. See `tests/body_diode_clamp.rs`.
+pub(crate) fn next_ringing_cooldown(
+    cooldown: u32,
+    used_backward_euler: bool,
+    fresh_reason: bool,
+) -> u32 {
+    if used_backward_euler && (fresh_reason || cooldown == 0) {
+        RINGING_COOLDOWN_STEPS
+    } else {
+        cooldown.saturating_sub(1)
+    }
+}
+
 /// Solves one timestep, choosing between [`Scheme::Trapezoidal`] and [`Scheme::BackwardEuler`]
 /// the same lagging way [`simulate_transient`] and [`simulate_transient_with_ideal_switches`] both
 /// need: `force_backward_euler` covers reasons known *before* solving (the very first step, a
@@ -738,9 +771,10 @@ const RINGING_COOLDOWN_STEPS: u32 = 3;
 /// detected — the existing `force_backward_euler` on the very first step, plus ringing needing
 /// at least one full oscillation to show its signature, means this is never a gap in practice.
 ///
-/// Returns `(point, used_backward_euler)` — callers use the flag to drive a
-/// [`RINGING_COOLDOWN_STEPS`]-step cooldown after any backward-Euler fallback (not just a
-/// ringing-triggered one — a segment or gate change deserves the same settling courtesy).
+/// Returns `(point, used_backward_euler)` — callers pass the flag to
+/// [`next_ringing_cooldown`], which drives a [`RINGING_COOLDOWN_STEPS`]-step cooldown after any
+/// backward-Euler fallback (not just a ringing-triggered one — a segment or gate change
+/// deserves the same settling courtesy, and not giving a gate change one was a bug).
 #[allow(clippy::too_many_arguments)]
 fn step_with_fallback(
     system: &MnaSystem,
@@ -894,8 +928,13 @@ pub fn simulate_transient_with_ideal_switches(
             .iter()
             .map(|(name, (_, state))| (name.clone(), *state))
             .collect();
-        let gate_changed = prev_gate_states.as_ref() != Some(&gate_states);
-        let forced = step_index == 0 || gate_changed || ringing_cooldown > 0;
+        // A genuine mid-run transition: on the very first step there is no previous gate
+        // state to have changed from, and `step_index == 0` already forces that step.
+        let gate_changed = prev_gate_states
+            .as_ref()
+            .is_some_and(|previous| previous != &gate_states);
+        let fresh_reason = step_index == 0 || gate_changed;
+        let forced = fresh_reason || ringing_cooldown > 0;
 
         let (system, all_diodes) =
             build_with_ideal_switches(&statements, dialect, diodes, &states, shared_r_on)?;
@@ -913,11 +952,8 @@ pub fn simulate_transient_with_ideal_switches(
             &BTreeMap::new(),
             &BTreeMap::new(),
         )?;
-        if used_backward_euler && !forced {
-            ringing_cooldown = RINGING_COOLDOWN_STEPS;
-        } else if ringing_cooldown > 0 {
-            ringing_cooldown = ringing_cooldown.saturating_sub(1);
-        }
+        ringing_cooldown =
+            next_ringing_cooldown(ringing_cooldown, used_backward_euler, fresh_reason);
 
         prev_segments = Some(classify_segments(&point));
         prev_gate_states = Some(gate_states);

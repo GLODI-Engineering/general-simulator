@@ -45,7 +45,7 @@ use pwl_devices::{IdealDiode, IdealSwitch};
 use crate::checkpoint::{BlockSnapshot, Checkpoint, PointSnapshot, SignalSnapshot};
 use crate::{
     classify_segments, sawtooth_carrier, step_control, step_with_fallback, DaeError, GateState,
-    OperatingPoint, Segment, TimeStep, RINGING_COOLDOWN_STEPS,
+    OperatingPoint, Segment, TimeStep,
 };
 
 use general_mna::block_graph::block_kind_name;
@@ -2815,8 +2815,13 @@ pub fn simulate_transient_with_blocks_checkpointed(
                         )
                     })
                     .collect();
-                let gate_changed = prev_gate_states.as_ref() != Some(&gate_states);
-                let forced = step_index == 0 || gate_changed || ringing_cooldown > 0;
+                // A genuine mid-run transition: on the very first step there is no previous gate
+                // state to have changed from, and `step_index == 0` already forces that step.
+                let gate_changed = prev_gate_states
+                    .as_ref()
+                    .is_some_and(|previous| previous != &gate_states);
+                let fresh_reason = step_index == 0 || gate_changed;
+                let forced = fresh_reason || ringing_cooldown > 0;
 
                 let (system, all_diodes) = crate::build_with_ideal_switches(
                     &statements,
@@ -2839,11 +2844,11 @@ pub fn simulate_transient_with_blocks_checkpointed(
                     &scalar_only(&outputs),
                     &scalar_only(&prev_outputs),
                 )?;
-                if used_backward_euler && !forced {
-                    ringing_cooldown = RINGING_COOLDOWN_STEPS;
-                } else if ringing_cooldown > 0 {
-                    ringing_cooldown = ringing_cooldown.saturating_sub(1);
-                }
+                ringing_cooldown = crate::next_ringing_cooldown(
+                    ringing_cooldown,
+                    used_backward_euler,
+                    fresh_reason,
+                );
 
                 prev_segments = Some(classify_segments(&point));
                 prev_gate_states = Some(gate_states);
@@ -2933,8 +2938,13 @@ pub fn simulate_transient_with_blocks_checkpointed(
                             )
                         })
                         .collect();
-                    let gate_changed = prev_gate_states.as_ref() != Some(&gate_states);
-                    let forced = step_index == 0 || gate_changed || ringing_cooldown > 0;
+                    // A genuine mid-run transition: on the very first step there is no previous gate
+                    // state to have changed from, and `step_index == 0` already forces that step.
+                    let gate_changed = prev_gate_states
+                        .as_ref()
+                        .is_some_and(|previous| previous != &gate_states);
+                    let fresh_reason = step_index == 0 || gate_changed;
+                    let forced = fresh_reason || ringing_cooldown > 0;
 
                     let (system, all_diodes) = crate::build_with_ideal_switches(
                         &statements,
@@ -2964,11 +2974,11 @@ pub fn simulate_transient_with_blocks_checkpointed(
                         continue;
                     }
 
-                    if attempt.used_backward_euler && !forced {
-                        ringing_cooldown = RINGING_COOLDOWN_STEPS;
-                    } else if ringing_cooldown > 0 {
-                        ringing_cooldown = ringing_cooldown.saturating_sub(1);
-                    }
+                    ringing_cooldown = crate::next_ringing_cooldown(
+                        ringing_cooldown,
+                        attempt.used_backward_euler,
+                        fresh_reason,
+                    );
 
                     block_states = trial_block_states;
                     t = t_candidate;

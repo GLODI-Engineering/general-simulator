@@ -22,10 +22,7 @@ use continuous_blocks::StateSpace;
 use general_spice_core::Dialect;
 use pwl_devices::{IdealDiode, IdealSwitch};
 
-use crate::{
-    classify_segments, step_with_fallback, DaeError, GateState, OperatingPoint, Segment,
-    RINGING_COOLDOWN_STEPS,
-};
+use crate::{classify_segments, step_with_fallback, DaeError, GateState, OperatingPoint, Segment};
 
 /// A free-running sawtooth PWM carrier in `[0, 1)` at frequency `freq_hz`. Compare a duty
 /// command (also `[0, 1]`) against this to decide gate state: on while the carrier is below
@@ -153,8 +150,13 @@ pub fn simulate_closed_loop(
                 )
             })
             .collect();
-        let gate_changed = prev_gate_states.as_ref() != Some(&gate_states);
-        let forced = step_index == 0 || gate_changed || ringing_cooldown > 0;
+        // A genuine mid-run transition: on the very first step there is no previous gate
+        // state to have changed from, and `step_index == 0` already forces that step.
+        let gate_changed = prev_gate_states
+            .as_ref()
+            .is_some_and(|previous| previous != &gate_states);
+        let fresh_reason = step_index == 0 || gate_changed;
+        let forced = fresh_reason || ringing_cooldown > 0;
 
         let (system, all_diodes) =
             crate::build_with_ideal_switches(&statements, dialect, diodes, &states, shared_r_on)?;
@@ -172,11 +174,8 @@ pub fn simulate_closed_loop(
             &BTreeMap::new(),
             &BTreeMap::new(),
         )?;
-        if used_backward_euler && !forced {
-            ringing_cooldown = RINGING_COOLDOWN_STEPS;
-        } else if ringing_cooldown > 0 {
-            ringing_cooldown = ringing_cooldown.saturating_sub(1);
-        }
+        ringing_cooldown =
+            crate::next_ringing_cooldown(ringing_cooldown, used_backward_euler, fresh_reason);
 
         prev_segments = Some(classify_segments(&point));
         prev_gate_states = Some(gate_states);

@@ -58,6 +58,22 @@ Each condition in the conjunction exists to rule out one specific false positive
 one of the three would either miss real ringing or misfire on ordinary transient behavior that
 happens to cross zero.
 
+### What this heuristic cannot see
+
+The test is on the *sign* of the raw unknown, so it only detects an oscillation that straddles
+zero. A switching node ringing about a $400\text{V}$ or $800\text{V}$ rail — the ordinary case
+in a converter, as opposed to the floating dead-time node this detector was written for — never
+changes sign, and `is_ringing` is blind to it however badly it oscillates. That blindness is a
+known, deliberate limitation rather than an oversight to be fixed in passing: the offset-invariant
+signature is sign alternation of the *increments* $x_{n} - x_{n-1}$, and three samples cannot tell
+that apart from one ordinary turning point of a smooth waveform, so a detector built on it needs
+a fourth sample of history and a discriminator that is not simply a magnitude ratio. It is
+tracked as issue #116.
+
+What makes the blindness survivable is the policy below: the cooldown keeps the solver on
+backward Euler long enough after each fresh excitation that the mode is settled before
+trapezoidal is trusted again, so the detector is a backstop rather than the primary defence.
+
 ## The full per-step decision policy
 
 Two genuinely different classes of trigger drive the fallback, one knowable *before* solving a
@@ -79,12 +95,44 @@ just-computed trapezoidal trial and redoes the *same* step with backward Euler i
 
 ## The cooldown: why one corrective step isn't enough
 
-`RINGING_COOLDOWN_STEPS = 3` (`crates/dae-runtime/src/lib.rs:610`). Any unforced fallback to
-backward Euler — segment change or detected ringing, not the already-forced first-step/gate-change
-cases — sets `ringing_cooldown = RINGING_COOLDOWN_STEPS`
-(`crates/dae-runtime/src/block_graph.rs:2439-2440`, `:2533-2534`), and every step while
-`ringing_cooldown > 0` is itself forced to backward Euler, decrementing the counter by one each
-step until it reaches zero and trapezoidal resumes being tried.
+`RINGING_COOLDOWN_STEPS = 3`. Every backward-Euler step taken for a *fresh* reason — the first
+step of a run, a gate state that just changed, a diode segment change, or detected ringing —
+sets `ringing_cooldown = RINGING_COOLDOWN_STEPS`, and every step while `ringing_cooldown > 0` is
+itself forced to backward Euler, decrementing the counter by one each step until it reaches zero
+and trapezoidal resumes being tried. The one case that must *not* restart the counter is a
+backward-Euler step the cooldown itself forced, or the cooldown could never end; all five
+transient loops in `dae-runtime` get that distinction from the single function
+`next_ringing_cooldown`, which exists because when each loop spelled the policy out for itself,
+all five spelled it out wrong in the same way.
+
+### The wrong way this was spelled out, and what it cost
+
+Until the fix, the condition was "an *unforced* fallback restarts the cooldown" — which excluded
+exactly the two reasons already known before solving, the first step of a run and a gate change.
+A gate transition therefore got precisely one backward-Euler step, and trapezoidal resumed
+immediately on a switching node whose stiff mode was not settled.
+
+That mode is the one formed by a conducting switch's resistance and the capacitance on its node,
+$\tau = R_{on} C_{node}$, which is picoseconds to a nanosecond in a real converter — orders of
+magnitude below any transient step size. Backward Euler's amplification factor for it,
+$1 / (1 + \Delta t / \tau)$, removes essentially all of it in one step when
+$\Delta t \gg \tau$, which is why a single step was enough to hide the defect at coarse steps.
+Trapezoidal's, $(1 - \Delta t / 2\tau) / (1 + \Delta t / 2\tau)$, sits just inside $-1$ in the
+same regime: whatever the one corrective step left behind then flipped sign every step and barely
+decayed, about the node's own rail, where the sign test in `is_ringing` could not see it.
+
+The result was a switching node sitting tens of volts outside the window its own body diodes
+clamp it to — a voltage-stress figure read off such a run was simply wrong — and *worse* at a
+smaller step, because the smaller the step the less of the stiff mode that one corrective step
+removed. `crates/dae-runtime/tests/body_diode_clamp.rs` pins it with a three-leg bridge whose
+legs carry $174\text{pF}$, $1.65\text{nF}$ and $16.5\text{nF}$ across each switch, so that the
+three $\tau$ values are three decades apart and *some* leg is mishandled at every step size
+tested. Before the fix its nodes reached $427.9\text{V}$, $428.1\text{V}$ and $428.1\text{V}$ at
+$5\text{ns}$, $0.5\text{ns}$ and $0.05\text{ns}$ against a $400\text{V}$ rail whose clamp is
+$401\text{V}$ — a different leg each time — and dipped to $-25.9\text{V}$ against a $-1.0\text{V}$
+clamp. With the cooldown applied after a gate change they stay within $400.2\text{V}$ to
+$400.6\text{V}$, and the same node's peak varies by under $0.1\text{V}$ across all three step
+sizes.
 
 The reasoning is stated directly on `RINGING_COOLDOWN_STEPS`'s own doc comment
 (`lib.rs:602-609`): a single corrective backward-Euler step pulls the ringing mode's *value* back

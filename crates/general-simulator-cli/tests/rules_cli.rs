@@ -422,7 +422,13 @@ fn a_rating_is_a_limit_on_magnitude_not_on_signed_value() {
         "a reverse overload is an overload"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("-4.3831 A"), "{stderr}");
+    // $i(t) = (V/R)\left(1 - e^{-tR/L}\right)$ gives $12\left(1 - e^{-0.4545}\right) = 4.3835$
+    // A at the end of the run: the sign and the magnitude are what this test is about. The
+    // digits past those are the integrator's own truncation error and are not — the reported
+    // peak moved from `-4.3831` to `-4.3829` when the backward-Euler settling cooldown was
+    // extended to the first step of a run (see `dae_runtime::next_ringing_cooldown`), a 5e-5
+    // relative change that a rules test has no business pinning.
+    assert!(stderr.contains("-4.38"), "{stderr}");
 }
 
 #[test]
