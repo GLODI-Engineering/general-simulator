@@ -1,0 +1,22 @@
+* Both kinds of signal in one deck, for the signal-metadata convention
+* (book/user-guide/src/signal-metadata.md).
+*
+*  - V(a)/V(b)/V(d), I(V1)/I(V2)/I(L1): circuit quantities, volts and amps.
+*  - DUTY, SCALED: signal-flow values. 0.42 is a duty cycle; nothing in the
+*    netlist says what unit it has, and nothing may invent one.
+*  - VPROBE, IPROBE: phys2sig, which names the node and the branch it reads,
+*    so the netlist does fix their units.
+*  - DRIVE: sig2phys, which declares the domain it drives, likewise.
+V1 a 0 5
+R1 a b 1k
+R2 b 0 1k
+L1 b 0 1e-3
+VPROBE kind=phys2sig node=b
+IPROBE kind=phys2sig branch=L1
+DUTY kind=const value=0.42
+SCALED kind=gain in=DUTY k=2
+DRIVE kind=sig2phys domain=voltage in=SCALED
+V2 d 0 DRIVE
+R3 d 0 1k
+MDUTY kind=measure type=avg out=DUTY
+MVB kind=measure type=avg out=V(b)

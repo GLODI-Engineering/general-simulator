@@ -14,6 +14,11 @@ on this page are row-major, which is fine until a run is large enough that plott
 scanning gigabytes to find the five signals you asked for — see
 [Runs too large to open](large-runs.md).
 
+None of the names below carries a unit, and none of them is meant to be read for one: `V(out)` is
+volts and `DUTY` is a fraction of a period, and which is which comes from the metadata beside the
+name, not from the name. `--format samples` carries that metadata; the CSV, deliberately, does
+not. See [What a signal is, beside its name](signal-metadata.md).
+
 ## Column layout
 
 - **`t`** (CSV) / **`time`** (rawfile — SPICE's own conventional name for the leading axis,

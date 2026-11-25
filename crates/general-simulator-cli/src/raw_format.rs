@@ -44,6 +44,9 @@ use std::io::{self, Write};
 /// or a block/vector-signal name), `values[i]` is that column's value at point `i`.
 pub struct Waveform<'a> {
     pub names: &'a [String],
+    /// What each column is, in `names` order -- the source of the `Variables:` type strings,
+    /// so this writer never reads a name to decide one. See this module's doc comment.
+    pub quantities: &'a [crate::signal_meta::Quantity],
     /// `rows[point][column]` — same shape as the CSV body, one row per resolved timestep (or a
     /// single row for `--mode dc`).
     pub rows: &'a [Vec<f64>],
@@ -52,19 +55,6 @@ pub struct Waveform<'a> {
     /// resolves the same analysis kind this run actually performed.
     pub plot_name: &'static str,
     pub title: &'a str,
-}
-
-/// The SPICE rawfile `Variables:` type string for a given CSV column name — see this module's
-/// own "Variable-type compatibility caveat" doc section above for why every non-`V`/`I` column
-/// (including the leading time axis, handled separately by the caller) falls back to `voltage`.
-fn variable_type(name: &str) -> &'static str {
-    if name.starts_with("V(") {
-        "voltage"
-    } else if name.starts_with("I(") {
-        "current"
-    } else {
-        "voltage"
-    }
 }
 
 /// Writes `waveform` as a binary SPICE rawfile to `w`. `waveform.names[0]` is expected to be the
@@ -84,6 +74,7 @@ pub fn write_raw<W: Write>(w: &mut W, waveform: &Waveform) -> io::Result<()> {
     write_header(
         w,
         waveform.names,
+        waveform.quantities,
         waveform.rows.len(),
         waveform.plot_name,
         waveform.title,
@@ -103,10 +94,16 @@ pub fn write_raw<W: Write>(w: &mut W, waveform: &Waveform) -> io::Result<()> {
 pub fn write_header<W: Write>(
     w: &mut W,
     names: &[String],
+    quantities: &[crate::signal_meta::Quantity],
     n_points: usize,
     plot_name: &str,
     title: &str,
 ) -> io::Result<()> {
+    debug_assert_eq!(
+        names.len(),
+        quantities.len(),
+        "every column must be classified"
+    );
     writeln!(w, "Title: {title}")?;
     writeln!(w, "Date: {}", now_unix_seconds())?;
     writeln!(w, "Plotname: {plot_name}")?;
@@ -118,7 +115,11 @@ pub fn write_header<W: Write>(
         if i == 0 {
             writeln!(w, "\t{i}\ttime\ttime")?;
         } else {
-            writeln!(w, "\t{i}\t{name}\t{}", variable_type(name))?;
+            let quantity = quantities
+                .get(i)
+                .copied()
+                .unwrap_or(crate::signal_meta::Quantity::Signal);
+            writeln!(w, "\t{i}\t{name}\t{}", quantity.raw_variable_type())?;
         }
     }
     writeln!(w, "Binary:")?;
@@ -168,8 +169,14 @@ mod tests {
             vec![0.1, 1.1, -0.4],
             vec![0.2, 1.2, -0.3],
         ];
+        let quantities = vec![
+            crate::signal_meta::Quantity::Time,
+            crate::signal_meta::Quantity::Voltage,
+            crate::signal_meta::Quantity::Current,
+        ];
         let waveform = Waveform {
             names: &names,
+            quantities: &quantities,
             rows: &rows,
             plot_name: "Transient Analysis",
             title: "round_trip_test",
@@ -215,11 +222,38 @@ mod tests {
         }
     }
 
+    /// A signal-flow column has to be written as `voltage` here, and only here -- the format
+    /// has no generic type and the readers reject an invented one. What changed is where the
+    /// answer comes from: the column's classification rather than the spelling of its name.
     #[test]
-    fn variable_type_falls_back_to_voltage_for_non_circuit_columns() {
-        assert_eq!(variable_type("V(out)"), "voltage");
-        assert_eq!(variable_type("I(V1)"), "current");
-        assert_eq!(variable_type("PID1"), "voltage");
-        assert_eq!(variable_type("CLARKE_beta"), "voltage");
+    fn a_signal_flow_column_is_written_as_voltage_because_the_format_has_no_other_type() {
+        use crate::signal_meta::Quantity;
+        let names = vec![
+            "t".to_string(),
+            "V(a)".to_string(),
+            "PID1".to_string(),
+            "I(V1)".to_string(),
+        ];
+        let quantities = vec![
+            Quantity::Time,
+            Quantity::Voltage,
+            Quantity::Signal,
+            Quantity::Current,
+        ];
+        let mut buf = Vec::new();
+        write_header(
+            &mut buf,
+            &names,
+            &quantities,
+            0,
+            "Transient Analysis",
+            "types_test",
+        )
+        .unwrap();
+        let header = std::str::from_utf8(&buf).unwrap();
+        assert!(header.contains("\t0\ttime\ttime\n"), "{header}");
+        assert!(header.contains("\t1\tV(a)\tvoltage\n"), "{header}");
+        assert!(header.contains("\t2\tPID1\tvoltage\n"), "{header}");
+        assert!(header.contains("\t3\tI(V1)\tcurrent\n"), "{header}");
     }
 }

@@ -123,6 +123,30 @@ pub fn level_numbers(rows: u32, level: u32, factor: u32) -> u32 {
 ///
 /// Mirrors the vector fields of `.gsim_sim_result` so a manifest can be
 /// written beside one of these files without translating names.
+///
+/// ## What goes in the fields
+///
+/// These four fields are the whole of the signal-metadata convention — see
+/// `book/user-guide/src/signal-metadata.md` for the convention itself, and
+/// `general-simulator-cli`'s `signal_meta` module for the producer side. In
+/// short:
+///
+/// - `name` is an interface and carries no unit. It is what a
+///   `kind=measure` statement, a script or a CSV header says, and nothing
+///   about a quantity's nature is encoded into it.
+/// - `quantity` is what kind of thing this is, from a closed vocabulary:
+///   `time`, `voltage`, `current`, `signal`. `signal` is a signal-flow
+///   value — a duty cycle, an angle, a controller output — and is a
+///   positive statement, not a fallback.
+/// - `unit` is the SI symbol (`s`, `V`, `A`) and is **empty when it is not
+///   known**. Empty never means dimensionless; a dimensionless value says
+///   so through `quantity`. A writer that cannot be sure of a unit leaves
+///   this empty rather than offering a plausible one.
+/// - `analysis` is which analysis produced the run: `transient`, `dc`.
+///
+/// A reader may treat an unrecognised `quantity` the same way it treats an
+/// empty one — as "not known" — so the vocabulary can grow without breaking
+/// anything that already reads these files.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct VectorMeta {
     pub name: String,
@@ -144,6 +168,16 @@ impl VectorMeta {
 
     pub fn with_unit(mut self, unit: impl Into<String>) -> Self {
         self.unit = unit.into();
+        self
+    }
+
+    pub fn with_quantity(mut self, quantity: impl Into<String>) -> Self {
+        self.quantity = quantity.into();
+        self
+    }
+
+    pub fn with_analysis(mut self, analysis: impl Into<String>) -> Self {
+        self.analysis = analysis.into();
         self
     }
 }

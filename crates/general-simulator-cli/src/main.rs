@@ -300,6 +300,7 @@ mod finite;
 mod measure;
 mod raw_format;
 mod rules;
+mod signal_meta;
 mod static_checks;
 
 use std::collections::BTreeMap;
@@ -930,7 +931,16 @@ fn run() -> Result<u8, String> {
         OutputFormat::Samples => {
             let out_path =
                 samples_out_path.expect("samples_out_path is Some when output_format is Samples");
-            write_samples_file(&out_path, &out_waveform)?;
+            // Every column after `t` here is an MNA unknown: this path is `--mode dc`, which
+            // runs no block graph at all.
+            let circuit_unknowns = out_waveform.headers.len().saturating_sub(1);
+            write_samples_file(
+                &out_path,
+                &out_waveform,
+                circuit_unknowns,
+                &[],
+                signal_meta::Analysis::Dc,
+            )?;
         }
     }
 
@@ -990,10 +1000,18 @@ fn decimate(waveform: &Waveform, stride: usize) -> Waveform {
 /// enough for this format to be the reason you chose it takes the streamed
 /// path instead and never materialises a waveform at all, which is the
 /// point: see `run_transient_streamed`.
-fn write_samples_file(out_path: &Path, waveform: &Waveform) -> Result<(), String> {
+fn write_samples_file(
+    out_path: &Path,
+    waveform: &Waveform,
+    circuit_unknowns: usize,
+    blocks: &[BlockInstance],
+    analysis: signal_meta::Analysis,
+) -> Result<(), String> {
     let file = fs::File::create(out_path)
         .map_err(|e| format!("creating samples output file {}: {e}", out_path.display()))?;
-    let mut writer = samples_writer_for(BufWriter::new(file), &waveform.headers)
+    let (sweep, signals) =
+        signal_meta::vector_meta(&waveform.headers, circuit_unknowns, blocks, analysis);
+    let mut writer = gsim_samples::Writer::new(BufWriter::new(file), sweep, signals)
         .map_err(|e| format!("writing {}: {e}", out_path.display()))?;
     for row in &waveform.rows {
         writer
@@ -1006,26 +1024,6 @@ fn write_samples_file(out_path: &Path, waveform: &Waveform) -> Result<(), String
     Ok(())
 }
 
-/// A samples writer over `sink`, named from a waveform's column headers.
-///
-/// `headers[0]` is the sweep axis by the same convention `Waveform` and both
-/// other writers already use. Units are not carried here because this
-/// solver's column headers do not have any -- the editor's manifest beside
-/// the file is where a unit comes from, and inventing one here would be a
-/// second, disagreeing source for it.
-fn samples_writer_for<W: io::Write>(
-    sink: W,
-    headers: &[String],
-) -> Result<gsim_samples::Writer<W>, gsim_samples::Error> {
-    let sweep = gsim_samples::VectorMeta::new(headers.first().map(String::as_str).unwrap_or("t"));
-    let signals = headers
-        .iter()
-        .skip(1)
-        .map(|name| gsim_samples::VectorMeta::new(name.as_str()))
-        .collect();
-    gsim_samples::Writer::new(sink, sweep, signals)
-}
-
 fn write_raw_file(
     out_path: &Path,
     waveform: &Waveform,
@@ -1035,8 +1033,16 @@ fn write_raw_file(
     let file = fs::File::create(out_path)
         .map_err(|e| format!("creating raw output file {}: {e}", out_path.display()))?;
     let mut writer = BufWriter::new(file);
+    // `--mode dc` is the only caller that still materialises a whole waveform, and it has no
+    // blocks, so every column after `t` is an MNA unknown.
+    let quantities = signal_meta::quantities(
+        &waveform.headers,
+        waveform.headers.len().saturating_sub(1),
+        &[],
+    );
     let rendered = raw_format::Waveform {
         names: &waveform.headers,
+        quantities: &quantities,
         rows: &waveform.rows,
         plot_name,
         title: netlist_path,
@@ -1180,6 +1186,9 @@ fn run_transient_streamed(
     // already report as an error today; this function doesn't special-case it.
     let mut referenced_index: Vec<(String, usize)> = Vec::new();
     let mut headers: Option<Vec<String>> = None;
+    // What each of those columns is, resolved alongside them in the same first-row branch --
+    // see `signal_meta`.
+    let mut quantities: Option<Vec<signal_meta::Quantity>> = None;
 
     let stdout = io::stdout();
     let mut csv_writer =
@@ -1255,11 +1264,18 @@ fn run_transient_streamed(
             // not known until the first row resolves: a vector-valued
             // block signal expands into one column per element, and its
             // arity comes from that row (see the comment above).
+            quantities = Some(signal_meta::quantities(&h, point.unknowns.len(), blocks));
             if let Some(path) = samples_out_path {
                 let file = fs::File::create(path)
                     .map_err(|e| DaeError::Io(format!("creating {}: {e}", path.display())))?;
+                let (sweep, signals) = signal_meta::vector_meta(
+                    &h,
+                    point.unknowns.len(),
+                    blocks,
+                    signal_meta::Analysis::Transient,
+                );
                 samples_writer = Some(
-                    samples_writer_for(BufWriter::new(file), &h)
+                    gsim_samples::Writer::new(BufWriter::new(file), sweep, signals)
                         .map_err(|e| DaeError::Io(e.to_string()))?,
                 );
             }
@@ -1437,12 +1453,16 @@ fn run_transient_streamed(
         drop(raw_tmp_writer);
         let out_path = raw_out_path.expect("raw_out_path is Some when raw_tmp_path is Some");
         let final_headers = headers.clone().unwrap_or_else(|| vec!["t".to_string()]);
+        let final_quantities = quantities
+            .clone()
+            .unwrap_or_else(|| vec![signal_meta::Quantity::Time]);
         let file = fs::File::create(out_path)
             .map_err(|e| format!("creating raw output file {}: {e}", out_path.display()))?;
         let mut writer = BufWriter::new(file);
         raw_format::write_header(
             &mut writer,
             &final_headers,
+            &final_quantities,
             n_points,
             "Transient Analysis",
             netlist_path,
