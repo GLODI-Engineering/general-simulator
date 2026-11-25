@@ -517,6 +517,11 @@ pub(crate) fn resolve_initial_state(
     }
 }
 
+/// Every accepted step of a transient run, collected.
+///
+/// A thin wrapper over [`simulate_transient_streamed`]. Prefer that one unless
+/// the whole run is genuinely needed at once -- see its doc comment for what
+/// this one costs on a long run.
 pub fn simulate_transient(
     source: &str,
     dialect: Dialect,
@@ -525,6 +530,47 @@ pub fn simulate_transient(
     t_final: f64,
     step: TimeStep,
 ) -> Result<Vec<(f64, OperatingPoint)>, DaeError> {
+    let mut trace = Vec::new();
+    simulate_transient_streamed(
+        source,
+        dialect,
+        diodes,
+        x_initial,
+        t_final,
+        step,
+        |t, point| {
+            trace.push((t, point.clone()));
+            Ok(())
+        },
+    )?;
+    Ok(trace)
+}
+
+/// [`simulate_transient`] without the trace: each accepted step is handed to
+/// `on_step` and then dropped.
+///
+/// The collecting form is a thin wrapper over this one and exists for callers
+/// that genuinely want the whole run in memory -- tests, and anything that has
+/// to look backwards. Nothing that writes a run to a file should:
+/// `Vec<(f64, OperatingPoint)>` is the entire simulation plus an allocation per
+/// step, so a two-million-step run of a four-unknown deck peaked at 1.36 GB
+/// where streaming the same run peaks at 4 MB. What that removes is not a
+/// theoretical limit: it is the difference between a long sweep of a plain
+/// linear deck running at all and the process dying (#106).
+///
+/// `on_step` takes the step's time and operating point by reference and may
+/// return an error to abort the run. The error propagates unchanged, so a
+/// writer's I/O failure stops the simulation instead of being discovered after
+/// it has finished.
+pub fn simulate_transient_streamed(
+    source: &str,
+    dialect: Dialect,
+    diodes: &BTreeMap<String, IdealDiode>,
+    x_initial: Option<&[f64]>,
+    t_final: f64,
+    step: TimeStep,
+    mut on_step: impl FnMut(f64, &OperatingPoint) -> Result<(), DaeError>,
+) -> Result<(), DaeError> {
     let statements = general_mna::parse_and_flatten(source, dialect).map_err(DaeError::Parse)?;
     let system = MnaBuilder::new(dialect)
         .build_statements(&statements)
@@ -536,13 +582,11 @@ pub fn simulate_transient(
     let mut prev_segments: Option<Vec<Segment>> = None;
     let mut ringing_cooldown: u32 = 0;
 
-    let mut trace = Vec::new();
     let mut t = 0.0;
 
     match step {
         TimeStep::Fixed(dt) => {
             let steps = (t_final / dt).round() as usize;
-            trace.reserve(steps);
             for step_index in 0..steps {
                 t += dt;
                 let forced = step_index == 0 || ringing_cooldown > 0;
@@ -574,7 +618,7 @@ pub fn simulate_transient(
                     .zip(point.diode_raw_ioff.iter().copied())
                     .collect();
                 x_prev_prev = Some(std::mem::replace(&mut x_prev, point.x.clone()));
-                trace.push((t, point));
+                on_step(t, &point)?;
             }
         }
         TimeStep::Adaptive(config) => {
@@ -612,12 +656,12 @@ pub fn simulate_transient(
                     .zip(point.diode_raw_ioff.iter().copied())
                     .collect();
                 x_prev_prev = Some(std::mem::replace(&mut x_prev, point.x.clone()));
-                trace.push((t, point));
+                on_step(t, &point)?;
                 step_index += 1;
             }
         }
     }
-    Ok(trace)
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
