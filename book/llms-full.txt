@@ -263,6 +263,12 @@ column layout described below applies to both, and running the same netlist with
 is directly comparable row for row, value for value (see `tests/raw-output-python/` for exactly
 that comparison against two independent readers).
 
+There is a third, `--format samples`, which carries the same columns and values but is organised
+so that a viewer can read a few signals over a time window without reading the run. Both formats
+on this page are row-major, which is fine until a run is large enough that plotting it means
+scanning gigabytes to find the five signals you asked for — see
+[Runs too large to open](large-runs.md).
+
 ## Column layout
 
 - **`t`** (CSV) / **`time`** (rawfile — SPICE's own conventional name for the leading axis,
@@ -365,6 +371,112 @@ was cross-validated against — see `tests/raw-output-python/`).
 - `crates/general-simulator-cli/src/raw_format.rs`'s module doc comment.
 - Any internal validation experiment's `plot_*.py` as a concrete worked example of
   parsing the CSV (e.g. the plotting script from an internal three-phase PFC experiment).
+
+
+<!-- User Guide / Runs too large to open -->
+
+# Runs too large to open: `--format samples`
+
+A power-electronics run gets large quickly. A 5 ns step over one 20 ms grid
+period is four million rows; seventy signals at that length is about a
+gigabyte of samples, and ten grid periods is ten. The question is not whether
+the solver can produce that — it can, and streams it — but whether anything
+can then look at it.
+
+CSV and the SPICE rawfile cannot. Both are **row-major**: every signal at one
+time step sits together, so the samples of any one signal are scattered the
+whole length of the file. CSV is worse again, because its fields are
+variable-width text, so the byte offset of a given signal at a given step is
+not computable from anything. Finding it means scanning from the start,
+counting separators.
+
+Two consequences, and both are the reason this page exists:
+
+- **Plotting five of seventy signals costs what plotting all seventy costs.**
+  There is no way to skip the sixty-five you did not ask for.
+- **Showing one millisecond out of two hundred costs a full scan** too.
+
+Measured, on a real 121 MB result with 69 signals: pulling five columns out
+with `awk` takes 2.5 s and touches all 121 MB. That rate puts a 1 GB run at
+about 21 s and a 10 GB run at three and a half minutes — per redraw, every
+time you pan or zoom, unless whatever is plotting holds the parsed samples in
+memory, which at these sizes is the problem you were trying to avoid.
+
+## What `--format samples` does instead
+
+```bash
+general-simulator buck.cir --mode transient --tfinal 20e-3 --dt 5e-9 \
+    --format samples --out buck.gsim_samples
+```
+
+The container it writes is described in full by the `gsim-samples` crate's
+own documentation. Three properties matter here.
+
+**Each signal is stored separately.** Reading five of seventy touches five
+signals' bytes.
+
+**Offsets are arithmetic.** Rows are written in fixed-size stripes of
+identical geometry, and a directory of one entry per stripe maps a time
+window to stripes without reading a sample. Finding a window is a
+calculation, not a search.
+
+**Every stripe carries a min/max pyramid over its own samples.** Each level
+folds 64 samples of the one below into their minimum and maximum, so a
+reader can take a level whose density matches the screen instead of the
+run. The pyramid costs about 3% of the file.
+
+Those extremes are the point, not an implementation detail. A plot 1500
+pixels wide can distinguish about 3000 points; everything beyond that is
+read, paid for and not seen. But *which* 3000 matters enormously: a
+switching overshoot lasting one time step has to survive the reduction, and
+it only does if each interval contributes its extremes rather than its mean
+or whichever sample a stride happened to land on.
+
+## Why not `--out-every`
+
+`--out-every N` keeps every Nth resolved point and drops the rest. It makes
+the file smaller and it is the wrong tool for a waveform you intend to look
+at: an overshoot between two kept points is simply not in the file, and
+nothing downstream can tell that it ever happened. The run saw it, the file
+does not.
+
+`--format samples` keeps every sample at level 0 *and* the extremes of every
+interval above it. Zoom in and the real samples are there; zoom out and the
+peaks are still there.
+
+The two flags compose, and if you reach for both, consider what you want:
+`--out-every` to genuinely discard resolution you will never need, `--format
+samples` to keep it and still draw quickly.
+
+## What it costs to write
+
+Nothing, roughly, and less than CSV. On a four-million-row run of a
+PWM-driven deck:
+
+| | writes in | peak memory | file | one full-extent draw of one signal |
+|---|---|---|---|---|
+| `--format csv` | 8.99 s | 4.5 MB | 116 MB | 2.16 s, touching all 116 MB |
+| `--format samples` | 7.22 s | 5.5 MB | 82.5 MB | under 10 ms, reading 1.5 MB |
+
+It is smaller than CSV and faster to write, because formatting four million
+rows of floating point as decimal text costs more than building a pyramid.
+Peak memory was 5.5 MB at four million rows and 5.6 MB at four hundred
+thousand: the writer holds one stripe, never the run, so memory does not
+track how long the simulation was.
+
+## What this format is not for
+
+Handing to someone, diffing, committing, or loading with `pandas`. Use CSV,
+which is good at all of those and unchanged. Use the rawfile where a
+SPICE-aware tool is going to read it. `--format samples` is for a run you
+intend to plot, and particularly one you cannot open any other way.
+
+It is also not HDF5, which gets the three properties above right and was the
+obvious candidate. Every HDF5 binding links the libhdf5 C library, which
+rules it out in the two places that matter most: it cannot be compiled to
+WebAssembly, so a viewer running in a browser or an editor's webview cannot
+read one at all, and on Windows it turns `pip install` into a hunt for
+`hdf5.dll`. A format whose reader needs no C library has neither problem.
 
 
 ## The netlist and device-file grammar
@@ -4847,7 +4959,7 @@ file and the netlist wiring simultaneously.
 general-simulator <netlist> [--devices <file>] [--mode dc|transient] [--tfinal T]
                    [--dt DT | --dt-max T --dt-min T --dt-init T --reltol R --abstol A]
                    [--max-steps N]
-                   [--format csv|raw] [--out <path>] [--out-every N]
+                   [--format csv|raw|samples] [--out <path>] [--out-every N]
                    [--events <path>] [--events-text <path>]
                    [--checkpoint-out <file>] [--checkpoint-every T] [--resume <file>]
 general-simulator (--help | -h)
@@ -4866,8 +4978,8 @@ is optional.
 | `--dt-max`/`--dt-min`/`--dt-init` | Override individual defaults of the adaptive step-size controller (`dae_runtime::AdaptiveConfig::from_t_final`), used when `--dt` is omitted. |
 | `--reltol`/`--abstol` | Override the adaptive controller's relative/absolute local-truncation-error tolerances. |
 | `--max-steps N` | Caps how many accepted adaptive steps one run may take (default `10,000,000`) before aborting with `DaeError::AdaptiveStepStalled`. Each accepted step holds a row in memory for the rest of the run, so a stalled controller would otherwise grow memory without limit. Adaptive stepping only — a `--dt` run takes a precomputed number of steps and cannot stall this way. See [Fixed vs. adaptive time stepping](time-stepping.md). |
-| `--format csv\|raw` | Output serialization — see below. Default: `csv`. |
-| `--out <path>` | Destination file for `--format raw`. Ignored for `--format csv` (CSV always goes to stdout). |
+| `--format csv\|raw\|samples` | Output serialization — see below. Default: `csv`. |
+| `--out <path>` | Destination file for `--format raw` and `--format samples`. Ignored for `--format csv` (CSV always goes to stdout). |
 | `--out-every N` | Write only every Nth resolved point. Thins the output, never the computation — see below. Default: `1`. |
 | `--events <path>` | Where the JSONL event stream goes. Default: `<netlist stem>.events.jsonl`, beside the netlist. |
 | `--events-text <path>` | Where its human-readable twin goes, independently of `--events`. Default: `<netlist stem>.events.txt`. Both files are written only for a netlist that declares rules, and a path that cannot be created is an error — see below. |
@@ -4957,7 +5069,7 @@ A path whose directory does not exist is an error naming the path, and the run d
 Losing the diagnostics channel in silence is the failure these flags exist to fix, so it is not
 something they will do themselves.
 
-## `--format`: CSV vs. SPICE rawfile output
+## `--format`: CSV, SPICE rawfile, or samples
 
 `--format csv` (the default, and the only format this crate produced before `--format raw`
 existed) prints `t,V(node1),V(node2),...,<block names>` to stdout, one row per resolved point —
@@ -4972,6 +5084,13 @@ terminal, `--format raw` always writes to a file:
 - `--out <path>` names it explicitly, or
 - if `--out` is omitted, it defaults to `<netlist stem>.raw` next to the input file (e.g.
   `general-simulator buck.cir --mode transient --format raw` writes `buck.raw`).
+
+`--format samples` writes the same data again, into a `.gsim_samples` container: each signal
+stored separately, with a precomputed min/max pyramid over it, so a plot reads a screen's worth
+of points rather than the whole run. It follows the same file rule as `--format raw` — `--out
+<path>`, or `<netlist stem>.gsim_samples` beside the input. Reach for it when a run is large
+enough that opening it is the problem; [Runs too large to open](large-runs.md) has the measured
+numbers and says why `--out-every` is not the same thing.
 
 `--out` given alongside `--format csv` is accepted but ignored — CSV output is always to stdout.
 
