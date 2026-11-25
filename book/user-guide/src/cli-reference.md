@@ -68,6 +68,26 @@ only**:
 Point 0 is always written. After that it is simply every Nth, so the final point appears only if
 its index lands on the stride.
 
+It counts *resolved points*, not time, so under adaptive stepping the spacing of the rows follows
+the solver's own step decisions rather than a fixed interval of simulated time
+(GLODI-Engineering/general-simulator#110 asks whether a time-based `--out-dt` should exist beside
+it). Under `--dt` the two are the same thing.
+
+**It cannot be combined with `--format samples`, and the combination is refused.** Both flags
+answer "this run is too big to look at". A stride keeps one point per interval and drops the
+rest; the samples format keeps the minimum and maximum of every interval. Applied together the
+stride removes the peaks before the pyramid can record them, and what comes out is a container
+with a complete pyramid over an incomplete run — indistinguishable from a complete file. See
+[Runs too large to open](large-runs.md) for which to reach for.
+
+### When a stride is safe
+
+A stride is safe exactly when it is far narrower than the narrowest feature you intend to see.
+The ZVS case below is the safe end by three orders of magnitude. Thinning a 20 ms run of a
+switching converter by the same factor is the unsafe end: a switching overshoot is one or two
+steps wide, so it falls between kept points and leaves no trace. When the feature is comparable
+to the step, or you do not know, use `--format samples`.
+
 ### Why this is needed
 
 The integration step and the rate you need to *look* at the answer can legitimately differ by

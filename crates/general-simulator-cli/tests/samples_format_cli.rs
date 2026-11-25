@@ -187,3 +187,78 @@ fn an_unknown_format_lists_the_ones_there_are() {
         "the error should name every format: {stderr}"
     );
 }
+
+#[test]
+fn a_stride_and_the_samples_format_are_refused_together() {
+    // The one silently-wrong combination. A stride drops the samples between
+    // the points it keeps; the pyramid keeps the extremes of every interval.
+    // Together, the stride removes the peaks before the pyramid can record
+    // them and the file still looks complete, so there is no reading of the
+    // two flags under which the user gets what either promises (#107).
+    let netlist = fixture("rc_with_block.cir");
+    let samples = out_path("refused.gsim_samples");
+    let _ = std::fs::remove_file(&samples);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_general-simulator"))
+        .args([
+            netlist.to_str().unwrap(),
+            "--mode",
+            "transient",
+            "--tfinal",
+            "1e-5",
+            "--dt",
+            "1e-7",
+            "--format",
+            "samples",
+            "--out",
+            samples.to_str().unwrap(),
+            "--out-every",
+            "10",
+        ])
+        .output()
+        .expect("failed to run general-simulator binary");
+
+    assert!(
+        !output.status.success(),
+        "the combination must fail rather than write a thinned file"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--out-every 10") && stderr.contains("--format samples"),
+        "the error should name both flags: {stderr}"
+    );
+    assert!(
+        stderr.contains("Drop --out-every"),
+        "the error should say what to do instead: {stderr}"
+    );
+    assert!(
+        !samples.exists(),
+        "nothing should have been written before the refusal"
+    );
+}
+
+#[test]
+fn a_stride_of_one_is_not_a_stride() {
+    // `--out-every 1` is the default spelled out, so it is not the
+    // combination being refused -- erroring on it would reject a script that
+    // passes the flag unconditionally with a computed N.
+    let netlist = fixture("rc_with_block.cir");
+    let samples = out_path("stride_one.gsim_samples");
+    run(&[
+        netlist.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "1e-5",
+        "--dt",
+        "1e-7",
+        "--format",
+        "samples",
+        "--out",
+        samples.to_str().unwrap(),
+        "--out-every",
+        "1",
+    ]);
+    let bytes = std::fs::read(&samples).expect("the samples file");
+    Reader::open(bytes).expect("it opens");
+}

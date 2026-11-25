@@ -600,6 +600,32 @@ fn run() -> Result<u8, String> {
     } else {
         None
     };
+    // `--out-every` and `--format samples` are both answers to "this run is too big to look
+    // at", and composing them is the one combination that is silently wrong. A stride drops
+    // the samples between the points it keeps; the pyramid keeps the extremes of every
+    // interval. Striding first throws away exactly what the pyramid exists to preserve, and
+    // what comes out *looks* complete -- a container with a full pyramid, built over a run
+    // that has already had most of it removed. Nothing downstream can tell.
+    //
+    // So this is refused rather than warned about: there is no reading of the two flags
+    // together under which the user gets what either one promises. See `--out-every`'s own
+    // help text for which to reach for (#107).
+    if output_format == OutputFormat::Samples && out_every > 1 {
+        return Err(format!(
+            "--out-every {out_every} cannot be combined with --format samples.\n\
+             \n\
+             A stride keeps one point per interval and discards the rest. The samples format \n\
+             already stores the minimum and maximum of every interval, so a viewer reads a \n\
+             screen's worth of points from the whole run -- which is the same problem solved \n\
+             without losing anything. Applied together, the stride removes the peaks before \n\
+             the pyramid can record them, and the result is indistinguishable from a \n\
+             complete file.\n\
+             \n\
+             Drop --out-every and keep --format samples, or drop --format samples if you \n\
+             genuinely want every Nth point and nothing between them."
+        ));
+    }
+
     // Same rule as the rawfile, for the same reason: a binary container has
     // nothing to show a terminal, so it needs a destination, and defaulting
     // to the netlist's own stem keeps `--format samples` a one-flag change.
@@ -1629,11 +1655,19 @@ OUTPUT
     --out-every N             Write only every Nth resolved point. Thins the file, never
                               the computation: every step is still taken and kind=measure
                               still sees every point. [default: 1]
-                              Prefer --format samples over this for a run you will plot:
-                              a stride keeps one sample per interval and drops the rest,
-                              so a switching overshoot between two kept points is simply
-                              absent from the file. The pyramid keeps both extremes of
-                              every interval instead, at about 3% of the run's size.
+                              A stride is safe when it is far narrower than the narrowest
+                              feature you intend to see, and lossy in a way nothing can
+                              detect when it is not: an overshoot between two kept points
+                              is simply absent from the file. Resolving a 46 ns transition
+                              at a 40 fs step, --out-every 1000 still leaves 2500 points
+                              across it and loses nothing real. Thinning a 20 ms run of a
+                              switching converter by the same factor loses the switching.
+                              When the feature is comparable to the step, or you do not
+                              know, use --format samples: it keeps both extremes of every
+                              interval, at about 3% of the run's size.
+                              Cannot be combined with --format samples -- the stride would
+                              remove the peaks before the pyramid could record them, and
+                              the file would still look complete.
 
 EVENTS
     --events <path>           Where the JSONL event stream goes.
