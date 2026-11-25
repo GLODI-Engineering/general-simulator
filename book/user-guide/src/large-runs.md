@@ -67,9 +67,28 @@ does not.
 interval above it. Zoom in and the real samples are there; zoom out and the
 peaks are still there.
 
-The two flags compose, and if you reach for both, consider what you want:
-`--out-every` to genuinely discard resolution you will never need, `--format
-samples` to keep it and still draw quickly.
+The two do not compose, and are refused together. They are both answers to
+"this run is too big to look at", and applying the stride first removes the
+peaks before the pyramid can record them — leaving a file with a complete
+pyramid built over an incomplete run, which nothing downstream can detect.
+Pick one: `--out-every` to genuinely discard resolution you will never need,
+`--format samples` to keep it and still draw quickly.
+
+### Which one, and when
+
+A stride is safe exactly when it is **far narrower than the narrowest feature
+you intend to see**, and silently lossy when it is not.
+
+The ZVS case above is the safe end: resolving a 46 ns transition at a 40 fs
+step, `--out-every 1000` leaves about 2,500 points across the transition and
+loses nothing real. Thinning a 20 ms run of a switching converter by that same
+factor is the unsafe end — a switching overshoot is one or two steps wide, so
+it falls between kept points and disappears.
+
+When the feature of interest is comparable to the step, or when you do not yet
+know what you are looking for, `--format samples` is the answer: it keeps every
+sample and the extremes of every interval above it, so no choice has to be made
+in advance.
 
 ## What it costs to write
 
