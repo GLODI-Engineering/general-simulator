@@ -21,6 +21,7 @@ members = [
     "crates/cscript-ffi",
     "crates/pyblock-ffi",
     "crates/octave-ffi",
+    "crates/gsim-samples",
     "crates/general-simulator-cli",
 ]
 

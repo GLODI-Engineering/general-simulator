@@ -1,0 +1,11 @@
+[package]
+name = "gsim-samples"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The .gsim_samples container: a solver writes a run to it in one streaming pass, and a reader takes a few signals over a time window at a screen's resolution without loading the run."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

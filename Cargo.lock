@@ -102,6 +102,7 @@ dependencies = [
  "general-spice-core",
  "gs-waveform-measurements",
  "gsim-rules",
+ "gsim-samples",
  "pwl-devices",
  "serde_json",
 ]
@@ -119,6 +120,14 @@ name = "gsim-rules"
 version = "0.6.0"
 dependencies = [
  "gs-waveform-measurements",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "gsim-samples"
+version = "0.1.0"
+dependencies = [
  "serde",
  "serde_json",
 ]
