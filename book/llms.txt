@@ -13,6 +13,7 @@ For netlist authors: writing, running, and reading the output of a general-simul
 - [Installing and building](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/getting-started.md): Three ways in, cheapest first.
 - [Your first netlist](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/first-netlist.md): A general-simulator deck is one ordinary-looking text file.
 - [Reading the output](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/reading-output.md): general-simulator produces one waveform per run — the resolved circuit unknowns plus every declared block's own output(s), one row per point (--mode transient) or a single row (--mode dc) — serialized as either CSV (the
+- [What a signal is, beside its name](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/signal-metadata.md): A run's columns are not all the same kind of thing.
 - [Runs too large to open](https://raw.githubusercontent.com/GLODI-Engineering/general-simulator/main/book/user-guide/src/large-runs.md): A power-electronics run gets large quickly.
 
 ### The netlist and device-file grammar

@@ -156,10 +156,18 @@ A signal's `block`/`port` is **derived**, never guessed:
 - Anything that resolves to nothing stays a bare name. A placeholder is worse than a blank: it
   looks like an answer.
 
-**Status today:** CSV (default) and SPICE rawfile (`--format raw`) both carry name and samples,
-built from the same in-memory data, directly comparable row for row. **Neither carries a unit**,
-and no writer fills `block`/`port`. The GUI's `.gsim_sim_result` v2 document has all four fields
-(`signals[].unit`, `.quantity`, `.block`, `.port`) and is where they belong.
+**Status today:** CSV (default), SPICE rawfile (`--format raw`) and the `.gsim_samples`
+container (`--format samples`) all carry name and samples, built from the same in-memory data,
+directly comparable row for row.
+
+`unit` and `quantity` are now filled by the container writer, from the convention in the user
+guide's [What a signal is, beside its name](../../user-guide/src/signal-metadata.md): a closed
+four-entry `quantity` vocabulary, an empty `unit` meaning *not known* rather than dimensionless,
+and no classification taken from how a name is spelled. CSV deliberately carries neither, because
+a second header line is data to every plain CSV reader; the rawfile carries its own type field,
+derived from the same classification, with `signal` flattened onto `voltage` because the format
+has no other type. No writer fills `block`/`port`. The GUI's `.gsim_sim_result` v2 document has
+all four fields (`signals[].unit`, `.quantity`, `.block`, `.port`) and is where they belong.
 
 ---
 
@@ -275,8 +283,12 @@ because specifying them as though they were done is how a contract becomes ficti
   state intact is Phase 5.
 - **L0 is not threaded through.** The compiler emits the map; nothing carries it into the result
   document, so `signals[].block`/`.port` are unfilled.
-- **L2 carries no unit.** Neither CSV nor the rawfile writer emits one, though the result document
-  has the field.
+- **CSV carries no unit, by decision rather than omission.** The `.gsim_samples` footer carries
+  `unit`/`quantity`/`analysis` for every vector and the rawfile carries its own type field, but
+  the CSV stays one header line of names — see
+  [What a signal is, beside its name](../../user-guide/src/signal-metadata.md) for why, and for
+  what a netlist's *generator* still has to do so that a generated deck's signal-flow values are
+  not reported as potentials.
 
 ## Evidence: what the current adapter loses
 
