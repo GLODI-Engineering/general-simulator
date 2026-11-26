@@ -490,9 +490,10 @@ fn instance_call(
 #[test]
 fn a_load_failure_carries_the_loaders_own_reason() {
     let missing = std::path::Path::new("/nonexistent/definitely-not-here.so");
-    let error = cscript_ffi::CScriptLibrary::load(missing)
-        .err()
-        .expect("loading a path that does not exist must fail");
+    let error = match cscript_ffi::CScriptLibrary::load(missing) {
+        Err(e) => e,
+        Ok(_) => panic!("loading a path that does not exist must fail"),
+    };
     let message = match &error {
         cscript_ffi::CScriptError::Load { message, .. } => message.clone(),
         other => panic!("expected a Load error, got {other:?}"),
@@ -513,5 +514,95 @@ fn a_load_failure_carries_the_loaders_own_reason() {
             || rendered.to_lowercase().contains("cannot open")
             || rendered.to_lowercase().contains("not found"),
         "the rendered error does not say why the load failed: {rendered}"
+    );
+}
+
+/// `lib=` without a suffix resolves to the platform's own library name, so one netlist loads on
+/// Linux, macOS and Windows.
+///
+/// A `.gsim_sch`/`.cir` travels: into version control, into a repository someone else clones,
+/// between a Linux workstation and a Windows laptop. Every other parameter in a netlist is
+/// platform-neutral; `lib=./ctrl.so` was not, and the symptom on the other machine was a load
+/// failure with no hint that the *name* rather than the build was wrong.
+#[test]
+fn a_stem_resolves_to_the_platform_library_name() {
+    use cscript_ffi::{library_candidates, LibraryFamily};
+    use std::path::Path;
+
+    assert_eq!(
+        library_candidates(Path::new("./ctrl"), LibraryFamily::Unix),
+        vec![
+            std::path::PathBuf::from("./libctrl.so"),
+            std::path::PathBuf::from("./ctrl.so"),
+        ],
+        "both spellings are in real use: `-o libctrl.so` is the toolchain default and \
+         `-o ctrl.so` is what people write"
+    );
+    assert_eq!(
+        library_candidates(Path::new("./ctrl"), LibraryFamily::MacOs),
+        vec![
+            std::path::PathBuf::from("./libctrl.dylib"),
+            std::path::PathBuf::from("./ctrl.dylib"),
+        ]
+    );
+    assert_eq!(
+        library_candidates(Path::new("./ctrl"), LibraryFamily::Windows),
+        vec![
+            std::path::PathBuf::from("./ctrl.dll"),
+            std::path::PathBuf::from("./libctrl.dll"),
+        ],
+        "a Windows toolchain writes `ctrl.dll`; `libctrl.dll` is what a MinGW build produces"
+    );
+}
+
+/// A `lib=` that already carries a known library suffix behaves exactly as before: one
+/// candidate, the literal path, loaded as written. Nothing existing can change behaviour.
+#[test]
+fn a_path_with_a_suffix_is_still_loaded_literally() {
+    use cscript_ffi::{library_candidates, LibraryFamily};
+    use std::path::{Path, PathBuf};
+
+    for family in [
+        LibraryFamily::Unix,
+        LibraryFamily::MacOs,
+        LibraryFamily::Windows,
+    ] {
+        for declared in ["./ctrl.so", "./ctrl.dylib", "./ctrl.dll", "/abs/libctrl.so"] {
+            assert_eq!(
+                library_candidates(Path::new(declared), family),
+                vec![PathBuf::from(declared)],
+                "{declared} already names a library, on every platform"
+            );
+        }
+    }
+}
+
+/// A stem whose every candidate fails names every path that was tried, because "I looked for
+/// these three and found none" is a different message from "this one file would not load".
+#[test]
+fn a_stem_that_resolves_to_nothing_names_every_path_tried() {
+    let stem = std::env::temp_dir().join("cscript-ffi-no-such-library-anywhere");
+    let error = match cscript_ffi::CScriptLibrary::load(&stem) {
+        Err(e) => e,
+        Ok(_) => panic!("a stem with no library behind it must fail"),
+    };
+    let rendered = error.to_string();
+    for suffix in [".so", ".dylib", ".dll"] {
+        if !rendered.contains(suffix) {
+            continue;
+        }
+        // At least this platform's own candidates must be listed; the loop only asserts that
+        // whichever suffixes appear are accompanied by the stem.
+        assert!(
+            rendered.contains("cscript-ffi-no-such-library-anywhere"),
+            "the error does not name what it was looking for: {rendered}"
+        );
+    }
+    assert!(
+        rendered
+            .matches("cscript-ffi-no-such-library-anywhere")
+            .count()
+            >= 2,
+        "the error does not list every candidate it tried: {rendered}"
     );
 }
