@@ -529,6 +529,23 @@ pub fn library_candidates(path: &Path, family: LibraryFamily) -> Vec<PathBuf> {
     }
 }
 
+/// The published C header declaring this crate's whole ABI, as text.
+///
+/// `include/gsim_cscript.h`, embedded at compile time. Nothing in this crate reads it; it is
+/// published so that a front end scaffolding a C block can write the real header beside the
+/// source it creates, instead of keeping its own copy of the prototypes. A copy of an ABI that
+/// nothing compares is the problem, not the solution: an editor that emits its own `cscript_*`
+/// declarations can get one argument's position wrong and still produce correct numbers on
+/// x86-64 Linux, where integer/pointer and floating-point arguments come from separate register
+/// files -- and crash or read garbage on Windows x64, where the first four arguments are
+/// positional regardless of class.
+///
+/// `tests/published_header.rs` compiles a block against the file and loads it through the real
+/// loader, so the header is pinned to the ABI by linking rather than by string matching.
+pub fn header() -> &'static str {
+    include_str!("../include/gsim_cscript.h")
+}
+
 /// One loaded shared library's three FFI entry points. Kept alive for as long as any
 /// [`CScriptInstance`] built from it exists (each instance holds an `Arc` to this) — the
 /// `Library` must outlive every raw function pointer taken from it.
