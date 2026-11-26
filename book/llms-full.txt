@@ -4160,6 +4160,45 @@ Full detail (including every edge case) lives in `crates/cscript-ffi/src/lib.rs`
 doc comment — this section is the "what do I need to write" summary a netlist author needs, not
 the implementation-level contract.
 
+## Include the header; do not retype the prototypes
+
+`crates/cscript-ffi/include/gsim_cscript.h` declares the whole contract. Include it:
+
+```c
+#include "gsim_cscript.h"
+```
+
+```bash
+cc -shared -fPIC -O2 -I <path to that include dir> -o libctrl.so ctrl.c shared/law.c -lm
+```
+
+This is not a convenience. A hand-typed prototype is one of the very few mistakes in this
+contract that a compiler will not catch and a Linux test run cannot see. On x86-64 System V,
+integer/pointer arguments and floating-point arguments are assigned from **separate register
+files**, so this plausible wrong guess —
+
+```c
+/* WRONG: there is no `t` in this ABI, and the order is not this. */
+void cscript_output(void *state, double t, double dt, const double *in, int in_len,
+                    double *out, int out_len);
+```
+
+— still puts `state`, `in`, `in_len` and `out` in the registers the engine filled, and `dt` in
+the float register the engine filled. It compiles with no diagnostic from `-Wall -Wextra` and
+produces numbers correct to the last digit.
+
+Windows x64 assigns the first four arguments to RCX, RDX, R8, R9 **positionally regardless of
+class**. There, the same declaration reads the engine's `in` pointer as `dt`, builds its own
+`in` pointer out of the integer `in_len`, and dereferences it in a loop. That is a crash that
+takes the solver process with it, or a waveform computed from garbage.
+
+Declaring a function the header publishes and not defining it is fine: everything except
+`cscript_start` is optional. The header declares the whole contract so that whichever subset a
+block implements, it implements with the right signature.
+
+There is **no `t`** anywhere in this ABI. A block that needs absolute time takes it as an input
+signal.
+
 **Required, always:**
 
 ```c
