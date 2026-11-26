@@ -455,6 +455,10 @@ fn run() -> Result<u8, String> {
             println!("{}", version_line());
             return Ok(0);
         }
+        "--capabilities" => {
+            println!("{}", capabilities());
+            return Ok(0);
+        }
         // A leading dash in first position is a mistyped flag, not a file. Without this it
         // reached the file open and came back as
         // `error: reading --tfinal: No such file or directory`, which names the wrong
@@ -1631,6 +1635,53 @@ fn version_line() -> String {
     format!("general-simulator {}", env!("CARGO_PKG_VERSION"))
 }
 
+/// What *this* binary can run, as `key=value` lines.
+///
+/// The question this answers is not cosmetic, and it cannot be answered any other way.
+/// `kind=pyblock` and `kind=pyfunc` need a `--features python` build, and the release workflow
+/// deliberately does **not** publish one -- linking against one specific libpython would make
+/// it a worse download. So a user who downloads a release, or who follows the `cargo build`
+/// line in a front end's own setting description, ends up with an engine that silently excludes
+/// the two most-used extensibility blocks, and the only way to find out was to draw a sheet,
+/// press Run and read `PythonSupportNotCompiledIn`.
+///
+/// `--help` cannot answer it: its NOTES section says `kind=pyblock and kind=pyfunc need a
+/// --features python build of this binary` whatever this binary is, so a front end
+/// screen-scraping it learns nothing about the binary in front of it.
+///
+/// **`key=value`, one per line, nothing else.** Greppable from a shell, parseable in four lines
+/// of any language, and extensible without breaking a reader that does not know a new key -- so
+/// a front end never has to regex prose that a reword would break. `tests/
+/// version_and_help_cli.rs` pins the shape as well as the keys.
+///
+/// The three extensibility languages each answer a different *kind* of question, and saying so
+/// is the point:
+///
+/// - `python` is a property of this **build**, and nothing but a rebuild changes it.
+/// - `octave` is `subprocess`: this binary is always able to try, because `octave-ffi` spawns
+///   `octave-cli` and never links against Octave. Whether that program is on `PATH` is a
+///   question about the machine, which no build can answer -- so this says how Octave is
+///   reached rather than claiming it is available.
+/// - `cscript` is `load-only`: this binary loads a shared library and **never invokes a
+///   compiler**. A caller that wants a `.so` built has to build it.
+fn capabilities() -> String {
+    [
+        "program=general-simulator".to_string(),
+        format!("version={}", env!("CARGO_PKG_VERSION")),
+        format!(
+            "python={}",
+            if cfg!(feature = "python") {
+                "yes"
+            } else {
+                "no"
+            }
+        ),
+        "octave=subprocess".to_string(),
+        "cscript=load-only".to_string(),
+    ]
+    .join("\n")
+}
+
 /// `--help` output.
 ///
 /// Deliberately not [`usage`]. That one is the long prose shown when an argument is
@@ -1723,6 +1774,12 @@ CHECKPOINTS
 OTHER
     --devices <file>          Read PWL-device and block declarations from a second file
                               instead of the netlist itself.
+    --capabilities            Print what *this* binary can run, as key=value lines, and
+                              exit. `python=yes|no` is the one that cannot be answered
+                              any other way: a release build is deliberately built
+                              without the `python` feature, and this help text says
+                              `kind=pyblock needs --features python` whatever this
+                              binary is.
     -h, --help                Print this help.
     -V, --version             Print the version.
 
