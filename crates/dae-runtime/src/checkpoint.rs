@@ -62,7 +62,7 @@ use crate::DaeError;
 /// The four bytes every checkpoint file starts with.
 pub const MAGIC: &[u8; 4] = b"GSCK";
 /// Bumped on any incompatible change to [`Checkpoint`]'s layout.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// A `SignalValue` without the `general_mna` type — that crate has no serde support, and the
 /// distinction is just "was it a vector."
@@ -182,6 +182,11 @@ pub struct Checkpoint {
     pub ringing_cooldown: u32,
     pub x_prev: Vec<f64>,
     pub x_prev_prev: Option<Vec<f64>>,
+    /// The state three steps back. The ringing detector needs a fourth sample of history
+    /// to tell a Nyquist mode from a smooth turning point (see `unknown_is_ringing`), so
+    /// a resumed run has to carry it or its first steps would decide differently from the
+    /// uninterrupted run's. `None` for the first three steps of a run.
+    pub x_prev3: Option<Vec<f64>>,
     pub point_prev: PointSnapshot,
     pub prev_diode_raw_ioff: BTreeMap<String, f64>,
     /// Each diode's previous segment, as `classify_segments` numbers them (`0` breakdown, `1`
@@ -295,6 +300,7 @@ mod tests {
             ringing_cooldown: 1,
             x_prev: vec![1.0 / 3.0, -0.0, f64::MAX],
             x_prev_prev: None,
+            x_prev3: Some(vec![0.25, f64::MIN]),
             point_prev: PointSnapshot {
                 x: vec![1e-300],
                 diode_names: vec![],

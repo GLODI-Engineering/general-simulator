@@ -119,6 +119,7 @@ pub(crate) fn lte_attempt(
     system: &MnaSystem,
     statements: &[Statement],
     diodes: &BTreeMap<String, IdealDiode>,
+    x_prev3: Option<&[f64]>,
     x_prev_prev: Option<&[f64]>,
     x_prev: &[f64],
     dt: f64,
@@ -175,7 +176,7 @@ pub(crate) fn lte_attempt(
 
     let trial_segments = classify_segments(&trap);
     let segments_changed = Some(&trial_segments) != prev_segments.as_ref();
-    let ringing = x_prev_prev.is_some_and(|xpp| is_ringing(xpp, x_prev, &trap.x));
+    let ringing = is_ringing(x_prev3, x_prev_prev, x_prev, &trap.x);
     if segments_changed || ringing {
         // Same policy as step_with_fallback: don't trust trapezoidal across a resolved mode
         // change or detected ringing -- take backward Euler outright, and restart the growth
@@ -228,6 +229,7 @@ pub(crate) fn adaptive_step(
     system: &MnaSystem,
     statements: &[Statement],
     diodes: &BTreeMap<String, IdealDiode>,
+    x_prev3: Option<&[f64]>,
     x_prev_prev: Option<&[f64]>,
     x_prev: &[f64],
     dt_trial: f64,
@@ -244,6 +246,7 @@ pub(crate) fn adaptive_step(
             system,
             statements,
             diodes,
+            x_prev3,
             x_prev_prev,
             x_prev,
             dt,

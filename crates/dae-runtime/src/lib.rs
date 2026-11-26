@@ -578,6 +578,7 @@ pub fn simulate_transient_streamed(
 
     let mut x_prev = resolve_initial_state(&system, diodes, x_initial)?;
     let mut x_prev_prev: Option<Vec<f64>> = None;
+    let mut x_prev3: Option<Vec<f64>> = None;
     let mut prev_diode_raw_ioff: BTreeMap<String, f64> = BTreeMap::new();
     let mut prev_segments: Option<Vec<Segment>> = None;
     let mut ringing_cooldown: u32 = 0;
@@ -595,6 +596,7 @@ pub fn simulate_transient_streamed(
                     &system,
                     &statements,
                     diodes,
+                    x_prev3.as_deref(),
                     x_prev_prev.as_deref(),
                     &x_prev,
                     dt,
@@ -615,7 +617,7 @@ pub fn simulate_transient_streamed(
                     .cloned()
                     .zip(point.diode_raw_ioff.iter().copied())
                     .collect();
-                x_prev_prev = Some(std::mem::replace(&mut x_prev, point.x.clone()));
+                x_prev3 = x_prev_prev.replace(std::mem::replace(&mut x_prev, point.x.clone()));
                 on_step(t, &point)?;
             }
         }
@@ -630,6 +632,7 @@ pub fn simulate_transient_streamed(
                     &system,
                     &statements,
                     diodes,
+                    x_prev3.as_deref(),
                     x_prev_prev.as_deref(),
                     &x_prev,
                     dt_trial,
@@ -651,7 +654,7 @@ pub fn simulate_transient_streamed(
                     .cloned()
                     .zip(point.diode_raw_ioff.iter().copied())
                     .collect();
-                x_prev_prev = Some(std::mem::replace(&mut x_prev, point.x.clone()));
+                x_prev3 = x_prev_prev.replace(std::mem::replace(&mut x_prev, point.x.clone()));
                 on_step(t, &point)?;
                 step_index += 1;
             }
@@ -686,13 +689,8 @@ fn classify_segments(point: &OperatingPoint) -> Vec<Segment> {
 /// Detects trapezoidal "ringing": trapezoidal integration is A-stable (bounded) but not
 /// L-stable, so a very lightly damped mode (e.g. a switch node left nearly floating during
 /// ideal switch dead time, with only tiny leakage conductance) doesn't decay under it — it
-/// oscillates at the Nyquist frequency (sign-flipping every single step) with roughly
-/// constant amplitude instead. Detected as three consecutive values of the same unknown
-/// alternating in sign (`x_prev_prev`, `x_prev`, `trial` share the outer two signs, opposite
-/// the middle one) with the magnitude not shrinking step to step — the direct signature of a
-/// sustained oscillation, as opposed to a legitimate sign change while settling (which
-/// shrinks, not sustains, in magnitude) or ordinary numerical noise near zero (excluded by
-/// the noise floor). Found and root-caused via `general-simulator`'s LLC validation
+/// oscillates at the Nyquist frequency (flipping direction every single step) with roughly
+/// constant amplitude instead. Found and root-caused via `general-simulator`'s LLC validation
 /// (`crates/dae-runtime/examples/llc_validation.rs`): the switching node's voltage oscillated
 /// between roughly +/-3000V for the entire ~200ns ideal switch dead-time window every period, while
 /// every other tracked quantity (notably the actual circuit output) stayed smooth and
@@ -700,23 +698,76 @@ fn classify_segments(point: &OperatingPoint) -> Vec<Segment> {
 /// weakness) the instant this is detected fixes it, consistent with backward Euler already
 /// being this crate's answer to every other kind of transient stiffness.
 ///
-/// Known limitation, tracked as issue #116: the test is on each unknown's *sign*, so it only
-/// detects an oscillation that straddles zero. A switching node ringing about a 400 V rail
-/// never changes sign and is invisible here, which is why [`next_ringing_cooldown`]'s job is to
-/// keep the stiff modes settled rather than to rely on this catching them afterwards.
-fn is_ringing(x_prev_prev: &[f64], x_prev: &[f64], trial: &[f64]) -> bool {
-    const NOISE_FLOOR: f64 = 1e-9;
-    x_prev_prev
+/// Takes the three most recent accepted states and the trapezoidal trial, and delegates each
+/// unknown to [`unknown_is_ringing`]; `None` for either older state (the first two steps of a
+/// run) means there is not yet enough history to ask, and the existing unconditional
+/// backward-Euler first step plus its cooldown covers that window.
+fn is_ringing(
+    x_prev3: Option<&[f64]>,
+    x_prev_prev: Option<&[f64]>,
+    x_prev: &[f64],
+    trial: &[f64],
+) -> bool {
+    let (Some(x_prev3), Some(x_prev_prev)) = (x_prev3, x_prev_prev) else {
+        return false;
+    };
+    x_prev3
         .iter()
+        .zip(x_prev_prev)
         .zip(x_prev)
         .zip(trial)
-        .any(|((&a, &b), &c)| {
-            if a.abs() < NOISE_FLOOR || b.abs() < NOISE_FLOOR || c.abs() < NOISE_FLOOR {
-                return false;
-            }
-            let alternating = (a > 0.0) == (c > 0.0) && (a > 0.0) != (b > 0.0);
-            alternating && c.abs() >= b.abs() * 0.9
-        })
+        .any(|(((&w, &a), &b), &c)| unknown_is_ringing(w, a, b, c))
+}
+
+/// One unknown's ringing test, on four consecutive samples `w`, `a`, `b`, `c` (oldest first).
+///
+/// The signature is on the *increments* $d_1 = a - w$, $d_2 = b - a$, $d_3 = c - b$ rather
+/// than on the samples themselves, which is what makes it independent of any DC offset the
+/// unknown sits on. Until #116 the test was on the sign of each raw sample, so it only ever
+/// saw an oscillation that straddled zero: a switching node ringing $\pm50\text{V}$ about a
+/// $400\text{V}$ rail gives three positive samples and was invisible to it however badly it
+/// oscillated — and in a converter most nodes sit on a rail, so the floating dead-time node
+/// the detector was first written against was the special case, not the general one.
+///
+/// Three conditions, each ruling out one specific thing that is not ringing:
+///
+/// - **Two consecutive sign alternations of the increments.** This is why four samples are
+///   needed rather than three. A Nyquist mode reverses direction on *every* step, so it
+///   alternates for as many increments as one cares to look at; an ordinary turning point of
+///   a smooth waveform reverses once and then does not. Three samples give only one
+///   alternation and cannot tell the two apart — at a smooth maximum the two increments are
+///   also opposed and also nearly equal in magnitude, so no magnitude ratio separates them
+///   either, and a three-sample test on increments falls back at every extremum of every
+///   oscillating quantity. Measured on the lossless tank in
+///   `tests/ringing_about_a_rail.rs`, that costs 69% of the waveform's amplitude over five
+///   cycles and reduces the run's convergence order to zero.
+/// - **The increments are not shrinking** (each at least 90% of the one before, a tolerance
+///   rather than a strict inequality so floating-point noise alone does not reject a
+///   borderline case). A physically decaying oscillation also reverses direction every step
+///   near its end, but with a shrinking amplitude; not decaying is the entire pathology.
+/// - **The oscillation is large relative to the unknown's own scale** (`RELATIVE_FLOOR` of
+///   the largest of the four samples). This replaces the absolute `NOISE_FLOOR = 1e-9` the
+///   test used before, which was applied to a vector whose rows are volts in one place and
+///   amps in another: it discarded a current legitimately living at $10^{-10}\text{A}$ for no
+///   reason other than its unit, while doing nothing at all about round-off wobble on a
+///   $400\text{V}$ rail — which, being offset-free in the increments, is exactly what the new
+///   signature *would* fire on. Relative is the form that excludes the second without
+///   excluding the first. $10^{-6}$ sits a long way above a linear solve's own relative
+///   error (nearer $10^{-12}$) and a long way below any oscillation worth a fallback.
+///
+/// Both thresholds are dimensionless ratios, so unlike the floor they replace, neither
+/// depends on the unknown's unit or on $\Delta t$.
+fn unknown_is_ringing(w: f64, a: f64, b: f64, c: f64) -> bool {
+    const RELATIVE_FLOOR: f64 = 1e-6;
+    let (d1, d2, d3) = (a - w, b - a, c - b);
+    if d1 == 0.0 || d2 == 0.0 || d3 == 0.0 {
+        return false;
+    }
+    let alternating = (d1 > 0.0) != (d2 > 0.0) && (d2 > 0.0) != (d3 > 0.0);
+    let sustained = d2.abs() >= d1.abs() * 0.9 && d3.abs() >= d2.abs() * 0.9;
+    let scale = w.abs().max(a.abs()).max(b.abs()).max(c.abs());
+    let above_floor = d2.abs() >= scale * RELATIVE_FLOOR;
+    alternating && sustained && above_floor
 }
 
 /// How many additional steps to keep using backward Euler after a ringing catch, before
@@ -780,6 +831,7 @@ fn step_with_fallback(
     system: &MnaSystem,
     statements: &[Statement],
     diodes: &BTreeMap<String, IdealDiode>,
+    x_prev3: Option<&[f64]>,
     x_prev_prev: Option<&[f64]>,
     x_prev: &[f64],
     dt: f64,
@@ -817,7 +869,7 @@ fn step_with_fallback(
     )?;
     let trial_segments = classify_segments(&trial);
     let segments_changed = Some(&trial_segments) != prev_segments.as_ref();
-    let ringing = x_prev_prev.is_some_and(|xpp| is_ringing(xpp, x_prev, &trial.x));
+    let ringing = is_ringing(x_prev3, x_prev_prev, x_prev, &trial.x);
     if segments_changed || ringing {
         fold_and_solve(
             system,
@@ -913,6 +965,7 @@ pub fn simulate_transient_with_ideal_switches(
         build_with_ideal_switches(&statements, dialect, diodes, &states_at(0.0), shared_r_on)?;
     let mut x_prev = resolve_initial_state(&system0, diodes, x_initial)?;
     let mut x_prev_prev: Option<Vec<f64>> = None;
+    let mut x_prev3: Option<Vec<f64>> = None;
     let mut prev_diode_raw_ioff: BTreeMap<String, f64> = BTreeMap::new();
     let mut prev_segments: Option<Vec<Segment>> = None;
     let mut prev_gate_states: Option<BTreeMap<String, GateState>> = None;
@@ -942,6 +995,7 @@ pub fn simulate_transient_with_ideal_switches(
             &system,
             &statements,
             &all_diodes,
+            x_prev3.as_deref(),
             x_prev_prev.as_deref(),
             &x_prev,
             dt,
@@ -963,7 +1017,7 @@ pub fn simulate_transient_with_ideal_switches(
             .cloned()
             .zip(point.diode_raw_ioff.iter().copied())
             .collect();
-        x_prev_prev = Some(std::mem::replace(&mut x_prev, point.x.clone()));
+        x_prev3 = x_prev_prev.replace(std::mem::replace(&mut x_prev, point.x.clone()));
         trace.push((t, point));
     }
     Ok(trace)
@@ -1340,5 +1394,98 @@ mod scheme_tests {
             error_tr < error_be / 10.0,
             "trapezoidal error {error_tr} should be well under backward-Euler error {error_be} at dt={dt}"
         );
+    }
+}
+
+#[cfg(test)]
+mod ringing_detector_tests {
+    //! [`is_ringing`] is private, so its cases live here. Each case is a sequence of
+    //! consecutive samples of **one** unknown, written out as numbers rather than produced by
+    //! a circuit, because what is under test is the discriminator itself: which sample
+    //! sequences it calls an oscillation and which it leaves alone. The end-to-end property
+    //! that the discriminator must not cost the run its convergence order is pinned
+    //! separately, by `tests/ringing_about_a_rail.rs`.
+    use super::*;
+
+    /// Feeds consecutive samples of a single unknown to [`is_ringing`] the way a transient
+    /// loop does: the last element is the trapezoidal trial for the step being decided, the
+    /// ones before it are accepted history, oldest first.
+    fn detects(samples: &[f64]) -> bool {
+        let history: Vec<Vec<f64>> = samples.iter().map(|&s| vec![s]).collect();
+        let n = history.len();
+        is_ringing(
+            Some(&history[n - 4]),
+            Some(&history[n - 3]),
+            &history[n - 2],
+            &history[n - 1],
+        )
+    }
+
+    /// The case from #113, and the reason #116 exists: a switching node ringing about its
+    /// $400\text{V}$ rail at the Nyquist frequency, $\pm50\text{V}$ decaying 2% per step. Every
+    /// sample is positive, so a test on the sign of the raw unknown sees nothing at all.
+    #[test]
+    fn a_nyquist_oscillation_about_a_dc_rail_is_ringing() {
+        assert!(detects(&[450.0, 351.0, 448.02, 352.94]));
+    }
+
+    /// The LLC dead-time case the detector was originally written against
+    /// (`examples/llc_validation.rs`, $V(v_x)$ at roughly $\pm3000\text{V}$) still reads as
+    /// ringing — the offset-invariant test has to be a generalisation, not a replacement.
+    #[test]
+    fn the_llc_dead_time_oscillation_about_zero_is_still_ringing() {
+        assert!(detects(&[3000.0, -2940.0, 2881.2, -2823.6]));
+    }
+
+    /// An unknown living at $2 \times 10^{-10}$ — a current, in a row of the same vector whose
+    /// other rows are volts — rings just as badly in relative terms, and the absolute
+    /// `1e-9` noise floor used to discard it for no reason other than its unit.
+    #[test]
+    fn a_small_scale_unknown_can_still_ring() {
+        assert!(detects(&[3.0e-10, 1.0e-10, 2.9e-10, 1.1e-10]));
+    }
+
+    /// A node going somewhere, monotonically. Nothing alternates.
+    #[test]
+    fn a_clean_ramp_is_not_ringing() {
+        assert!(!detects(&[100.0, 150.0, 200.0, 250.0]));
+    }
+
+    /// A node that has settled. Every increment is exactly zero, which is not an oscillation
+    /// of amplitude zero.
+    #[test]
+    fn a_settled_flat_line_is_not_ringing() {
+        assert!(!detects(&[400.0, 400.0, 400.0, 400.0]));
+    }
+
+    /// The same settled node with the last bits of the solve moving under it. The increments
+    /// do alternate and do not decay — the only thing separating this from the rail case
+    /// above is that the oscillation is round-off next to the value it sits on, which is why
+    /// the floor has to be relative to the unknown's own scale.
+    #[test]
+    fn round_off_jitter_on_a_settled_rail_is_not_ringing() {
+        assert!(!detects(&[
+            400.0,
+            400.0 + 1.0e-13,
+            400.0 - 2.0e-13,
+            400.0 + 1.0e-13
+        ]));
+    }
+
+    /// A well-resolved smooth oscillation at its own maximum: $400 + 50\cos(n\theta)$ with
+    /// $\theta = 2\pi/20$, sampled at $n = -2, -1, 0, 1$. The two innermost increments are
+    /// equal and opposite, which is exactly what a three-sample test on increments cannot
+    /// tell apart from a Nyquist mode — a fourth sample can, because a smooth turning point
+    /// alternates once and a Nyquist mode alternates every step.
+    #[test]
+    fn a_smooth_turning_point_is_not_ringing() {
+        let theta = std::f64::consts::TAU / 20.0;
+        let sample = |n: f64| 400.0 + 50.0 * (n * theta).cos();
+        assert!(!detects(&[
+            sample(-2.0),
+            sample(-1.0),
+            sample(0.0),
+            sample(1.0)
+        ]));
     }
 }

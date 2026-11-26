@@ -98,6 +98,7 @@ pub fn simulate_closed_loop(
         &statements,
         &all_diodes0,
         None,
+        None,
         &x_prev,
         dt,
         &BTreeMap::new(),
@@ -109,6 +110,7 @@ pub fn simulate_closed_loop(
     )?;
     let mut x_prev_prev: Option<Vec<f64>> =
         Some(std::mem::replace(&mut x_prev, point_prev.x.clone()));
+    let mut x_prev3: Option<Vec<f64>> = None;
 
     let mut controller_x = vec![0.0; controller.states()];
     let mut prev_diode_raw_ioff: BTreeMap<String, f64> = BTreeMap::new();
@@ -164,6 +166,7 @@ pub fn simulate_closed_loop(
             &system,
             &statements,
             &all_diodes,
+            x_prev3.as_deref(),
             x_prev_prev.as_deref(),
             &x_prev,
             dt,
@@ -185,7 +188,7 @@ pub fn simulate_closed_loop(
             .cloned()
             .zip(point.diode_raw_ioff.iter().copied())
             .collect();
-        x_prev_prev = Some(std::mem::replace(&mut x_prev, point.x.clone()));
+        x_prev3 = x_prev_prev.replace(std::mem::replace(&mut x_prev, point.x.clone()));
         point_prev = point.clone();
         trace.push((t, point, controller_output));
     }

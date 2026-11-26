@@ -2196,6 +2196,7 @@ pub fn simulate_transient_with_blocks_checkpointed(
         diode_raw_ioff: Vec::new(),
     };
     let mut x_prev_prev: Option<Vec<f64>> = None;
+    let mut x_prev3: Option<Vec<f64>> = None;
 
     let mut cscript_registry = CScriptRegistry::new();
     #[cfg(feature = "python")]
@@ -2684,6 +2685,7 @@ pub fn simulate_transient_with_blocks_checkpointed(
         restore_block_states(blocks, &mut block_states, ckpt)?;
         x_prev = ckpt.x_prev.clone();
         x_prev_prev = ckpt.x_prev_prev.clone();
+        x_prev3 = ckpt.x_prev3.clone();
         point_prev = OperatingPoint {
             unknowns: system0.unknowns.clone(),
             x: ckpt.point_prev.x.clone(),
@@ -2736,6 +2738,7 @@ pub fn simulate_transient_with_blocks_checkpointed(
                     ringing_cooldown: u32,
                     x_prev: &[f64],
                     x_prev_prev: &Option<Vec<f64>>,
+                    x_prev3: &Option<Vec<f64>>,
                     point_prev: &OperatingPoint,
                     prev_diode_raw_ioff: &BTreeMap<String, f64>,
                     prev_segments: &Option<Vec<Segment>>,
@@ -2752,6 +2755,7 @@ pub fn simulate_transient_with_blocks_checkpointed(
             ringing_cooldown,
             x_prev: x_prev.to_vec(),
             x_prev_prev: x_prev_prev.clone(),
+            x_prev3: x_prev3.clone(),
             point_prev: PointSnapshot {
                 x: point_prev.x.clone(),
                 diode_names: point_prev.diode_names.clone(),
@@ -2834,6 +2838,7 @@ pub fn simulate_transient_with_blocks_checkpointed(
                     &system,
                     &statements,
                     &all_diodes,
+                    x_prev3.as_deref(),
                     x_prev_prev.as_deref(),
                     &x_prev,
                     dt,
@@ -2858,7 +2863,7 @@ pub fn simulate_transient_with_blocks_checkpointed(
                     .cloned()
                     .zip(point.diode_raw_ioff.iter().copied())
                     .collect();
-                x_prev_prev = Some(std::mem::replace(&mut x_prev, point.x.clone()));
+                x_prev3 = x_prev_prev.replace(std::mem::replace(&mut x_prev, point.x.clone()));
                 point_prev = point.clone();
                 prev_outputs = outputs.clone();
                 match on_step(t, point, outputs) {
@@ -2886,6 +2891,7 @@ pub fn simulate_transient_with_blocks_checkpointed(
                             ringing_cooldown,
                             &x_prev,
                             &x_prev_prev,
+                            &x_prev3,
                             &point_prev,
                             &prev_diode_raw_ioff,
                             &prev_segments,
@@ -2957,6 +2963,7 @@ pub fn simulate_transient_with_blocks_checkpointed(
                         &system,
                         &statements,
                         &all_diodes,
+                        x_prev3.as_deref(),
                         x_prev_prev.as_deref(),
                         &x_prev,
                         dt,
@@ -2993,7 +3000,8 @@ pub fn simulate_transient_with_blocks_checkpointed(
                         .cloned()
                         .zip(attempt.point.diode_raw_ioff.iter().copied())
                         .collect();
-                    x_prev_prev = Some(std::mem::replace(&mut x_prev, attempt.point.x.clone()));
+                    x_prev3 = x_prev_prev
+                        .replace(std::mem::replace(&mut x_prev, attempt.point.x.clone()));
                     point_prev = attempt.point.clone();
                     match on_step(t, attempt.point, outputs) {
                         Ok(()) => {}
@@ -3027,6 +3035,7 @@ pub fn simulate_transient_with_blocks_checkpointed(
                                 ringing_cooldown,
                                 &x_prev,
                                 &x_prev_prev,
+                                &x_prev3,
                                 &point_prev,
                                 &prev_diode_raw_ioff,
                                 &prev_segments,
@@ -3053,6 +3062,7 @@ pub fn simulate_transient_with_blocks_checkpointed(
         ringing_cooldown,
         &x_prev,
         &x_prev_prev,
+        &x_prev3,
         &point_prev,
         &prev_diode_raw_ioff,
         &prev_segments,
