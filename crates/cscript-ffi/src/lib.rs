@@ -237,6 +237,28 @@
 //! running unchanged, with the old "documented, not enforced" behaviour — the check is
 //! something a library opts into, not a new requirement.
 //!
+//! ## A C block has no runtime error channel, and will not get one
+//!
+//! `cscript_output` returns `void`. There is no way for a block to report that something went
+//! wrong, let alone *where*, and that is a property of this ABI rather than an oversight worth
+//! filing: adding a return code would change the call signature every existing block declares,
+//! which is the one thing in this contract that cannot be changed compatibly.
+//!
+//! So a C block's failures divide into three, and only one of them has a position:
+//!
+//! - **Build** failures have a file, a line and a column, and they belong to whoever ran the
+//!   compiler. Nothing here ever invokes one.
+//! - **Load** failures -- a missing library, a missing symbol, an arity disagreement -- name the
+//!   library and the block. That is the whole of what is knowable, and it is what
+//!   [`CScriptError`] carries.
+//! - **Runtime** failures are invisible. A block that computes a wrong number reports success;
+//!   a block that dereferences a null pointer takes the process with it. The protections that do
+//!   exist are up front: `cscript_arity` (checked against the netlist before the first step) and
+//!   the non-finite-output check in `dae-runtime`.
+//!
+//! `dae_runtime::DaeError::code_location` therefore returns `None` for every C-block failure,
+//! deliberately, rather than pointing a diagnostic at line 1 of a file nobody read.
+//!
 //! ## Multi-instance state
 //!
 //! Two block instances naming the *same* `lib=` path share one loaded image (`dlopen` on most

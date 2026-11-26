@@ -63,7 +63,7 @@ fn runtime_error_is_caught_and_session_survives_for_later_calls() {
 
     let err = session.call("add_one", &[], 1).unwrap_err();
     match err {
-        OctaveError::Runtime { message } => {
+        OctaveError::Runtime { message, .. } => {
             assert!(!message.is_empty(), "expected a non-empty Octave message");
         }
         other => panic!("expected OctaveError::Runtime, got {other:?}"),
@@ -167,4 +167,89 @@ fn two_instances_of_different_functions_share_one_session_without_contamination(
             "gain contaminated (reversed) at i={i}"
         );
     }
+}
+
+/// A runtime error says which file and which line, as fields.
+///
+/// Octave's own `err.message` has carried "near line 3, column 13" all along, and that is where
+/// it stopped: the sentence is for a human, and a front end that wants to put a squiggle on a
+/// line cannot regex an English sentence it does not control. The *file* was not even in the
+/// sentence -- it was in `err.stack`, which the `catch` wrapper read and discarded.
+#[test]
+fn a_runtime_error_carries_its_file_and_line_as_fields() {
+    let mut session = OctaveSession::spawn().expect("octave-cli must be on PATH for this test");
+    session.add_path(&fixtures_dir()).unwrap();
+    let error = session
+        .call("raises_at_line_3", &[3.0], 1)
+        .expect_err("the fixture references an undefined name");
+    let location = match &error {
+        OctaveError::Runtime { location, .. } => location
+            .clone()
+            .expect("a runtime error inside a .m file has a location"),
+        other => panic!("expected a Runtime error, got {other:?}"),
+    };
+    assert_eq!(
+        location.line,
+        Some(3),
+        "the fixture raises on line 3: {location:?}"
+    );
+    assert!(
+        location
+            .file
+            .as_deref()
+            .is_some_and(|f| f.ends_with("raises_at_line_3.m")),
+        "the location does not name the file that raised: {location:?}"
+    );
+    assert!(
+        location.column.is_some(),
+        "Octave reports a column and it should survive: {location:?}"
+    );
+}
+
+/// A parse error says which file and which line too, and its file is the one in the message
+/// rather than the one on the stack.
+///
+/// The two cases differ and both have to work. For a *runtime* error the first stack frame is
+/// the failing function, and the message has no file in it. For a *parse* error the message
+/// carries `in file <path>` and the first stack frame is the *caller* -- so taking the file
+/// from the stack unconditionally would name the wrong file for half the cases.
+#[test]
+fn a_parse_error_names_the_file_the_message_names() {
+    let mut session = OctaveSession::spawn().expect("octave-cli must be on PATH for this test");
+    session.add_path(&fixtures_dir()).unwrap();
+    let error = session
+        .call("parse_error_at_line_2", &[3.0], 1)
+        .expect_err("the fixture does not parse");
+    let location = match &error {
+        OctaveError::Runtime { location, .. } => {
+            location.clone().expect("a parse error has a location")
+        }
+        other => panic!("expected a Runtime error, got {other:?}"),
+    };
+    assert_eq!(location.line, Some(2), "{location:?}");
+    assert!(
+        location
+            .file
+            .as_deref()
+            .is_some_and(|f| f.ends_with("parse_error_at_line_2.m")),
+        "the location names the caller rather than the file that would not parse: {location:?}"
+    );
+}
+
+/// The sentence still reads as a sentence. The fields are additional, not a replacement: the
+/// CLI prints `Octave raised in <file>: <message>` and the sentence has to keep carrying the
+/// whole of what Octave said.
+#[test]
+fn the_message_is_unchanged_by_the_location_fields() {
+    let mut session = OctaveSession::spawn().expect("octave-cli must be on PATH for this test");
+    session.add_path(&fixtures_dir()).unwrap();
+    let error = session
+        .call("raises_at_line_3", &[3.0], 1)
+        .expect_err("the fixture references an undefined name");
+    let rendered = error.to_string();
+    assert!(rendered.contains("nosuchvariable"), "{rendered}");
+    assert!(rendered.contains("line 3"), "{rendered}");
+    // And the one thing the message never carried: which `.m` file line 3 is in. With several
+    // blocks sharing one session, "near line 3" on its own does not say.
+    assert!(rendered.contains("raises_at_line_3.m"), "{rendered}");
 }

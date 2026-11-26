@@ -280,3 +280,96 @@ fn supports_next_sample_hit_is_true_for_the_variable_sample_time_fixture() {
         .expect("load fixture");
     assert!(instance.supports_next_sample_hit());
 }
+
+/// A Python block raising at line N reports line N, and its own file.
+///
+/// This is the case the whole location story exists for, and the one that was lost on purpose:
+/// `py_traceback` returned `err.to_string()`, which for a `NameError` is one sentence with no
+/// frames at all. The information was right there -- `exec_fresh_module` already passes the
+/// user's real path as the code object's filename, so every frame reads
+/// `File "<the user's own file>", line N, in output` -- and was simply never formatted.
+///
+/// A Python *runtime* error is also the single most common failure anyone writing a controller
+/// block will hit, so "no line, ever" was the worst of the three languages at the thing a front
+/// end needs most.
+#[test]
+fn a_runtime_exception_reports_the_line_it_was_raised_on() {
+    let mut registry = PyBlockRegistry::new();
+    let mut instance = registry
+        .instantiate(&fixture("raises_at_line_14.py"))
+        .expect("the fixture loads; it only raises when called");
+    let error = instance
+        .call(0.0, 1e-5, &[PyInput::Scalar(1.0)], 1)
+        .expect_err("the fixture references an undefined name");
+    let location = match &error {
+        PyBlockError::Exception { location, .. } => location
+            .clone()
+            .expect("an exception raised inside the user's own file has a location"),
+        other => panic!("expected an Exception, got {other:?}"),
+    };
+    assert_eq!(
+        location.line,
+        Some(14),
+        "the fixture raises on line 14: {location:?}"
+    );
+    assert!(
+        location
+            .file
+            .as_deref()
+            .is_some_and(|f| f.ends_with("raises_at_line_14.py")),
+        "the location does not name the block's own file: {location:?}"
+    );
+    assert_eq!(
+        location.function.as_deref(),
+        Some("output"),
+        "the innermost frame is the block's `output`: {location:?}"
+    );
+}
+
+/// The message carries the whole traceback, not just the exception's own one-line `str`.
+///
+/// Both halves are wanted and for different readers: a front end routes the *fields* to a line,
+/// and a person reading the Output panel wants the frames. `err.to_string()` gave neither.
+#[test]
+fn a_runtime_exception_carries_its_traceback_text() {
+    let mut registry = PyBlockRegistry::new();
+    let mut instance = registry
+        .instantiate(&fixture("raises_at_line_14.py"))
+        .expect("load the raising fixture");
+    let error = instance
+        .call(0.0, 1e-5, &[PyInput::Scalar(1.0)], 1)
+        .expect_err("the fixture raises");
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("NameError") && rendered.contains("undefined_name"),
+        "the exception itself is gone from the message: {rendered}"
+    );
+    assert!(
+        rendered.contains("line 14"),
+        "the traceback frames are gone from the message: {rendered}"
+    );
+}
+
+/// A syntax error reports its line too, from CPython's own `SyntaxError` attributes rather than
+/// from a traceback -- there is no traceback into a file that did not compile.
+#[test]
+fn a_syntax_error_reports_the_line_it_is_on() {
+    let mut registry = PyBlockRegistry::new();
+    let error = registry
+        .instantiate(&fixture("syntax_error_at_line_3.py"))
+        .expect_err("the fixture does not compile");
+    let location = match &error {
+        PyBlockError::Load { location, .. } => {
+            location.clone().expect("a SyntaxError knows its own line")
+        }
+        other => panic!("expected a Load error, got {other:?}"),
+    };
+    assert_eq!(location.line, Some(3), "{location:?}");
+    assert!(
+        location
+            .file
+            .as_deref()
+            .is_some_and(|f| f.ends_with("syntax_error_at_line_3.py")),
+        "{location:?}"
+    );
+}

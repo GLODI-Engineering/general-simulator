@@ -374,6 +374,80 @@ pub enum DaeError {
     },
 }
 
+/// Where a code block's failure happened, in one shape for all three languages.
+///
+/// The three extensibility FFI crates each failed in their own vocabulary, and a caller wanted
+/// one thing from all of them: *which file, which line*. Octave was the richest and accidentally
+/// so, Python reported neither at runtime, and C has no runtime error channel at all. Three
+/// vocabularies for one question was the defect; the missing Python line was only its worst
+/// symptom.
+///
+/// This is the single shape at the boundary a front end actually reads. The per-language structs
+/// stay where they are -- `octave_ffi::OctaveLocation` and `pyblock_ffi::PyLocation` -- because
+/// those crates have no common dependency and inventing one to share three small structs would
+/// cost more than it saves; this type is what unifies them, and [`DaeError::code_location`] is
+/// the one call a caller makes.
+///
+/// **A C block's runtime failure has no location, by construction, and will not get one.**
+/// `cscript_output` returns `void`: there is no channel for a block to report a failure through,
+/// let alone a position. That is a property of the ABI rather than an oversight. A C block's
+/// *build* failure does have a file and a line, and it belongs to whoever ran the compiler --
+/// not here. A C block's *load* failure (a missing library, a missing symbol, an arity
+/// disagreement) names the library and the block, which is the whole of what is knowable, and
+/// this returns `None` for it rather than inventing a line in a file that was never read.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CodeLocation {
+    pub file: Option<std::path::PathBuf>,
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+    /// The innermost frame's own name, where the language has one. Python does; Octave does not.
+    pub function: Option<String>,
+}
+
+impl DaeError {
+    /// Where in a user's own code this failure happened, when that is knowable.
+    ///
+    /// `None` is a real answer and the commonest one: a singular matrix, an algebraic loop, a
+    /// checkpoint mismatch and every C-block failure have no position in a `.py` or `.m` file.
+    /// A caller that wants to show *something* for those should attach its diagnostic to the
+    /// document rather than drop it -- which is what `None` is telling it to do.
+    ///
+    /// See [`CodeLocation`] for why a C block's runtime failure will never have one.
+    pub fn code_location(&self) -> Option<CodeLocation> {
+        match self {
+            DaeError::Octave(octave_ffi::OctaveError::Runtime {
+                location: Some(location),
+                ..
+            }) => Some(CodeLocation {
+                file: location.file.as_ref().map(std::path::PathBuf::from),
+                line: location.line,
+                column: location.column,
+                function: None,
+            }),
+            #[cfg(feature = "python")]
+            DaeError::PyBlock(
+                pyblock_ffi::PyBlockError::Exception {
+                    location: Some(location),
+                    ..
+                }
+                | pyblock_ffi::PyBlockError::Load {
+                    location: Some(location),
+                    ..
+                },
+            ) => Some(CodeLocation {
+                file: location.file.as_ref().map(std::path::PathBuf::from),
+                line: location.line,
+                // CPython's tracebacks carry no column for a frame, and a `SyntaxError`'s
+                // `offset` is a byte offset into the line rather than a column a reader would
+                // recognise, so this is deliberately left unset rather than guessed.
+                column: None,
+                function: location.function.clone(),
+            }),
+            _ => None,
+        }
+    }
+}
+
 /// A `DaeError` as a sentence a user can act on.
 ///
 /// Every variant has its own arm and the match has no wildcard, so adding a variant is a

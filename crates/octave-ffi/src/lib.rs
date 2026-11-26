@@ -88,6 +88,26 @@
 //! correctly for subsequent calls** -- confirmed empirically this session; there is no need to
 //! respawn the process after a caught Octave-side error, and this crate never does.
 //!
+//! ## Where an error happened, as fields
+//!
+//! Octave has always put the position in `err.message` ("near line 3, column 13"), and the
+//! *file* in `err.stack`, which the `catch` wrapper read and discarded. A front end that wants
+//! to put a diagnostic on a line needs `(file, line, column)` and cannot get them by regexing a
+//! sentence it does not control, so this crate does the regexing once, where the format is
+//! known and pinned by its own tests, and publishes the answer as
+//! [`OctaveLocation`] on [`OctaveError::Runtime`]. The message is unchanged; the fields are
+//! additional.
+//!
+//! The `catch` branch (one place, [`catch_branch`], used by every call shape) prints an
+//! `ERROR-AT: <file>|<line>|<column>` line after the `ERROR: ` line, from `err.stack(1)`. It
+//! comes second on purpose: every reader that checks `lines.first()` for the `ERROR: ` prefix
+//! and returns early is unaffected by the extra line.
+//!
+//! Why both sources are needed is in [`OctaveLocation`]'s own doc comment, and it is not
+//! academic: for a runtime error the stack's first frame is the failing function and the message
+//! has no file, while for a parse error the message names the file and the stack's first frame
+//! is the *caller*.
+//!
 //! ## Process death mid-run
 //!
 //! If the persistent process dies (crash, killed, `octave-cli` itself panics) partway through a
@@ -124,11 +144,130 @@ pub enum OctaveError {
     /// The Octave side raised inside the `try`/`catch` this crate wraps every call in --
     /// `message` is `err.message` from Octave's own caught exception object. The session is
     /// still alive and safe to keep using after this.
-    Runtime { message: String },
+    ///
+    /// `location` is where it happened, as fields: see [`OctaveLocation`]. `None` for an error
+    /// this crate raised itself (a desynchronized call, an unparseable output line) rather than
+    /// one Octave raised inside a `.m` file.
+    Runtime {
+        message: String,
+        location: Option<OctaveLocation>,
+    },
     /// Writing to the child process's stdin failed for a reason other than the process having
     /// already exited (e.g. some other I/O failure) -- `message` is the underlying
     /// [`std::io::Error`]'s own text.
     Io { message: String },
+}
+
+/// Where an Octave-side error happened, as fields rather than only inside an English sentence.
+///
+/// Octave has always put the line and the column in `err.message` ("near line 3, column 13"),
+/// and that is where it stopped. A front end that wants to put a diagnostic on a line needs
+/// `(file, line, column)`, and it cannot get them by regexing a sentence it does not control --
+/// so this crate does the regexing once, here, where the format is known and testable, and
+/// publishes the answer.
+///
+/// The *file* is the part that was genuinely being thrown away. It is not in `err.message` for a
+/// runtime error; it was in `err.stack`, which the `catch` wrapper read and discarded.
+///
+/// Every field is optional and they are resolved from two different places, because the two
+/// cases disagree about which is right:
+///
+/// | | `line`/`column` | `file` |
+/// | --- | --- | --- |
+/// | a runtime error | `err.message` ("near line 3, column 13") | `err.stack(1).file` -- the failing function |
+/// | a parse error | `err.message` ("near line 2, column 12") | `err.message` ("in file /…/x.m") -- `err.stack(1)` is the *caller* |
+///
+/// So the message wins for the position, the message wins for the file when it names one, and
+/// the stack's first frame fills the file in otherwise. Taking the file from the stack
+/// unconditionally would name the wrong file for every parse error.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct OctaveLocation {
+    pub file: Option<String>,
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+}
+
+/// The `catch` branch every call in this crate wraps its script in.
+///
+/// One place, because the protocol has to be identical across all seven call shapes and it used
+/// to be seven copies of one `printf`. `ERROR-AT:` is printed *after* `ERROR:`, so every reader
+/// that checks `lines.first()` for the `ERROR: ` prefix and returns early is unaffected by the
+/// extra line -- and a reader that wants the location looks for it among the rest.
+///
+/// The `stack` read is wrapped in its own `try` because an error raised outside any function
+/// has an empty stack, and `err.stack(1)` on an empty struct array raises inside the handler.
+fn catch_branch(call_id: u64) -> String {
+    format!(
+        "catch __err\n\
+         \x20 printf(\"ERROR: %s\\n\", __err.message);\n\
+         \x20 __gs_at = \"\";\n\
+         \x20 try\n\
+         \x20   if numel(__err.stack) > 0\n\
+         \x20     __gs_at = sprintf(\"%s|%d|%d\", __err.stack(1).file, \
+         __err.stack(1).line, __err.stack(1).column);\n\
+         \x20   end\n\
+         \x20 catch\n\
+         \x20 end\n\
+         \x20 printf(\"ERROR-AT: %s\\n\", __gs_at);\n\
+         \x20 printf(\"@@GS_OCT_{call_id}@@\\n\");\n\
+         end\n"
+    )
+}
+
+/// `near line 3, column 13` and `in file /…/x.m`, out of an `err.message`.
+///
+/// A small, deliberately forgiving parse: a message with no position at all gives a location
+/// with no line, and the caller then falls back to the stack frame. Octave's own wording for
+/// both the runtime and the parse case is pinned by `tests/session.rs`.
+fn location_from_message(message: &str) -> OctaveLocation {
+    let mut location = OctaveLocation::default();
+    if let Some(rest) = message.split("near line ").nth(1) {
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        location.line = digits.parse().ok();
+        if let Some(after) = rest.split("column ").nth(1) {
+            let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
+            location.column = digits.parse().ok();
+        }
+    }
+    if let Some(rest) = message.split("in file ").nth(1) {
+        let file = rest.trim().trim_end_matches(['.', ',']);
+        if !file.is_empty() {
+            location.file = Some(file.to_string());
+        }
+    }
+    location
+}
+
+/// The `OctaveError::Runtime` for a caught Octave-side error, with its location resolved from
+/// the message and the `ERROR-AT:` line together -- see [`OctaveLocation`] for why neither
+/// source alone is right.
+fn runtime_error(message: &str, lines: &[String]) -> OctaveError {
+    let mut location = location_from_message(message);
+    let reported = lines
+        .iter()
+        .find_map(|line| line.strip_prefix("ERROR-AT: "))
+        .unwrap_or("");
+    let mut parts = reported.split('|');
+    let stack_file = parts.next().unwrap_or("").trim();
+    let stack_line = parts.next().and_then(|l| l.trim().parse::<u32>().ok());
+    let stack_column = parts.next().and_then(|c| c.trim().parse::<u32>().ok());
+    if location.file.is_none() && !stack_file.is_empty() {
+        location.file = Some(stack_file.to_string());
+    }
+    if location.line.is_none() {
+        location.line = stack_line;
+    }
+    if location.column.is_none() {
+        location.column = stack_column;
+    }
+    OctaveError::Runtime {
+        message: message.to_string(),
+        location: if location == OctaveLocation::default() {
+            None
+        } else {
+            Some(location)
+        },
+    }
 }
 
 impl std::fmt::Display for OctaveError {
@@ -150,7 +289,15 @@ impl std::fmt::Display for OctaveError {
                     )
                 }
             }
-            OctaveError::Runtime { message } => write!(f, "Octave raised: {message}"),
+            // The file is named here because it is the one thing `err.message` never carries
+            // for a runtime error, and with several blocks sharing one session "near line 3" on
+            // its own does not say which `.m` file line 3 is in.
+            OctaveError::Runtime { message, location } => {
+                match location.as_ref().and_then(|l| l.file.as_deref()) {
+                    Some(file) => write!(f, "Octave raised in {file}: {message}"),
+                    None => write!(f, "Octave raised: {message}"),
+                }
+            }
             OctaveError::Io { message } => write!(f, "I/O error talking to octave-cli: {message}"),
         }
     }
@@ -208,9 +355,7 @@ fn parse_output_lines(
 ) -> Result<Vec<f64>, OctaveError> {
     if let Some(first) = lines.first() {
         if let Some(message) = first.strip_prefix("ERROR: ") {
-            return Err(OctaveError::Runtime {
-                message: message.to_string(),
-            });
+            return Err(runtime_error(message, lines));
         }
     }
     if lines.len() != num_outputs {
@@ -220,6 +365,7 @@ fn parse_output_lines(
                  desynchronized, or the function printed unexpected output): {lines:?}",
                 lines.len()
             ),
+            location: None,
         });
     }
     lines
@@ -227,6 +373,7 @@ fn parse_output_lines(
         .map(|l| {
             l.parse::<f64>().map_err(|_| OctaveError::Runtime {
                 message: format!("could not parse `{l}` as a f64 output of `{function}`"),
+                location: None,
             })
         })
         .collect()
@@ -435,10 +582,7 @@ impl OctaveSession {
             script.push_str(&format!("  printf(\"%.17g\\n\", {v});\n"));
         }
         script.push_str(&format!("  printf(\"@@GS_OCT_{call_id}@@\\n\");\n"));
-        script.push_str("catch __err\n");
-        script.push_str("  printf(\"ERROR: %s\\n\", __err.message);\n");
-        script.push_str(&format!("  printf(\"@@GS_OCT_{call_id}@@\\n\");\n"));
-        script.push_str("end\n");
+        script.push_str(&catch_branch(call_id));
         script.push_str("fflush(stdout);\n");
 
         self.write_and_flush(&script)?;
@@ -446,9 +590,7 @@ impl OctaveSession {
 
         if let Some(first) = lines.first() {
             if let Some(message) = first.strip_prefix("ERROR: ") {
-                return Err(OctaveError::Runtime {
-                    message: message.to_string(),
-                });
+                return Err(runtime_error(message, &lines));
             }
         }
 
@@ -464,6 +606,7 @@ impl OctaveSession {
                      {} (call desynchronized, or the function printed unexpected output): {lines:?}",
                     lines.len()
                 ),
+                location: None,
             });
         }
 
@@ -472,6 +615,7 @@ impl OctaveSession {
             .map(|l| {
                 l.parse::<f64>().map_err(|_| OctaveError::Runtime {
                     message: format!("could not parse `{l}` as a f64 output of `{function}`"),
+                    location: None,
                 })
             })
             .collect()
@@ -496,19 +640,14 @@ impl OctaveSession {
         script.push_str("try\n");
         script.push_str(&format!("  __gs_state.('{inst}') = {function}_start();\n"));
         script.push_str(&format!("  printf(\"@@GS_OCT_{call_id}@@\\n\");\n"));
-        script.push_str("catch __err\n");
-        script.push_str("  printf(\"ERROR: %s\\n\", __err.message);\n");
-        script.push_str(&format!("  printf(\"@@GS_OCT_{call_id}@@\\n\");\n"));
-        script.push_str("end\n");
+        script.push_str(&catch_branch(call_id));
         script.push_str("fflush(stdout);\n");
 
         self.write_and_flush(&script)?;
         let lines = read_until_marker(&mut self.stdout, call_id, &self.stderr_rx)?;
         if let Some(first) = lines.first() {
             if let Some(message) = first.strip_prefix("ERROR: ") {
-                return Err(OctaveError::Runtime {
-                    message: message.to_string(),
-                });
+                return Err(runtime_error(message, &lines));
             }
         }
         Ok(())
@@ -566,10 +705,7 @@ impl OctaveSession {
             script.push_str(&format!("  printf(\"%.17g\\n\", {v});\n"));
         }
         script.push_str(&format!("  printf(\"@@GS_OCT_{call_id}@@\\n\");\n"));
-        script.push_str("catch __err\n");
-        script.push_str("  printf(\"ERROR: %s\\n\", __err.message);\n");
-        script.push_str(&format!("  printf(\"@@GS_OCT_{call_id}@@\\n\");\n"));
-        script.push_str("end\n");
+        script.push_str(&catch_branch(call_id));
         script.push_str("fflush(stdout);\n");
 
         self.write_and_flush(&script)?;
@@ -624,10 +760,7 @@ impl OctaveSession {
             script.push_str(&format!("  printf(\"%.17g\\n\", {v});\n"));
         }
         script.push_str(&format!("  printf(\"@@GS_OCT_{call_id}@@\\n\");\n"));
-        script.push_str("catch __err\n");
-        script.push_str("  printf(\"ERROR: %s\\n\", __err.message);\n");
-        script.push_str(&format!("  printf(\"@@GS_OCT_{call_id}@@\\n\");\n"));
-        script.push_str("end\n");
+        script.push_str(&catch_branch(call_id));
         script.push_str("fflush(stdout);\n");
 
         self.write_and_flush(&script)?;
@@ -706,10 +839,7 @@ impl OctaveSession {
         script.push_str(&format!("  save('-binary', '{file}', '__gs_ckpt');\n"));
         script.push_str("  clear __gs_ckpt;\n");
         script.push_str(&format!("  printf(\"@@GS_OCT_{call_id}@@\\n\");\n"));
-        script.push_str("catch __err\n");
-        script.push_str("  printf(\"ERROR: %s\\n\", __err.message);\n");
-        script.push_str(&format!("  printf(\"@@GS_OCT_{call_id}@@\\n\");\n"));
-        script.push_str("end\n");
+        script.push_str(&catch_branch(call_id));
         script.push_str("fflush(stdout);\n");
 
         let result = self
@@ -717,9 +847,7 @@ impl OctaveSession {
             .and_then(|()| read_until_marker(&mut self.stdout, call_id, &self.stderr_rx))
             .and_then(|lines| {
                 if let Some(message) = lines.first().and_then(|l| l.strip_prefix("ERROR: ")) {
-                    return Err(OctaveError::Runtime {
-                        message: message.to_string(),
-                    });
+                    return Err(runtime_error(message, &lines));
                 }
                 std::fs::read(&path).map_err(|e| OctaveError::Io {
                     message: format!(
@@ -758,10 +886,7 @@ impl OctaveSession {
         ));
         script.push_str("  clear __gs_loaded;\n");
         script.push_str(&format!("  printf(\"@@GS_OCT_{call_id}@@\\n\");\n"));
-        script.push_str("catch __err\n");
-        script.push_str("  printf(\"ERROR: %s\\n\", __err.message);\n");
-        script.push_str(&format!("  printf(\"@@GS_OCT_{call_id}@@\\n\");\n"));
-        script.push_str("end\n");
+        script.push_str(&catch_branch(call_id));
         script.push_str("fflush(stdout);\n");
 
         let result = self
@@ -769,9 +894,7 @@ impl OctaveSession {
             .and_then(|()| read_until_marker(&mut self.stdout, call_id, &self.stderr_rx))
             .and_then(|lines| {
                 if let Some(message) = lines.first().and_then(|l| l.strip_prefix("ERROR: ")) {
-                    return Err(OctaveError::Runtime {
-                        message: message.to_string(),
-                    });
+                    return Err(runtime_error(message, &lines));
                 }
                 Ok(())
             });
