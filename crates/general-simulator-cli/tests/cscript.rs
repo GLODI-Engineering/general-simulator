@@ -322,3 +322,58 @@ fn a_netlist_that_matches_a_declared_arity_runs() {
         "the block's own output should appear, got: {stdout}"
     );
 }
+
+/// A `lib=` with no suffix at all runs: the stem resolves to this platform's own library name.
+///
+/// This is the whole portability argument, end to end. `support::compile_c_fixture` writes
+/// `lib<name>.so` -- the toolchain's own default for `-o lib<name>.so` -- and the netlist names
+/// only the stem, so the same netlist text would find `lib<name>.dylib` on macOS and
+/// `<name>.dll` on Windows.
+#[test]
+fn a_lib_stem_with_no_suffix_resolves_and_runs() {
+    let lib = compile_c_fixture("cscript_gain");
+    let stem = lib
+        .parent()
+        .expect("the compiled fixture has a directory")
+        .join(
+            lib.file_stem()
+                .expect("the compiled fixture has a stem")
+                .to_string_lossy()
+                .trim_start_matches("lib"),
+        );
+    assert!(
+        !stem.exists(),
+        "the stem itself must not be a file, or this test would not be testing resolution"
+    );
+
+    let devices = write_devices_file(&format!(
+        "OFFVAL kind=const value=0\n\
+         OFFGATE kind=sig2phys domain=voltage in=OFFVAL\n\
+         D1 kind=ideal_switch r_on=0.1 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.7 body_g_on=1 gate=block ctrl=OFFGATE\n\
+         SRC kind=const value=5\n\
+         CG kind=cscript lib={} in=SRC\n",
+        stem.display()
+    ));
+
+    let output = run(&[
+        fixture("cscript_gain.cir").to_str().unwrap(),
+        "--devices",
+        devices.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "0.001",
+        "--dt",
+        "0.0002",
+    ]);
+    assert!(
+        output.status.success(),
+        "a lib= stem must resolve to the platform library name; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    for line in stdout.lines().skip(1) {
+        let cg: f64 = line.split(',').next_back().unwrap().parse().unwrap();
+        assert!((cg - 10.0).abs() < 1e-12, "expected CG=10 (5*2), got {cg}");
+    }
+}

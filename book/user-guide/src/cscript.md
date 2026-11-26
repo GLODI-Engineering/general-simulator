@@ -352,6 +352,35 @@ cannot be wired to a gate directly (see [Gate bindings](gate-bindings.md)).
 `lib=` is handed to the platform's own dynamic loader (`dlopen`), which brings two behaviours
 worth knowing before they cost an afternoon.
 
+**Leave the suffix off and the netlist is portable.** A `lib=` that already ends in `.so`,
+`.dylib` or `.dll` is loaded exactly as written — nothing about an existing netlist changes. A
+`lib=` with no library suffix is read as a **stem**, and resolves to this platform's own library
+names:
+
+| `lib=./ctrl` resolves to | in order |
+| --- | --- |
+| Linux and other ELF platforms | `./libctrl.so`, then `./ctrl.so` |
+| macOS | `./libctrl.dylib`, then `./ctrl.dylib` |
+| Windows | `./ctrl.dll`, then `./libctrl.dll` |
+
+Both spellings are tried on each because both are in real use: `libctrl.so` is what a toolchain
+writes for `-o libctrl.so`, and `ctrl.so` is what people actually type. Write the stem and the
+same netlist loads on a Linux workstation and on a Windows laptop; write `lib=./ctrl.so` and it
+loads on one of them, with a failure on the other that says nothing about the *name* being the
+problem — so the usual next move is to rebuild a library that was already there under a
+different extension.
+
+When no candidate loads, the error lists every path that was tried, because "I looked for these
+two and found neither" is a different message from "this one file would not load":
+
+```text
+error: CScript(LoadNoCandidate): `lib=./ctrl` carries no library suffix, so it was taken as a
+stem and resolved to this platform's own library names; none of them could be loaded:
+[./libctrl.so: dlopen failed: ./libctrl.so: cannot open shared object file: No such file or
+directory] [./ctrl.so: dlopen failed: ./ctrl.so: cannot open shared object file: No such file
+or directory]
+```
+
 **A bare filename is never looked for in the current directory.** `dlopen` treats a name with no
 path separator as a request to search the *library path* — `LD_LIBRARY_PATH`, the cache,
 the system directories — and nothing else. So a library sitting right next to the netlist fails:

@@ -337,6 +337,18 @@ pub enum CScriptError {
         symbol: &'static str,
         message: String,
     },
+    /// A `lib=` with no library suffix is a *stem*, and none of the platform library names it
+    /// resolves to could be loaded -- see [`library_candidates`].
+    ///
+    /// Separate from [`Self::Load`] because the two are different questions: `Load` is "this
+    /// one file would not load, and here is the loader's reason", and this is "I looked for
+    /// these names and none of them was there". A user shown only the last failure would think
+    /// the others were never tried.
+    LoadNoCandidate {
+        declared: PathBuf,
+        /// Each candidate path and the loader's own reason for refusing it, in the order tried.
+        attempts: Vec<(PathBuf, String)>,
+    },
     /// [`CScriptInstance::state_bytes`]/[`CScriptInstance::restore_state`] were called on an
     /// instance whose library exports none of the checkpoint state contract's three symbols —
     /// check [`CScriptInstance::supports_state_io`] first.
@@ -364,6 +376,19 @@ impl std::fmt::Display for CScriptError {
                 "C-script library {} is missing required symbol `{symbol}`: {message}",
                 path.display()
             ),
+            CScriptError::LoadNoCandidate { declared, attempts } => {
+                write!(
+                    f,
+                    "`lib={}` carries no library suffix, so it was taken as a stem and \
+                     resolved to this platform's own library names; none of them could be \
+                     loaded:",
+                    declared.display()
+                )?;
+                for (candidate, message) in attempts {
+                    write!(f, " [{}: {message}]", candidate.display())?;
+                }
+                Ok(())
+            }
             CScriptError::StateContractNotExported { path } => write!(
                 f,
                 "C-script library {} does not export the checkpoint state contract \
@@ -393,6 +418,93 @@ fn loader_message(error: &libloading::Error) -> String {
         source = inner.source();
     }
     message
+}
+
+/// Which platform's library-naming convention to resolve a `lib=` stem against.
+///
+/// A parameter rather than a `cfg!` so the candidate list is testable for all three on whatever
+/// machine the tests run -- the whole point of this resolution is that a netlist written on one
+/// platform loads on the others, and that cannot be asserted from one of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LibraryFamily {
+    /// Linux and the other ELF platforms: `libfoo.so` / `foo.so`.
+    Unix,
+    /// macOS: `libfoo.dylib` / `foo.dylib`.
+    MacOs,
+    /// Windows: `foo.dll` / `libfoo.dll`.
+    Windows,
+}
+
+impl LibraryFamily {
+    /// The family of the platform this binary was built for.
+    pub fn host() -> Self {
+        if cfg!(target_os = "windows") {
+            LibraryFamily::Windows
+        } else if cfg!(target_os = "macos") {
+            LibraryFamily::MacOs
+        } else {
+            LibraryFamily::Unix
+        }
+    }
+}
+
+/// Every suffix that already names a shared library, in any of the three families. A `lib=`
+/// carrying one of these is a path, not a stem.
+const LIBRARY_SUFFIXES: [&str; 3] = ["so", "dylib", "dll"];
+
+/// The paths to try for a `lib=`, in order.
+///
+/// A `lib=` that already carries a known library suffix is **one candidate: itself**, loaded
+/// exactly as written. That is what keeps every existing netlist behaving identically.
+///
+/// A `lib=` without one is a *stem*, and resolves to `family`'s own library names. Both
+/// spellings are tried because both are in real use: `libctrl.so` is what a toolchain writes
+/// for `-o libctrl.so`, and `ctrl.so` is what people actually type. The order per family puts
+/// the convention that platform's own toolchain produces first.
+///
+/// Why this matters: a netlist travels -- into version control, into a repository someone else
+/// clones, between a Linux workstation and a Windows laptop. Every other parameter in a netlist
+/// is platform-neutral. `lib=./ctrl.so` was not, and the symptom on the other machine was a
+/// load failure with no hint that the *name* rather than the build was wrong, so a user would
+/// go and rebuild a library that was already there under a different extension.
+pub fn library_candidates(path: &Path, family: LibraryFamily) -> Vec<PathBuf> {
+    let has_library_suffix = path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+        LIBRARY_SUFFIXES
+            .iter()
+            .any(|known| e.eq_ignore_ascii_case(known))
+    });
+    if has_library_suffix {
+        return vec![path.to_path_buf()];
+    }
+    // `file_name`, not `file_stem`: a stem may legitimately contain a dot (`ctrl.v2`), and
+    // nothing here should silently truncate at it.
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return vec![path.to_path_buf()];
+    };
+    let parent = path.parent();
+    let spelled = |name: String| -> PathBuf {
+        match parent {
+            Some(dir) if !dir.as_os_str().is_empty() => dir.join(name),
+            // A bare name with no separator stays bare, so the platform loader's own search
+            // path still applies to it exactly as before -- see this module's note on
+            // `lib=gain.so` never being looked for in the current directory.
+            _ => PathBuf::from(name),
+        }
+    };
+    match family {
+        LibraryFamily::Unix => vec![
+            spelled(format!("lib{name}.so")),
+            spelled(format!("{name}.so")),
+        ],
+        LibraryFamily::MacOs => vec![
+            spelled(format!("lib{name}.dylib")),
+            spelled(format!("{name}.dylib")),
+        ],
+        LibraryFamily::Windows => vec![
+            spelled(format!("{name}.dll")),
+            spelled(format!("lib{name}.dll")),
+        ],
+    }
 }
 
 /// One loaded shared library's three FFI entry points. Kept alive for as long as any
@@ -444,13 +556,43 @@ impl CScriptLibrary {
     /// triple, which is all-or-nothing and checked here: exporting one or two of the three is
     /// [`CScriptError::MissingSymbol`] naming the first absent one.
     pub fn load(path: &Path) -> Result<Self, CScriptError> {
-        // SAFETY: dlopen-ing and resolving symbols from a user-specified path is exactly the
-        // unsafety this crate exists to contain -- see the module doc comment. The caller
-        // chose this path deliberately, in their own netlist.
-        let library = unsafe { Library::new(path) }.map_err(|e| CScriptError::Load {
-            path: path.to_path_buf(),
-            message: loader_message(&e),
-        })?;
+        // A `lib=` carrying a known library suffix is one candidate -- itself -- so every
+        // existing netlist loads exactly as it did. A `lib=` without one is a stem and resolves
+        // to this platform's library names, which is what makes a netlist portable between a
+        // Linux workstation and a Windows laptop. See `library_candidates`.
+        let candidates = library_candidates(path, LibraryFamily::host());
+        let mut attempts: Vec<(PathBuf, String)> = Vec::new();
+        let mut loaded: Option<Library> = None;
+        for candidate in &candidates {
+            // SAFETY: dlopen-ing and resolving symbols from a user-specified path is exactly
+            // the unsafety this crate exists to contain -- see the module doc comment. The
+            // caller chose this path deliberately, in their own netlist.
+            match unsafe { Library::new(candidate) } {
+                Ok(library) => {
+                    loaded = Some(library);
+                    break;
+                }
+                Err(e) => attempts.push((candidate.clone(), loader_message(&e))),
+            }
+        }
+        let library = match loaded {
+            Some(library) => library,
+            // One candidate means the netlist named a library outright, so the loader's own
+            // reason for refusing *that* file is the whole answer, unchanged from before.
+            None if attempts.len() == 1 => {
+                let (_, message) = attempts.remove(0);
+                return Err(CScriptError::Load {
+                    path: path.to_path_buf(),
+                    message,
+                });
+            }
+            None => {
+                return Err(CScriptError::LoadNoCandidate {
+                    declared: path.to_path_buf(),
+                    attempts,
+                })
+            }
+        };
 
         let start: StartFn = unsafe {
             let symbol: Symbol<StartFn> =
