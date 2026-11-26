@@ -121,11 +121,32 @@ use std::path::{Path, PathBuf};
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
+/// Where a Python-side failure happened, as fields rather than only inside a sentence.
+///
+/// The same question `octave_ffi::OctaveLocation` answers, asked of Python, so that a front end
+/// routing a failure to a line does not need a different reader per language. The two are
+/// deliberately *not* one shared type: these crates have no common dependency and inventing one
+/// for three small structs would be worse than the duplication. `dae_runtime::CodeLocation` is
+/// the single shape at the boundary a front end actually reads, and it is built from both.
+///
+/// `function` is the innermost frame's own name, which Python has and Octave does not; a front
+/// end can ignore it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PyLocation {
+    pub file: Option<String>,
+    pub line: Option<u32>,
+    pub function: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum PyBlockError {
     Load {
         path: PathBuf,
         message: String,
+        /// Set for a `SyntaxError`, which knows its own file and line. `None` for every other
+        /// load failure (a missing file, an `ImportError`), which has no position in the
+        /// block's own source.
+        location: Option<PyLocation>,
     },
     MissingFunction {
         path: PathBuf,
@@ -136,13 +157,15 @@ pub enum PyBlockError {
         path: PathBuf,
         function: &'static str,
         message: String,
+        /// The innermost traceback frame inside the user's own file.
+        location: Option<PyLocation>,
     },
 }
 
 impl std::fmt::Display for PyBlockError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PyBlockError::Load { path, message } => {
+            PyBlockError::Load { path, message, .. } => {
                 write!(
                     f,
                     "failed to load Python block {}: {message}",
@@ -162,6 +185,7 @@ impl std::fmt::Display for PyBlockError {
                 path,
                 function,
                 message,
+                ..
             } => write!(
                 f,
                 "Python block {} raised in `{function}`: {message}",
@@ -184,8 +208,79 @@ pub enum PyInput<'a> {
     Vector(&'a [f64]),
 }
 
-fn py_traceback(_py: Python<'_>, err: &PyErr) -> String {
-    err.to_string()
+/// The whole traceback as text, plus where the innermost frame was.
+///
+/// This used to be `err.to_string()`, which for a `NameError` is one sentence with no frames --
+/// and a Python *runtime* error is the commonest failure anyone writing a controller block will
+/// hit, so it was the worst of the three languages at exactly the thing a front end needs most.
+/// Nothing was missing: [`exec_fresh_module`] already passes the user's real path as the code
+/// object's filename, so every frame reads `File "<their own file>", line N, in output`. The
+/// traceback was simply never formatted.
+///
+/// Both halves are returned because they are for different readers. The text is for a person
+/// reading an output panel; the fields are for a front end putting a diagnostic on a line, which
+/// should not have to regex a human string to find one.
+///
+/// Python's own `traceback` module does the work rather than a hand-walk of the frame objects:
+/// `format_exception` is what every Python programmer already recognises, and `extract_tb`
+/// returns the frames as data.
+fn py_failure(py: Python<'_>, err: &PyErr) -> (String, Option<PyLocation>) {
+    let text = formatted_traceback(py, err).unwrap_or_else(|| err.to_string());
+    (text, innermost_frame(py, err))
+}
+
+fn formatted_traceback(py: Python<'_>, err: &PyErr) -> Option<String> {
+    let traceback = py.import("traceback").ok()?;
+    let formatted = traceback
+        .call_method1(
+            "format_exception",
+            (err.get_type(py), err.value(py), err.traceback(py)),
+        )
+        .ok()?;
+    let parts: Vec<String> = formatted.extract().ok()?;
+    let joined = parts.concat();
+    if joined.trim().is_empty() {
+        None
+    } else {
+        Some(joined.trim_end().to_string())
+    }
+}
+
+/// The deepest frame of the traceback, or -- for a `SyntaxError`, which has no traceback into
+/// the file that did not compile -- the position CPython put on the exception itself.
+fn innermost_frame(py: Python<'_>, err: &PyErr) -> Option<PyLocation> {
+    if let Some(traceback) = err.traceback(py) {
+        if let Some(location) = (|| {
+            let module = py.import("traceback").ok()?;
+            let frames = module.call_method1("extract_tb", (traceback,)).ok()?;
+            let last = frames.call_method1("__getitem__", (-1_i32,)).ok()?;
+            Some(PyLocation {
+                file: last.getattr("filename").ok()?.extract().ok(),
+                line: last.getattr("lineno").ok()?.extract().ok(),
+                function: last.getattr("name").ok()?.extract().ok(),
+            })
+        })() {
+            if location != PyLocation::default() {
+                return Some(location);
+            }
+        }
+    }
+    // A `SyntaxError` carries `filename`/`lineno` on the exception value, which is the only
+    // place they exist: the file never produced a code object to have a frame in.
+    let value = err.value(py);
+    let location = PyLocation {
+        file: value
+            .getattr("filename")
+            .ok()
+            .and_then(|f| f.extract().ok()),
+        line: value.getattr("lineno").ok().and_then(|l| l.extract().ok()),
+        function: None,
+    };
+    if location == PyLocation::default() {
+        None
+    } else {
+        Some(location)
+    }
 }
 
 fn build_args<'py>(
@@ -249,6 +344,8 @@ impl PyBlockRegistry {
         let source = std::fs::read_to_string(path).map_err(|e| PyBlockError::Load {
             path: path.to_path_buf(),
             message: e.to_string(),
+            // A file that could not be read has no line in it to point at.
+            location: None,
         })?;
         self.sources.insert(path.to_path_buf(), source.clone());
         Ok(source)
@@ -291,9 +388,13 @@ pub struct PyBlockInstance {
 impl PyBlockInstance {
     fn new(path: &Path, source: &str, want_xc: bool) -> Result<Self, PyBlockError> {
         Python::attach(|py| {
-            let module = exec_fresh_module(py, path, source).map_err(|e| PyBlockError::Load {
-                path: path.to_path_buf(),
-                message: py_traceback(py, &e),
+            let module = exec_fresh_module(py, path, source).map_err(|e| {
+                let (message, location) = py_failure(py, &e);
+                PyBlockError::Load {
+                    path: path.to_path_buf(),
+                    message,
+                    location,
+                }
             })?;
 
             let get = |name: &'static str| -> Option<Py<PyAny>> {
@@ -339,10 +440,14 @@ impl PyBlockInstance {
             let state = start_fn
                 .bind(py)
                 .call0()
-                .map_err(|e| PyBlockError::Exception {
-                    path: path.to_path_buf(),
-                    function: "start",
-                    message: py_traceback(py, &e),
+                .map_err(|e| {
+                    let (message, location) = py_failure(py, &e);
+                    PyBlockError::Exception {
+                        path: path.to_path_buf(),
+                        function: "start",
+                        message,
+                        location,
+                    }
                 })?
                 .unbind();
 
@@ -603,9 +708,11 @@ impl PyBlockInstance {
     pub fn try_clone(&self) -> Result<PyBlockInstance, PyBlockError> {
         Python::attach(|py| {
             let module = exec_fresh_module(py, &self.path, &self.source).map_err(|e| {
+                let (message, location) = py_failure(py, &e);
                 PyBlockError::Load {
                     path: self.path.clone(),
-                    message: py_traceback(py, &e),
+                    message,
+                    location,
                 }
             })?;
             let get = |name: &'static str| -> Option<Py<PyAny>> {
@@ -668,10 +775,12 @@ impl PyBlockInstance {
     }
 
     fn exception(&self, py: Python<'_>, function: &'static str, err: PyErr) -> PyBlockError {
+        let (message, location) = py_failure(py, &err);
         PyBlockError::Exception {
             path: self.path.clone(),
             function,
-            message: py_traceback(py, &err),
+            message,
+            location,
         }
     }
 }
@@ -735,7 +844,7 @@ mod pure_function {
     use pyo3::prelude::*;
     use pyo3::types::PyTuple;
 
-    use super::{exec_fresh_module, extract_outputs, py_traceback, PyBlockError, PyInput};
+    use super::{exec_fresh_module, extract_outputs, PyBlockError, PyInput};
 
     // Deliberately not shared with `super::build_args` (which builds a `PyList` bundling every
     // input into *one* list argument, for `PyBlockInstance`'s own `output(state, t, dt,
@@ -778,6 +887,8 @@ mod pure_function {
             let source = std::fs::read_to_string(path).map_err(|e| PyBlockError::Load {
                 path: path.to_path_buf(),
                 message: e.to_string(),
+                // A file that could not be read has no line in it to point at.
+                location: None,
             })?;
             self.sources.insert(path.to_path_buf(), source.clone());
             Ok(source)
@@ -805,11 +916,14 @@ mod pure_function {
     impl PyFunctionInstance {
         fn new(path: &Path, source: &str, function_name: &str) -> Result<Self, PyBlockError> {
             Python::attach(|py| {
-                let module =
-                    exec_fresh_module(py, path, source).map_err(|e| PyBlockError::Load {
+                let module = exec_fresh_module(py, path, source).map_err(|e| {
+                    let (message, location) = super::py_failure(py, &e);
+                    PyBlockError::Load {
                         path: path.to_path_buf(),
-                        message: py_traceback(py, &e),
-                    })?;
+                        message,
+                        location,
+                    }
+                })?;
                 let function = module
                     .getattr(function_name)
                     .map_err(|_| PyBlockError::MissingFunction {
@@ -841,10 +955,12 @@ mod pure_function {
         }
 
         fn exception(&self, py: Python<'_>, err: PyErr) -> PyBlockError {
+            let (message, location) = super::py_failure(py, &err);
             PyBlockError::Exception {
                 path: self.path.clone(),
                 function: "call",
-                message: format!("in `{}`: {}", self.function_name, py_traceback(py, &err)),
+                message: format!("in `{}`: {message}", self.function_name),
+                location,
             }
         }
     }

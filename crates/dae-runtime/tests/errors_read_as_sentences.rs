@@ -57,6 +57,11 @@ fn representative_errors() -> Vec<DaeError> {
         }),
         DaeError::Octave(octave_ffi::OctaveError::Runtime {
             message: "'nosuchvariable' undefined near line 3, column 13".to_string(),
+            location: Some(octave_ffi::OctaveLocation {
+                file: Some("/project/ctrl.m".to_string()),
+                line: Some(3),
+                column: Some(13),
+            }),
         }),
         DaeError::OctBlockMissingRequiredFile {
             block_name: "G1".to_string(),

@@ -281,6 +281,26 @@ precision-tail value ($0.1 + 0.2$). See `crates/octave-ffi/src/lib.rs`'s own mod
 and `book/dev-guide/src/octave-blocks.md` for the full protocol (the marker-line desync
 detection, error-then-recovery behavior, and what happens if the shared process dies mid-run).
 
+## An error says where it happened
+
+An Octave-side error comes back with its file, line and column as fields, not only inside the
+sentence. Octave has always put the position in `err.message` ("near line 3, column 13"); the
+*file* was in `err.stack`, which the `catch` wrapper read and threw away. With several blocks
+sharing one session, "near line 3" on its own does not say which `.m` file line 3 is in, so the
+file is now named in the sentence too:
+
+```text
+error: Octave(Runtime): Octave raised in /project/case/dbl_bad.m: 'nosuchvariable' undefined near line 3, column 13
+```
+
+The two cases resolve their file differently and both matter. For a **runtime** error the first
+stack frame is the failing function and the message has no file in it. For a **parse** error the
+message carries `in file <path>` and the first stack frame is the *caller* — so taking the file
+from the stack unconditionally would name the wrong file for every parse error.
+
+Anything reading the engine as a library gets the same answer through
+`dae_runtime::DaeError::code_location`, which is one shape for all three code-block languages.
+
 ## What isn't checked
 
 An Octave-side exception raised by a called function, or a malformed/desynchronized reply from

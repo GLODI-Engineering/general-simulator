@@ -39,6 +39,31 @@ The variant name stays in front of every error this binary prints, so it is stil
 verbatim. If you only need the C escape hatch, `kind=cscript` already covers
 "dynamically-loaded custom block" without this dependency at all.
 
+## An exception says where it happened
+
+A raising block reports the whole traceback, and its innermost frame as fields:
+
+```text
+error: PyBlock(Exception): Python block ./ctrl.py raised in `output`: Traceback (most recent call last):
+  File "./ctrl.py", line 10, in output
+    return 2.0 * u + undefined_name
+                     ^^^^^^^^^^^^^^
+NameError: name 'undefined_name' is not defined
+```
+
+This used to be `err.to_string()` — for a `NameError`, one sentence with no frames and no line.
+Nothing was missing: the engine already passes the block's real path as the code object's
+filename, so every frame reads `File "<your own file>", line N, in output`. The traceback was
+simply never formatted.
+
+A `SyntaxError` reports its line too, from CPython's own attributes on the exception rather than
+from a traceback — there is no traceback into a file that did not compile.
+
+Anything reading the engine as a library gets the fields through
+`dae_runtime::DaeError::code_location`, which is one shape for all three code-block languages.
+A C block's *runtime* failure has none, by construction: `cscript_output` returns `void`, so
+there is no channel for a block to report a failure through, let alone a position.
+
 No `python -m venv`/`requirements.txt` story is built in: the interpreter PyO3 embeds is
 whatever Python your build found (its own standard library included), and `import numpy`/
 `import scipy` inside a `.py` file's `start()` works exactly like it would from a normal Python

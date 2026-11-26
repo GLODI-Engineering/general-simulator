@@ -4609,6 +4609,31 @@ The variant name stays in front of every error this binary prints, so it is stil
 verbatim. If you only need the C escape hatch, `kind=cscript` already covers
 "dynamically-loaded custom block" without this dependency at all.
 
+## An exception says where it happened
+
+A raising block reports the whole traceback, and its innermost frame as fields:
+
+```text
+error: PyBlock(Exception): Python block ./ctrl.py raised in `output`: Traceback (most recent call last):
+  File "./ctrl.py", line 10, in output
+    return 2.0 * u + undefined_name
+                     ^^^^^^^^^^^^^^
+NameError: name 'undefined_name' is not defined
+```
+
+This used to be `err.to_string()` — for a `NameError`, one sentence with no frames and no line.
+Nothing was missing: the engine already passes the block's real path as the code object's
+filename, so every frame reads `File "<your own file>", line N, in output`. The traceback was
+simply never formatted.
+
+A `SyntaxError` reports its line too, from CPython's own attributes on the exception rather than
+from a traceback — there is no traceback into a file that did not compile.
+
+Anything reading the engine as a library gets the fields through
+`dae_runtime::DaeError::code_location`, which is one shape for all three code-block languages.
+A C block's *runtime* failure has none, by construction: `cscript_output` returns `void`, so
+there is no channel for a block to report a failure through, let alone a position.
+
 No `python -m venv`/`requirements.txt` story is built in: the interpreter PyO3 embeds is
 whatever Python your build found (its own standard library included), and `import numpy`/
 `import scipy` inside a `.py` file's `start()` works exactly like it would from a normal Python
@@ -5124,6 +5149,26 @@ functions. Numeric values round-trip through `%.17g` formatting on the Octave si
 precision-tail value ($0.1 + 0.2$). See `crates/octave-ffi/src/lib.rs`'s own module doc comment
 and `book/dev-guide/src/octave-blocks.md` for the full protocol (the marker-line desync
 detection, error-then-recovery behavior, and what happens if the shared process dies mid-run).
+
+## An error says where it happened
+
+An Octave-side error comes back with its file, line and column as fields, not only inside the
+sentence. Octave has always put the position in `err.message` ("near line 3, column 13"); the
+*file* was in `err.stack`, which the `catch` wrapper read and threw away. With several blocks
+sharing one session, "near line 3" on its own does not say which `.m` file line 3 is in, so the
+file is now named in the sentence too:
+
+```text
+error: Octave(Runtime): Octave raised in /project/case/dbl_bad.m: 'nosuchvariable' undefined near line 3, column 13
+```
+
+The two cases resolve their file differently and both matter. For a **runtime** error the first
+stack frame is the failing function and the message has no file in it. For a **parse** error the
+message carries `in file <path>` and the first stack frame is the *caller* — so taking the file
+from the stack unconditionally would name the wrong file for every parse error.
+
+Anything reading the engine as a library gets the same answer through
+`dae_runtime::DaeError::code_location`, which is one shape for all three code-block languages.
 
 ## What isn't checked
 
