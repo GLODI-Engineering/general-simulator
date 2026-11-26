@@ -200,6 +200,51 @@ pub enum DaeError {
     /// parse and construct; only an actually-missing `octave-cli` binary on `PATH` at runtime
     /// surfaces here, as [`octave_ffi::OctaveError::NotFound`].
     Octave(octave_ffi::OctaveError),
+    /// An Octave block's `path=` names a file that does not exist.
+    ///
+    /// Refused at construction rather than left to Octave. `octave-ffi` turns `path=` into an
+    /// `addpath` of the file's *parent directory* and then calls the function *by name*, so a
+    /// `path=` that resolves to nothing used to be harmless: the name was still looked up
+    /// against the rest of Octave's search path -- the current working directory first -- and
+    /// a run whose `path=` was a typo completed on whatever file happened to define that name.
+    /// A path typo has to be an error, not a resolution order.
+    OctaveFunctionPathMissing {
+        block_name: String,
+        function: String,
+        declared_path: std::path::PathBuf,
+    },
+    /// An Octave block's `path=` exists, but nothing on the session's path defines its
+    /// `function=`.
+    ///
+    /// Almost always the one trap Octave has here: a function file has to be *named after the
+    /// function it defines*, so `path=ctrl.m function=control_law` cannot work however correct
+    /// both halves look.
+    OctaveFunctionNotDefinedByItsFile {
+        block_name: String,
+        function: String,
+        declared_path: std::path::PathBuf,
+    },
+    /// An Octave block's `function=` resolves, through Octave's own search path, to a file
+    /// other than the one its `path=` names -- so the netlist's claim about which code runs was
+    /// false.
+    ///
+    /// Octave resolves a function name against its whole search path and looks in the current
+    /// working directory *before* any `addpath`ed directory. `path=` therefore never selected
+    /// the file that ran; it only added one more directory where the file might be found. Two
+    /// directories defining one function name is not an error to Octave, so a run comparing two
+    /// control laws in two directories got whichever name Octave reached first -- completing,
+    /// exiting 0, and writing a full waveform computed by a file the netlist never mentioned.
+    /// This is the one code-block failure in this engine that used to produce a plausible wrong
+    /// answer and call it a success; everything else is loud.
+    ///
+    /// Checked once, after every Octave block's directory has been added, because an `addpath`
+    /// for a *later* block can change an earlier block's resolution.
+    OctaveFunctionResolvesToAnotherFile {
+        block_name: String,
+        function: String,
+        declared_path: std::path::PathBuf,
+        resolved_path: std::path::PathBuf,
+    },
     /// A [`block_graph::BlockKind::OctBlock`]'s own `path=` directory is missing one of the
     /// `.m` files its declared contract requires (see that variant's own doc comment for the
     /// full file-per-function table) — checked once, up front at construction, the same
@@ -490,6 +535,49 @@ impl std::fmt::Display for DaeError {
                  python`, which needs a discoverable Python with its shared library"
             ),
             DaeError::Octave(inner) => write!(f, "{inner}"),
+            DaeError::OctaveFunctionPathMissing {
+                block_name,
+                function,
+                declared_path,
+            } => write!(
+                f,
+                "block `{block_name}` declares `path={}`, which does not exist. Octave calls \
+                 `{function}` by name, so a path that resolves to nothing is not harmless -- \
+                 the name would be looked up against the rest of Octave's search path and the \
+                 run could complete on a file this netlist never named",
+                declared_path.display()
+            ),
+            DaeError::OctaveFunctionNotDefinedByItsFile {
+                block_name,
+                function,
+                declared_path,
+            } => write!(
+                f,
+                "block `{block_name}` declares `function={function}`, and nothing on Octave's \
+                 path defines it. An Octave function file has to be named after the function it \
+                 defines, so {} must define `{}` -- check that the file name and the function \
+                 name agree",
+                declared_path.display(),
+                declared_path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| function.clone())
+            ),
+            DaeError::OctaveFunctionResolvesToAnotherFile {
+                block_name,
+                function,
+                declared_path,
+                resolved_path,
+            } => write!(
+                f,
+                "block `{block_name}` declares `path={}`, but Octave resolves `{function}` to \
+                 {} and that is the file that would run. Octave looks up a function by name, \
+                 searching the current working directory before any added directory, so two \
+                 files defining `{function}` make the netlist's own `path=` advisory. Rename one \
+                 of them, or run from a directory that does not define `{function}`",
+                declared_path.display(),
+                resolved_path.display()
+            ),
             DaeError::OctBlockMissingRequiredFile {
                 block_name,
                 expected_path,

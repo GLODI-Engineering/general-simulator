@@ -395,6 +395,50 @@ impl OctaveSession {
         Ok(())
     }
 
+    /// Asks Octave which file it would actually run for `function`, as an absolute,
+    /// canonicalised path -- `Ok(None)` when nothing on the session's path defines that name.
+    ///
+    /// This exists because [`Self::add_path`] plus a call *by name* is not the same thing as
+    /// calling a particular file. Octave resolves a name against its whole search path and
+    /// looks in the current working directory first, so a caller that added one directory and
+    /// then called a name has no idea, without asking, whether the file it meant is the file
+    /// that ran. Two directories defining one function name is not an error to Octave; it is a
+    /// resolution order. A caller holding a user-supplied path has to compare.
+    ///
+    /// `which` is Octave's own answer to the question and agrees with
+    /// `canonicalize_file_name`, confirmed against a real `octave-cli` here and in
+    /// `tests/session.rs`'s own `which_names_the_file_a_call_would_actually_run`: with
+    /// `dir_a` added to the path and a same-named file in the working directory, `which`
+    /// names the working-directory file -- the one that would really run.
+    ///
+    /// The answer is read as a prefixed line rather than a bare one so that "defined nowhere"
+    /// (an empty `which`) is distinguishable from "the process printed nothing".
+    pub fn which(&mut self, function: &str) -> Result<Option<std::path::PathBuf>, OctaveError> {
+        let call_id = self.next_call_id;
+        self.next_call_id += 1;
+        let escaped = escape_octave_single_quoted(function);
+        let script = format!(
+            "printf(\"@@GS_OCT_WHICH@@%s\\n\", which('{escaped}'));\n\
+             printf(\"@@GS_OCT_{call_id}@@\\n\");\nfflush(stdout);\n"
+        );
+        self.write_and_flush(&script)?;
+        let lines = read_until_marker(&mut self.stdout, call_id, &self.stderr_rx)?;
+        let answer = lines
+            .iter()
+            .find_map(|l| l.strip_prefix("@@GS_OCT_WHICH@@"))
+            .ok_or_else(|| OctaveError::Runtime {
+                message: format!(
+                    "asking Octave which file defines `{function}` produced no answer \
+                     (call desynchronized): {lines:?}"
+                ),
+            })?;
+        if answer.trim().is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(std::path::PathBuf::from(answer.trim())))
+        }
+    }
+
     /// Calls `function`, an Octave function already on this session's own path (see
     /// [`Self::add_path`]), with `inputs` as literal positional numeric arguments (never
     /// assigned into a named workspace variable -- see the module doc comment for why this is
