@@ -1,6 +1,6 @@
 [package]
 name = "general-simulator-cli"
-version = "0.8.0"
+version = "0.9.0"
 description = "Thin runner for general-simulator: netlist + a small PWL-device params file in, a waveform CSV out."
 edition.workspace = true
 license.workspace = true
@@ -24,14 +24,14 @@ default = []
 python = ["dae-runtime/python"]
 
 [dependencies]
-continuous-blocks = { path = "../continuous-blocks", version = "0.8.0" }
-dae-runtime = { path = "../dae-runtime", version = "0.8.0" }
-pwl-devices = { path = "../pwl-devices", version = "0.8.0" }
+continuous-blocks = { path = "../continuous-blocks", version = "0.9.0" }
+dae-runtime = { path = "../dae-runtime", version = "0.9.0" }
+pwl-devices = { path = "../pwl-devices", version = "0.9.0" }
 general-spice-core = { path = "../../../spice-lsp/servers/core", version = "0.1.0" }
-general-mna = { path = "../../../general-mna", version = "0.7.0" }
+general-mna = { path = "../../../general-mna", version = "0.9.0" }
 gsim-samples = { path = "../gsim-samples", version = "0.1.0" }
 gs-waveform-measurements = { path = "../../../gs-waveform-measurements", version = "0.1.0" }
-gsim-rules = { path = "../gsim-rules", version = "0.8.0" }
+gsim-rules = { path = "../gsim-rules", version = "0.9.0" }
 # The end-of-run summary is written to the JSONL log as well as to the text one, so a tool
 # reading the log gets the totals without re-deriving them from the events.
 serde_json = "1"
