@@ -24,7 +24,7 @@ real run" section for why this is mandatory, not optional.
   sections' missing-argument claims (generic `missing field '<key>'` errors, one per arity).
 - `error_size_mismatch.cir` — the MathFn2 entry's `Errors` common-length claim: Vector operands
   of lengths 2 and 3. Expected to fail with
-  `VectorSignalSizeMismatch { block: "A", expected: 2, got: 3 }` at evaluation time.
+  `VectorSignalSizeMismatch: block A was handed a vector signal of the wrong length -- expected: 2, got: 3` at evaluation time.
 
 (MathFn3 shares MathFn2's `common_vector_len` broadcast/mismatch contract; it is verified here
 via MathFn2's fixtures rather than duplicated per entry.)

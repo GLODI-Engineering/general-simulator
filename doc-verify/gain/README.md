@@ -16,10 +16,10 @@ real run" section for why this is mandatory, not optional.
   fail with `field 'k' is not a number`.
 - `error_scalar_input.cir` — a matrix `k` fed by a Scalar input (the `Errors` section's
   matrix-needs-vector claim). Expected to fail with
-  `VectorSignalNotSupported { block: "A" }` at evaluation time.
+  `VectorSignalNotSupported: block A was handed a vector signal, and it only reads scalars` at evaluation time.
 - `error_size_mismatch.cir` — a 2-column matrix `k` fed by a length-3 vector (the `Errors`
   section's column-count claim). Expected to fail with
-  `VectorSignalSizeMismatch { block: "A", expected: 2, got: 3 }` at evaluation time.
+  `VectorSignalSizeMismatch: block A was handed a vector signal of the wrong length -- expected: 2, got: 3` at evaluation time.
 
 A missing `in=`/`k=` entirely is the generic `missing field '<key>'` error shared by every
 `kind=` block (documented once on `BlockInstance`), so it has no dedicated fixture here.

@@ -11,10 +11,10 @@ a real run" section for why this is mandatory, not optional.
   `P = 2 * 3 * 4 = 24`.
 - `error_mixed.cir` — one Scalar and one Vector input (the `Errors` section's uniform-shape
   claim, shared with `Sum`). Expected to fail with
-  `VectorSignalNotSupported { block: "BAD" }` at evaluation time.
+  `VectorSignalNotSupported: block BAD was handed a vector signal, and it only reads scalars` at evaluation time.
 - `error_length.cir` — Vector inputs of lengths 2 and 3 (the `Errors` section's common-length
   claim). Expected to fail with
-  `VectorSignalSizeMismatch { block: "BAD", expected: 2, got: 3 }` at evaluation time.
+  `VectorSignalSizeMismatch: block BAD was handed a vector signal of the wrong length -- expected: 2, got: 3` at evaluation time.
 
 A missing `inputs=` entirely is the generic `missing field 'inputs'` error shared by every
 `kind=` block (documented once on `BlockInstance`), so it has no dedicated fixture here.

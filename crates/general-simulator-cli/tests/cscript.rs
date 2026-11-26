@@ -277,8 +277,10 @@ fn a_netlist_that_disagrees_with_a_declared_arity_is_rejected_before_the_first_s
         "stderr should name the specific error, got: {stderr}"
     );
     // The numbers matter more than the name: this is what tells someone which side is wrong.
+    // Asserted against the sentence rather than against `Debug` field spellings -- the error a
+    // user reads is `DaeError`'s own `Display` now, not a struct literal.
     assert!(
-        stderr.contains("netlist_inputs: 3") && stderr.contains("declared_inputs: Some(2)"),
+        stderr.contains("declares 2 input(s)") && stderr.contains("wires 3 input(s)"),
         "stderr should carry both counts, got: {stderr}"
     );
 }

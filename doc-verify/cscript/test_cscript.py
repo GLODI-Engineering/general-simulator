@@ -72,9 +72,11 @@ def test_a_declared_arity_that_disagrees_is_rejected():
     )
     assert code != 0
     assert "CScriptArityMismatch" in stderr
-    # The counts are the point: the message has to say which side to change.
-    assert "declared_inputs: Some(2)" in stderr
-    assert "netlist_inputs: 3" in stderr
+    # The counts are the point: the message has to say which side to change. Asserted against
+    # the sentence rather than against `Debug` field spellings -- what reaches a user is
+    # `DaeError`'s own `Display` now.
+    assert "declares 2 input(s)" in stderr
+    assert "wires 3 input(s)" in stderr
 
 
 def _split_run_matches_whole(cir):

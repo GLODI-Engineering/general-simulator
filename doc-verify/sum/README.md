@@ -15,10 +15,10 @@ run" section for why this is mandatory, not optional.
 - `error_bad_sign.cir` — `signs=1,x` (the `Errors` section's not-a-number claim). Expected to
   fail with `field 'signs' entry 'x' is not a number`.
 - `error_mixed.cir` — one Scalar and one Vector input (the `Errors` section's uniform-shape
-  claim). Expected to fail with `VectorSignalNotSupported { block: "BAD" }` at evaluation time.
+  claim). Expected to fail with `VectorSignalNotSupported: block BAD was handed a vector signal, and it only reads scalars` at evaluation time.
 - `error_length.cir` — Vector inputs of lengths 2 and 3 (the `Errors` section's common-length
   claim). Expected to fail with
-  `VectorSignalSizeMismatch { block: "BAD", expected: 2, got: 3 }` at evaluation time.
+  `VectorSignalSizeMismatch: block BAD was handed a vector signal of the wrong length -- expected: 2, got: 3` at evaluation time.
 
 Missing `inputs=`/`signs=` entirely is the generic `missing field '<key>'` error shared by
 every `kind=` block (documented once on `BlockInstance`), so it has no dedicated fixture here.
