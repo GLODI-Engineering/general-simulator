@@ -4923,6 +4923,44 @@ separately by `doc-verify/octfunc/example_two_inputs.cir`.
   remember a requested next-hit time against)
   ```
 
+### `path=` is checked against the file that actually runs
+
+Octave calls a function **by name**. `path=` is turned into an `addpath` of the file's *parent
+directory*, and the name is then resolved against Octave's whole search path — with the current
+working directory searched **first**. So `path=` on its own never selected the file that ran; it
+only added one more directory where the file might be found.
+
+That made two directories defining one function name a resolution order rather than an error. A
+run comparing two control laws in two directories got whichever name Octave reached first,
+completed, exited 0, and wrote a full waveform computed by a file the netlist never mentioned —
+the only code-block failure in this engine that used to produce a plausible wrong answer and call
+it a success.
+
+Every Octave block's `path=` is now compared, before the first step, against what Octave's own
+`which` says it would run:
+
+```text
+error: OctaveFunctionResolvesToAnotherFile: block `G1` declares
+`path=/project/case/other/dbl2.m`, but Octave resolves `dbl2` to /project/case/dbl2.m and that
+is the file that would run. Octave looks up a function by name, searching the current working
+directory before any added directory, so two files defining `dbl2` make the netlist's own
+`path=` advisory. Rename one of them, or run from a directory that does not define `dbl2`
+```
+
+Two neighbouring mistakes are refused by the same check:
+
+- **`path=` naming a file that does not exist** — `OctaveFunctionPathMissing`. This used to be
+  harmless: the name was still looked up elsewhere, so a path typo was not an error at all.
+- **`path=` existing but not defining `function=`** — `OctaveFunctionNotDefinedByItsFile`, which
+  is almost always the file-name-must-equal-the-function-name rule above.
+
+The check is made once, after every Octave block's directory has been added, because `addpath`
+prepends: a directory added for a *later* block can change an earlier block's resolution.
+
+`kind=octblock` gets the same check on its own `<function>_start.m`. Its existing
+"required file is missing from `path=`" check is a different question — a file existing in that
+directory and being the file Octave *resolves* are not the same thing.
+
 There is no `xc_count=` here either, for the same reason `kind=pyfunc` has none.
 
 Every input must be a scalar (`SignalValue::Scalar`) — there is no vector-input or vector-output
@@ -5103,7 +5141,9 @@ the shared session, surfaces as a call-time failure from `octave_ffi` itself
 (`dae_runtime::DaeError::Octave`), not at netlist-parse time — there's no way to validate an
 `.m` file's actual behavior before calling into it. For `kind=octblock` specifically, a missing
 required file *is* caught early (see above); a wrong function signature inside a file that does
-exist is not, and surfaces as an Octave-side error at the first call that reaches it. Get the
+exist is not, and surfaces as an Octave-side error at the first call that reaches it. *Which*
+file a name resolves to is checked up front, for both kinds — see "`path=` is checked against
+the file that actually runs" above. Get the
 minimal example above working first, then extend it, rather than debugging a hand-written `.m`
 file and the netlist wiring simultaneously.
 

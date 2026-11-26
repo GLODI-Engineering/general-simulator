@@ -168,3 +168,36 @@ fn two_instances_of_different_functions_share_one_session_without_contamination(
         );
     }
 }
+
+/// `which` reports the file Octave would *actually run* for a name, which is not necessarily
+/// the file whose directory was just `addpath`ed -- Octave searches the current working
+/// directory before its own path. That asymmetry is the whole reason this method exists: a
+/// caller that took a path from a user cannot otherwise tell whether the file it named is the
+/// file that will run.
+#[test]
+fn which_names_the_file_a_call_would_actually_run() {
+    let mut session = OctaveSession::spawn().expect("octave-cli must be on PATH for this test");
+    session.add_path(&fixtures_dir().join("dir_a")).unwrap();
+    let resolved = session
+        .which("gain")
+        .expect("asking which must not fail")
+        .expect("gain is on the path, so it must resolve");
+    assert_eq!(
+        resolved.canonicalize().unwrap(),
+        fixtures_dir().join("dir_a/gain.m").canonicalize().unwrap(),
+        "which did not name the file that was added to the path"
+    );
+}
+
+/// A name nothing defines is `Ok(None)`, not an error: "not on the path" is an ordinary answer
+/// to the question, and a caller wants to say its own sentence about it.
+#[test]
+fn which_of_a_name_nothing_defines_is_none() {
+    let mut session = OctaveSession::spawn().expect("octave-cli must be on PATH for this test");
+    assert_eq!(
+        session
+            .which("definitely_no_such_function_anywhere")
+            .unwrap(),
+        None
+    );
+}

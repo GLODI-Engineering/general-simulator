@@ -2216,6 +2216,12 @@ pub fn simulate_transient_with_blocks_checkpointed(
     // instances whose .m files happen to live in the same directory.
     let mut octave_paths_added: std::collections::BTreeSet<std::path::PathBuf> =
         std::collections::BTreeSet::new();
+    // Every Octave block's (block name, function name, canonicalised `path=`), to be checked
+    // against what Octave would actually resolve the name to -- *after* this loop, not inside
+    // it. An `addpath` for a later block prepends to the search path and can therefore change
+    // an earlier block's resolution, so a check done inside the loop would pass for the first
+    // block and still run the wrong file. See `DaeError::OctaveFunctionResolvesToAnotherFile`.
+    let mut octave_resolutions: Vec<(String, String, std::path::PathBuf)> = Vec::new();
     let mut block_states: Vec<BlockState> = Vec::with_capacity(blocks.len());
     for b in blocks {
         // `b.ic` is `general-mna`'s already-resolved, already-validated initial state (see
@@ -2491,6 +2497,7 @@ pub fn simulate_transient_with_blocks_checkpointed(
             }
             BlockKind::OctFunc {
                 path,
+                function,
                 output_names,
                 sample_time,
                 ..
@@ -2509,29 +2516,31 @@ pub fn simulate_transient_with_blocks_checkpointed(
                 // Octave requires the .m file to be on its own path and the file name to match
                 // the function name (see octave_ffi's own module doc comment) -- addpath once
                 // per unique containing directory, not once per block instance.
-                let dir = match path.canonicalize() {
-                    Ok(abs_file) => abs_file
-                        .parent()
-                        .map(std::path::Path::to_path_buf)
-                        .unwrap_or_else(|| std::path::PathBuf::from(".")),
-                    // A .m file that doesn't (yet) resolve via canonicalize -- fall back to its
-                    // own literal parent, relative to this process's own current directory
-                    // (which octave-cli inherits unchanged, since it's spawned with no explicit
-                    // current_dir override). Calling into a function this session genuinely
-                    // can't find then surfaces naturally as an ordinary Octave-side "undefined
-                    // function" DaeError::Octave(OctaveError::Runtime) at call time, rather than
-                    // failing here at construction time.
-                    Err(_) => path
-                        .parent()
-                        .map(std::path::Path::to_path_buf)
-                        .unwrap_or_else(|| std::path::PathBuf::from(".")),
-                };
+                // A `path=` that does not resolve is refused here, not left to Octave. It used
+                // to fall back to the literal parent directory, on the reasoning that an
+                // unfindable function would surface as an ordinary Octave-side "undefined
+                // function" at call time -- but it does not: Octave looks the name up against
+                // the rest of its search path, the working directory first, so a path typo
+                // could complete the run on a file this netlist never named. See
+                // `DaeError::OctaveFunctionPathMissing`.
+                let declared =
+                    path.canonicalize()
+                        .map_err(|_| DaeError::OctaveFunctionPathMissing {
+                            block_name: b.name.clone(),
+                            function: function.clone(),
+                            declared_path: path.clone(),
+                        })?;
+                let dir = declared
+                    .parent()
+                    .map(std::path::Path::to_path_buf)
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
                 if octave_paths_added.insert(dir.clone()) {
                     session
                         .borrow_mut()
                         .add_path(&dir)
                         .map_err(DaeError::Octave)?;
                 }
+                octave_resolutions.push((b.name.clone(), function.clone(), declared));
                 BlockState::OctFunction {
                     session,
                     // Same rationale as PyFunction's own construction arm above.
@@ -2632,6 +2641,16 @@ pub fn simulate_transient_with_blocks_checkpointed(
                         .add_path(&dir)
                         .map_err(DaeError::Octave)?;
                 }
+                // An `octblock` already checks that each required `.m` file exists in its own
+                // `path=` directory, which `octfunc` did not -- but existing in that directory
+                // and being the file Octave *resolves* are still two different things, because
+                // the working directory is searched first. Its own `<function>_start.m` is the
+                // one every instance calls, immediately below, so that is the name checked.
+                octave_resolutions.push((
+                    b.name.clone(),
+                    format!("{function}_start"),
+                    dir.join(format!("{function}_start.m")),
+                ));
                 // Initialize this instance's own state slot once, at construction -- the same
                 // "first-touch" convention PyBlock's own instantiate() already uses (calling
                 // `start()` immediately, not deferred to the first evaluate_blocks call).
@@ -2656,6 +2675,46 @@ pub fn simulate_transient_with_blocks_checkpointed(
             _ => BlockState::Stateless,
         };
         block_states.push(state);
+    }
+
+    // Every Octave block's `path=` is now checked against the file Octave would actually run
+    // for its `function=`. Deferred to here, after the whole loop, because `addpath` prepends:
+    // a directory added for a later block can change an earlier block's resolution, so a check
+    // made at each block's own construction would pass and still run the wrong file.
+    //
+    // `which` is Octave's own answer and agrees with `canonicalize_file_name` -- see
+    // `octave_ffi::OctaveSession::which`, and `octave-ffi`'s own
+    // `which_names_the_file_a_call_would_actually_run` for the measurement.
+    if let Some(session) = &octave_session {
+        for (block_name, function, declared_path) in &octave_resolutions {
+            let resolved = session
+                .borrow_mut()
+                .which(function)
+                .map_err(DaeError::Octave)?;
+            let Some(resolved) = resolved else {
+                return Err(DaeError::OctaveFunctionNotDefinedByItsFile {
+                    block_name: block_name.clone(),
+                    function: function.clone(),
+                    declared_path: declared_path.clone(),
+                });
+            };
+            // `which` already returns an absolute, canonicalised path; canonicalising again is
+            // only to survive a symlinked temporary directory, and falling back to the path as
+            // given is right when it cannot be (the comparison then simply uses what Octave
+            // said).
+            let resolved_canonical = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
+            let declared_canonical = declared_path
+                .canonicalize()
+                .unwrap_or_else(|_| declared_path.clone());
+            if resolved_canonical != declared_canonical {
+                return Err(DaeError::OctaveFunctionResolvesToAnotherFile {
+                    block_name: block_name.clone(),
+                    function: function.clone(),
+                    declared_path: declared_path.clone(),
+                    resolved_path: resolved,
+                });
+            }
+        }
     }
 
     let mut prev_diode_raw_ioff: BTreeMap<String, f64> = BTreeMap::new();
