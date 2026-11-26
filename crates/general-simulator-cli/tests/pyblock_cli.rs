@@ -76,3 +76,64 @@ fn pyblock_gain_reproduces_a_hand_known_result_every_step() {
         assert!((pg - 10.0).abs() < 1e-12, "expected PG=10 (5*2), got {pg}");
     }
 }
+
+/// A block importing a module in its own directory runs end to end, with no `PYTHONPATH` set.
+///
+/// Measured before the fix, from a directory holding both files:
+///
+/// ```text
+/// error: PyBlock(Load { path: "./ctrl_sib.py", message: "ModuleNotFoundError: No module named 'helper'" })
+/// ```
+///
+/// The fixtures are written fresh into their own temp directory rather than copied from
+/// `tests/fixtures`, because the sibling has to be *next to* the block and `fixture()` above
+/// flattens everything into one shared directory.
+#[test]
+fn a_block_imports_a_module_in_its_own_directory_end_to_end() {
+    let dir = std::env::temp_dir().join("gsim-pyblock-sibling-cli");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch directory");
+    std::fs::write(dir.join("shared_constants.py"), "GAIN = 3.0\n").unwrap();
+    std::fs::write(
+        dir.join("ctrl_sibling.py"),
+        "import shared_constants\n\n\n\
+         def start():\n    return {}\n\n\n\
+         def output(state, t, dt, inputs):\n    return shared_constants.GAIN * inputs[0]\n",
+    )
+    .unwrap();
+
+    let devices = write_devices_file(&format!(
+        "OFFVAL kind=const value=0\n\
+         OFFGATE kind=sig2phys domain=voltage in=OFFVAL\n\
+         D1 kind=ideal_switch r_on=0.1 body_g_breakdown=0 body_v_breakdown=-100 body_g_off=0 body_v_f=0.7 body_g_on=1 gate=block ctrl=OFFGATE\n\
+         SRC kind=const value=5\n\
+         PG kind=pyblock path={} in=SRC\n",
+        dir.join("ctrl_sibling.py").display()
+    ));
+    let netlist = write_devices_file("V1 a 0 5\nD1 a b idealswitchmodel\nR1 b 0 1000\n");
+
+    let output = run(&[
+        netlist.to_str().unwrap(),
+        "--devices",
+        devices.to_str().unwrap(),
+        "--mode",
+        "transient",
+        "--tfinal",
+        "0.001",
+        "--dt",
+        "0.0002",
+    ]);
+    assert!(
+        output.status.success(),
+        "a block importing its own sibling must run; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    for line in stdout.lines().skip(1) {
+        let pg: f64 = line.split(',').next_back().unwrap().parse().unwrap();
+        assert!(
+            (pg - 15.0).abs() < 1e-12,
+            "expected PG=15 (5 * shared_constants.GAIN), got {pg}"
+        );
+    }
+}
