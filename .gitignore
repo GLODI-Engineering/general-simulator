@@ -12,6 +12,11 @@ doc-verify/**/*.dylib
 doc-verify/**/*.dll
 doc-verify/**/__pycache__/
 doc-verify/**/*.pyc
+# A `pyblock` test fixture that imports a sibling makes CPython write a cache beside it, and a
+# `.pyc` carries the absolute path it was compiled from -- so committing one would both be
+# churn and leak this machine's own layout into the tree.
+crates/**/__pycache__/
+crates/**/*.pyc
 
 # mdBook build output (regenerate with `mdbook build` in each book/*/ directory)
 /book/*/book/

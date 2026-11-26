@@ -98,6 +98,32 @@
 //!     ...
 //! ```
 //!
+//! ## A module beside the block is importable
+//!
+//! A block's own directory is put on `sys.path` before its source is exec'd, so
+//! `import helper` finds a `helper.py` sitting next to the block. Anyone who writes a second
+//! block factors the shared part -- a parameter table, a transform, a model -- into a file in
+//! the same directory, and `python ctrl.py` would have made that importable, so this is the
+//! behaviour every mental model already assumes. The directory comes from the block's own
+//! `path=`, so nothing has to be restated in a `PYTHONPATH` (which is process-wide anyway, and
+//! so cannot serve two blocks in two directories without enumerating both by hand).
+//!
+//! **It is appended, not prepended.** A block's own file is not a program the user launched; it
+//! is a file this crate was pointed at. Prepending would let a sibling named `json.py` shadow
+//! the standard library's `json` for the whole process, which is too high a price for making a
+//! sibling importable. Appending makes the sibling importable and leaves every installed
+//! package winning.
+//!
+//! **Two blocks whose siblings share a module name are refused.** `sys.modules` is process-wide
+//! and the first `import helper` in a run wins, so two blocks in two directories each holding
+//! their own `helper.py` would both compute with the first one's values -- a block silently
+//! running another block's control law. That is [`PyBlockError::SiblingImportShadowed`], raised
+//! at construction, naming both files. It fires only when the winner came from another
+//! *block's* directory; the standard library or an installed package winning is the intended
+//! consequence of appending. One limitation worth knowing: the check sees `import helper`,
+//! which binds a module object in the block's namespace, and `from helper import K` binds `K`
+//! instead and leaves nothing to inspect.
+//!
 //! ## State, cloning, and per-instance isolation
 //!
 //! Each instance gets its own Python namespace (`PyModule::from_code` execs the cached source
@@ -160,6 +186,24 @@ pub enum PyBlockError {
         /// The innermost traceback frame inside the user's own file.
         location: Option<PyLocation>,
     },
+    /// This block imported a module that it has a same-named sibling for, and the module it got
+    /// came from *another block's* directory.
+    ///
+    /// `sys.modules` is process-wide, so the first `import helper` in a run wins and every later
+    /// one returns that same module however many `helper.py` files the sheet has. Two blocks in
+    /// two directories, each with its own `helper.py`, would therefore both compute with the
+    /// first one's constants -- a block running another block's control law, silently. Refused
+    /// instead.
+    ///
+    /// Deliberately *not* raised when the winner is the standard library or an installed
+    /// package: a block's directory is *appended* to `sys.path`, so a sibling named `json.py`
+    /// losing to the real `json` is the intended behaviour, not a collision.
+    SiblingImportShadowed {
+        path: PathBuf,
+        module: String,
+        sibling: PathBuf,
+        resolved: PathBuf,
+    },
 }
 
 impl std::fmt::Display for PyBlockError {
@@ -190,6 +234,21 @@ impl std::fmt::Display for PyBlockError {
                 f,
                 "Python block {} raised in `{function}`: {message}",
                 path.display()
+            ),
+            PyBlockError::SiblingImportShadowed {
+                path,
+                module,
+                sibling,
+                resolved,
+            } => write!(
+                f,
+                "Python block {} imports `{module}`, and the `{module}` it got is {} -- another \
+                 block's, not its own {}. Python caches an imported module process-wide, so the \
+                 first `import {module}` in a run wins and this block would compute with the \
+                 other one's values. Give the two modules different names",
+                path.display(),
+                resolved.display(),
+                sibling.display()
             ),
         }
     }
@@ -396,6 +455,13 @@ impl PyBlockInstance {
                     location,
                 }
             })?;
+            // Checked at construction only, never in `try_clone` below: a clone re-execs the
+            // same source in the same process, so its imports come from `sys.modules` and can
+            // only agree with what this check already passed -- and `try_clone` runs once per
+            // rejected adaptive trial step, which is not a place to put a filesystem probe.
+            if let Some(dir) = block_directory_of(path) {
+                reject_shadowed_sibling_imports(py, &module, path, &dir)?;
+            }
 
             let get = |name: &'static str| -> Option<Py<PyAny>> {
                 module.getattr(name).ok().map(|f| f.unbind())
@@ -795,11 +861,162 @@ impl Clone for PyBlockInstance {
     }
 }
 
+/// Every directory this process has put on `sys.path` for a block, canonicalised.
+///
+/// Process-wide rather than per-registry on purpose: `sys.path` and `sys.modules` are themselves
+/// process-wide, so "which directories are block directories" is a property of the process, and
+/// a second registry in the same process shares the consequences either way.
+fn block_directories() -> &'static std::sync::Mutex<std::collections::BTreeSet<PathBuf>> {
+    static DIRS: std::sync::OnceLock<std::sync::Mutex<std::collections::BTreeSet<PathBuf>>> =
+        std::sync::OnceLock::new();
+    DIRS.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeSet::new()))
+}
+
+/// `path`'s own directory, canonicalised -- the one [`append_block_directory_to_sys_path`] put
+/// on `sys.path`, recomputed rather than threaded through so that `exec_fresh_module` keeps its
+/// `PyResult` signature and its three call sites keep theirs.
+fn block_directory_of(path: &Path) -> Option<PathBuf> {
+    let dir = match path.canonicalize() {
+        Ok(absolute) => absolute.parent().map(Path::to_path_buf),
+        Err(_) => path.parent().map(Path::to_path_buf),
+    }?;
+    if dir.as_os_str().is_empty() {
+        return None;
+    }
+    Some(dir.canonicalize().unwrap_or(dir))
+}
+
+/// Puts `path`'s own directory on `sys.path`, **appended**, and returns it.
+///
+/// `python ctrl.py` puts the script's directory first on `sys.path`, which is why everyone
+/// expects a module beside a block to be importable. This crate execs a block's source rather
+/// than launching it, so nothing told the import machinery where the file lives and
+/// `import helper` failed -- for a file sitting right next to the block. The directory is
+/// derivable from the block's own `path=`, so a caller should never have to restate it in a
+/// `PYTHONPATH` (which is process-wide anyway, and so cannot serve two blocks in two
+/// directories without the user enumerating both).
+///
+/// **Appended, not prepended.** A block's own file is not a program the user launched; it is a
+/// file the engine was pointed at. Prepending would let a sibling named `json.py` shadow the
+/// standard library's `json` for the whole process, which is too high a price for making a
+/// sibling importable. Appending makes the sibling importable and leaves every installed
+/// package winning, which is the behaviour to want here.
+fn append_block_directory_to_sys_path(py: Python<'_>, path: &Path) -> PyResult<Option<PathBuf>> {
+    let dir = match path.canonicalize() {
+        Ok(absolute) => absolute.parent().map(Path::to_path_buf),
+        Err(_) => path.parent().map(Path::to_path_buf),
+    };
+    let Some(dir) = dir else {
+        return Ok(None);
+    };
+    if dir.as_os_str().is_empty() {
+        return Ok(None);
+    }
+    let dir = dir.canonicalize().unwrap_or(dir);
+    let text = dir.to_string_lossy().to_string();
+    let sys_path = py.import("sys")?.getattr("path")?;
+    if !sys_path.contains(&text)? {
+        sys_path.call_method1("append", (&text,))?;
+    }
+    if let Ok(mut known) = block_directories().lock() {
+        known.insert(dir.clone());
+    }
+    Ok(Some(dir))
+}
+
+/// Refuses a block whose own sibling module lost an import to *another block's* sibling.
+///
+/// `sys.modules` is process-wide and the first `import helper` in a run wins, so two blocks in
+/// two directories each holding a `helper.py` would both compute with the first one's values --
+/// a block silently running another block's control law. The check is exact rather than
+/// conservative: it fires only when this block's directory genuinely offers a module of that
+/// name *and* the module that won came from a directory this process registered for some other
+/// block. The standard library and installed packages winning is the intended consequence of
+/// appending rather than prepending, and is not a collision.
+///
+/// One limitation, stated rather than papered over: this sees `import helper`, which binds a
+/// module object in the block's namespace. `from helper import K` binds `K` instead, and leaves
+/// nothing here to inspect.
+fn reject_shadowed_sibling_imports(
+    py: Python<'_>,
+    module: &pyo3::Bound<'_, PyModule>,
+    block_path: &Path,
+    dir: &Path,
+) -> Result<(), PyBlockError> {
+    let load_error = |message: String| PyBlockError::Load {
+        path: block_path.to_path_buf(),
+        message,
+        // No position in the block's own source: a shadowed sibling is a fact about two
+        // files and `sys.modules`, not about a line. `location` is for a `SyntaxError`,
+        // which is the one load failure that knows where it happened.
+        location: None,
+    };
+    let module_type = py
+        .import("types")
+        .and_then(|types| types.getattr("ModuleType"))
+        .map_err(|e| load_error(e.to_string()))?;
+    let namespace = module.dict();
+    let known_block_dirs = block_directories()
+        .lock()
+        .map(|d| d.clone())
+        .unwrap_or_default();
+    for (name, value) in namespace.iter() {
+        let Ok(is_module) = value.is_instance(&module_type) else {
+            continue;
+        };
+        if !is_module {
+            continue;
+        }
+        let Ok(name) = name.extract::<String>() else {
+            continue;
+        };
+        // Does this block's own directory offer a module of that name at all? If not, whatever
+        // was imported is simply an installed package and nothing is being shadowed.
+        let as_file = dir.join(format!("{name}.py"));
+        let as_package = dir.join(&name).join("__init__.py");
+        let sibling = if as_file.is_file() {
+            as_file
+        } else if as_package.is_file() {
+            as_package
+        } else {
+            continue;
+        };
+        let Ok(file) = value
+            .getattr("__file__")
+            .and_then(|f| f.extract::<String>())
+        else {
+            continue;
+        };
+        let resolved = PathBuf::from(file);
+        let resolved_canonical = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
+        let sibling_canonical = sibling.canonicalize().unwrap_or_else(|_| sibling.clone());
+        if resolved_canonical == sibling_canonical {
+            continue;
+        }
+        // It is not this block's own sibling. Only another *block's* directory is a collision;
+        // site-packages or the standard library winning is the point of appending.
+        let from_another_block = resolved_canonical
+            .parent()
+            .is_some_and(|parent| known_block_dirs.contains(parent) && parent != dir);
+        if from_another_block {
+            return Err(PyBlockError::SiblingImportShadowed {
+                path: block_path.to_path_buf(),
+                module: name,
+                sibling: sibling_canonical,
+                resolved: resolved_canonical,
+            });
+        }
+    }
+    Ok(())
+}
+
 fn exec_fresh_module<'py>(
     py: Python<'py>,
     path: &Path,
     source: &str,
 ) -> PyResult<pyo3::Bound<'py, PyModule>> {
+    // Before the exec, because the exec is where the block's own `import` statements run.
+    let _ = append_block_directory_to_sys_path(py, path)?;
     let code = CString::new(source)?;
     let filename = CString::new(path.to_string_lossy().as_bytes())?;
     let module_name = CString::new(
@@ -924,6 +1141,9 @@ mod pure_function {
                         location,
                     }
                 })?;
+                if let Some(dir) = super::block_directory_of(path) {
+                    super::reject_shadowed_sibling_imports(py, &module, path, &dir)?;
+                }
                 let function = module
                     .getattr(function_name)
                     .map_err(|_| PyBlockError::MissingFunction {

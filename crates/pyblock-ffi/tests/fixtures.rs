@@ -373,3 +373,80 @@ fn a_syntax_error_reports_the_line_it_is_on() {
         "{location:?}"
     );
 }
+/// A block importing a module in its own directory works, with no `PYTHONPATH` set.
+///
+/// `python ctrl.py` puts the script's directory on `sys.path`; this crate never did, so the one
+/// thing anyone does after writing a second block -- factor the shared part into a file beside
+/// it -- failed with `ModuleNotFoundError`. The directory is derivable from the block's own
+/// `path=`, so asking the user to restate it in a setting was asking them to repeat what the
+/// netlist already carries.
+#[test]
+fn a_block_imports_the_module_beside_it() {
+    let mut registry = PyBlockRegistry::new();
+    let mut instance = registry
+        .instantiate(&fixture("sibling_a/ctrl_a.py"))
+        .expect("a block importing its own sibling must load");
+    let out = instance
+        .call(0.0, 1e-5, &[PyInput::Scalar(4.0)], 1)
+        .unwrap();
+    assert_eq!(out, vec![8.0], "helper.K in sibling_a is 2.0");
+}
+
+/// Two blocks in two directories each import their own sibling in one run. `PYTHONPATH` is
+/// process-wide, so the workaround this replaces could not express this without the user
+/// enumerating both directories by hand.
+#[test]
+fn two_blocks_in_two_directories_each_import_their_own_sibling() {
+    let mut registry = PyBlockRegistry::new();
+    let mut a = registry
+        .instantiate(&fixture("sibling_a/ctrl_a.py"))
+        .expect("load sibling_a");
+    let mut b = registry
+        .instantiate(&fixture("sibling_b/ctrl_b.py"))
+        .expect("load sibling_b");
+    let out_a = a.call(0.0, 1e-5, &[PyInput::Scalar(1.0)], 1).unwrap();
+    let out_b = b.call(0.0, 1e-5, &[PyInput::Scalar(1.0)], 1).unwrap();
+    assert_eq!(out_a, vec![2.0], "sibling_a's own helper.K is 2.0");
+    assert_eq!(out_b, vec![10.0], "sibling_b's own helper_b.K is 10.0");
+}
+
+/// Two blocks in two directories whose siblings share a *module name* cannot both import their
+/// own: `sys.modules` is process-wide, so the second `import helper` returns the first one's.
+/// That would be a silent wrong answer -- a block computing with another block's constants --
+/// so it is refused, naming both files.
+#[test]
+fn a_sibling_shadowed_by_another_blocks_sibling_is_refused_naming_both() {
+    let mut registry = PyBlockRegistry::new();
+    registry
+        .instantiate(&fixture("sibling_a/ctrl_a.py"))
+        .expect("load sibling_a first, so its `helper` is the cached one");
+    let error = registry
+        .instantiate(&fixture("sibling_c/ctrl_c.py"))
+        .expect_err("a block whose `helper` resolves to another block's `helper` must be refused");
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("helper"),
+        "the error does not name the module: {rendered}"
+    );
+    assert!(
+        rendered.contains("sibling_c") && rendered.contains("sibling_a"),
+        "the error does not name both files: {rendered}"
+    );
+}
+
+/// A file named after a stdlib module does not shadow it. This is why the block's directory is
+/// *appended* to `sys.path` rather than prepended: the block's own file is not a program the
+/// user launched, it is a file the engine was pointed at, so making a sibling importable must
+/// not cost an installed package.
+#[test]
+fn a_sibling_named_after_a_stdlib_module_does_not_shadow_it() {
+    let mut registry = PyBlockRegistry::new();
+    let mut instance = registry
+        .instantiate(&fixture("shadows_stdlib/ctrl_json.py"))
+        .expect("load the block beside a json.py");
+    // The fixture asserts `json.dumps` works, which only the real stdlib module has.
+    let out = instance
+        .call(0.0, 1e-5, &[PyInput::Scalar(2.0)], 1)
+        .unwrap();
+    assert_eq!(out, vec![6.0]);
+}
