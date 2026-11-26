@@ -111,3 +111,93 @@ fn no_arguments_still_prints_the_usage_text() {
         "{stderr}"
     );
 }
+
+/// `--capabilities` says what *this* binary can run, so a front end does not have to find out
+/// by failing.
+///
+/// The question it answers is not cosmetic. `kind=pyblock` and `kind=pyfunc` need a
+/// `--features python` build, and **the binary the release workflow publishes is not one** --
+/// deliberately, because linking against one specific libpython would make it a worse download.
+/// So a user who downloads a release, or who follows the build line in a front end's own
+/// setting description, gets an engine that silently excludes the two most-used extensibility
+/// blocks. Until now the only way to discover that was to draw a sheet, press Run and read
+/// `PythonSupportNotCompiledIn`.
+///
+/// `--help` cannot answer it: its text says `kind=pyblock and kind=pyfunc need a --features
+/// python build of this binary` whatever this binary is, so screen-scraping it tells a caller
+/// nothing about the binary in front of them.
+#[test]
+fn capabilities_says_whether_this_binary_can_run_a_python_block() {
+    let (ok, stdout, stderr) = run(&["--capabilities"]);
+    assert!(ok, "--capabilities must exit 0; stderr: {stderr}");
+    assert!(
+        stderr.is_empty(),
+        "--capabilities wrote to stderr: {stderr:?}"
+    );
+
+    // `key=value`, one per line: greppable from a shell, parseable in four lines of any
+    // language, and extensible without breaking a reader that does not know a new key.
+    let fields: std::collections::BTreeMap<&str, &str> = stdout
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .collect();
+
+    assert_eq!(
+        fields.get("program"),
+        Some(&"general-simulator"),
+        "no program name: {stdout}"
+    );
+    assert!(fields.contains_key("version"), "no version: {stdout}");
+    assert_eq!(
+        fields.get("python"),
+        Some(&if cfg!(feature = "python") {
+            "yes"
+        } else {
+            "no"
+        }),
+        "`python` does not report this build's own feature set: {stdout}"
+    );
+    // Octave is a subprocess, so the binary is always *able* to try; whether `octave-cli` is on
+    // PATH is a different question and not one a build can answer.
+    assert_eq!(
+        fields.get("octave"),
+        Some(&"subprocess"),
+        "`octave` does not say how Octave is reached: {stdout}"
+    );
+    assert_eq!(
+        fields.get("cscript"),
+        Some(&"load-only"),
+        "`cscript` does not say that this binary never compiles: {stdout}"
+    );
+}
+
+/// The answer is machine-readable and stays so: every line is `key=value` with no blanks, no
+/// prose and no banner. A front end that regexes prose is a front end that breaks on a reword.
+#[test]
+fn capabilities_is_only_key_equals_value_lines() {
+    let (_, stdout, _) = run(&["--capabilities"]);
+    assert!(!stdout.trim().is_empty(), "--capabilities printed nothing");
+    for line in stdout.lines() {
+        let (key, value) = line
+            .split_once('=')
+            .unwrap_or_else(|| panic!("`{line}` is not key=value"));
+        assert!(
+            !key.is_empty() && !value.is_empty(),
+            "`{line}` has an empty half"
+        );
+        assert!(
+            key.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+            "`{key}` is not a lowercase key"
+        );
+    }
+}
+
+/// `--help` lists it, because a flag nobody can find is a flag nobody uses.
+#[test]
+fn help_mentions_capabilities() {
+    let (_, stdout, _) = run(&["--help"]);
+    assert!(
+        stdout.contains("--capabilities"),
+        "--help omits it: {stdout}"
+    );
+}

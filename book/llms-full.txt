@@ -5237,6 +5237,7 @@ general-simulator <netlist> [--devices <file>] [--mode dc|transient] [--tfinal T
                    [--checkpoint-out <file>] [--checkpoint-every T] [--resume <file>]
 general-simulator (--help | -h)
 general-simulator (--version | -V)
+general-simulator --capabilities
 ```
 
 `<netlist>` is the one required positional argument — the `.cir` file to run. Every flag below
@@ -5261,8 +5262,9 @@ is optional.
 | `--resume <file>` | Continue from a checkpoint instead of from $t = 0$; `--tfinal` stays absolute. Only loads into the deck it was written from. |
 | `--help`, `-h` | Print a grouped summary of every flag, with defaults and three worked invocations, to stdout and exit 0. Asking for help is not a misuse, so it does not go to stderr with a failing status the way a wrong argument does. |
 | `--version`, `-V` | Print `general-simulator <version>` to stdout and exit 0. The program name, not the crate's (`general-simulator-cli`). |
+| `--capabilities` | Print what *this* binary can run, as `key=value` lines, to stdout and exit 0 — see below. |
 
-Both of those are read before the positional `<netlist>`, because every argument is otherwise a
+All three of those are read before the positional `<netlist>`, because every argument is otherwise a
 path to this CLI: before they existed, `general-simulator --version` answered
 `error: reading --version: No such file or directory` with status 1. Anything probing the binary
 to decide whether it works read that as a broken solver — the VS Code front end's own discovery
@@ -5282,6 +5284,55 @@ Run `general-simulator --help` for the full list.
 exclusive — pick fixed-step or adaptive stepping, not both. Omitting `--dt` entirely selects
 adaptive stepping, the default, the same local-truncation-error approach every real SPICE-family
 tool uses by default when only the run length is given.
+
+## `--capabilities`: what *this* binary can run
+
+```console
+$ general-simulator --capabilities
+program=general-simulator
+version=0.9.0
+python=no
+octave=subprocess
+cscript=load-only
+```
+
+**`python` is the one that cannot be answered any other way.** `kind=pyblock` and `kind=pyfunc`
+need a `--features python` build, and the release workflow deliberately does **not** publish one
+— linking against one specific libpython would make it a worse download. So a user who
+downloads a release, or who follows a `cargo build --release -p general-simulator-cli` line in a
+front end's own setting description, ends up with an engine that silently excludes the two
+most-used extensibility blocks, and until this flag existed the only way to find out was to draw
+a sheet, press Run and read `PythonSupportNotCompiledIn`.
+
+`--help` cannot answer it: its NOTES section says *"kind=pyblock and kind=pyfunc need a
+`--features python` build of this binary"* whatever this binary is, so a front end scraping that
+text learns nothing about the binary in front of it.
+
+To get one that can:
+
+```bash
+cargo build --release -p general-simulator-cli --features python
+```
+
+which needs a discoverable Python with its shared library.
+
+**The three extensibility languages answer three different kinds of question, and the values say
+which kind:**
+
+| key | value | what kind of fact it is |
+| --- | --- | --- |
+| `python` | `yes` / `no` | a property of this **build**. Nothing but a rebuild changes it. |
+| `octave` | `subprocess` | a property of the **design**: `octave-ffi` spawns `octave-cli` and never links against Octave, so this binary is always able to *try*. Whether that program is on `PATH` is a question about the machine, which no build can answer. |
+| `cscript` | `load-only` | a property of the **contract**: this binary loads a shared library and never invokes a compiler. A caller that wants a `.so` built has to build it. |
+
+Every line is `key=value`, nothing else — no banner, no prose, no blank lines. That is so a
+front end never has to regex text a reword would break, and so a new key can be added without
+breaking a reader that does not know it. Parse it in four lines:
+
+```bash
+python=$(general-simulator --capabilities | sed -n 's/^python=//p')
+[ "$python" = yes ] || echo "this engine cannot run a Python block"
+```
 
 ## `--out-every`: when the timestep and the useful output rate differ
 
