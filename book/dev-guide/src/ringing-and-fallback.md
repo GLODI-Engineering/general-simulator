@@ -29,50 +29,75 @@ rather than assuming it away.
 
 ## The detection heuristic
 
-`is_ringing` (`crates/dae-runtime/src/lib.rs:587-600`) looks at three consecutive samples of the
-same unknown — `x_prev_prev`, `x_prev`, and the current trapezoidal trial — and flags ringing
-when all of the following hold simultaneously:
+`is_ringing` looks at the four most recent consecutive samples of the same unknown — the three
+most recent accepted states and the current trapezoidal trial — and asks
+`unknown_is_ringing` about each unknown in turn. The signature is on the *increments*
+
+$$d_1 = a - w,\qquad d_2 = b - a,\qquad d_3 = c - b$$
+
+of the four samples $w, a, b, c$, not on the samples themselves, which is what makes it
+independent of whatever DC offset the unknown sits on. Ringing is flagged when all three of
+the following hold at once:
+
+- **The increments alternate in sign twice in a row** — $d_1$ against $d_2$, and $d_2$ against
+  $d_3$. This is the direct signature of a mode that reverses direction on *every* step, and
+  it is the condition that needs the fourth sample. A Nyquist mode alternates for as many
+  increments as one cares to look at; an ordinary turning point of a smooth waveform alternates
+  once and then does not.
+- **The increments are not shrinking** ($|d_2| \ge 0.9|d_1|$ and $|d_3| \ge 0.9|d_2|$, a 10%
+  tolerance rather than a strict inequality so floating-point noise alone does not reject a
+  borderline case). This is what separates sustained ringing from a physically decaying
+  oscillation, which also reverses direction every step as it dies but with a shrinking
+  amplitude. Not decaying is the entire pathology.
+- **The oscillation is large relative to the unknown's own scale**
+  ($|d_2| \ge 10^{-6}\max(|w|,|a|,|b|,|c|)$). An offset-free signature would otherwise fire on
+  the last bits of the solve wobbling under a settled $400\text{V}$ rail, whose increments do
+  alternate and do not decay. $10^{-6}$ sits a long way above a linear solve's own relative
+  error (nearer $10^{-12}$) and a long way below any oscillation worth a fallback.
+
+Both thresholds are dimensionless ratios. That is deliberate: the previous version of this
+test used an absolute `NOISE_FLOOR = 1e-9` on the raw sample, applied to a vector whose rows
+are volts in one place and amps in another, so it discarded a current legitimately living at
+$10^{-10}\text{A}$ for no reason other than its unit — while doing nothing about round-off on a
+rail. Neither of the two ratios depends on the unknown's unit or on $\Delta t$.
+
+### Why three samples were not enough
+
+Until #116 the test was on the *sign of the raw sample*: the outer two of three consecutive
+samples sharing a sign with the middle one opposing it.
 
 ```rust
 let alternating = (a > 0.0) == (c > 0.0) && (a > 0.0) != (b > 0.0);
 alternating && c.abs() >= b.abs() * 0.9
 ```
 
-- **The outer two samples share a sign, and the middle one is opposite** (`a` and `c` agree,
-  `b` disagrees) — the direct signature of sign-flipping every step, not just *a* sign change.
-- **Magnitude isn't shrinking** (`c.abs() >= b.abs() * 0.9`, a 10% tolerance rather than a strict
-  inequality, to avoid rejecting a borderline case on floating-point noise alone). This is the
-  condition that actually distinguishes sustained ringing from a legitimate settling transient: a
-  real, physically decaying oscillation also alternates sign sample to sample near a zero
-  crossing, but each successive amplitude is *smaller* than the last. Ringing's defining
-  property is that it *isn't* decaying — magnitude staying roughly flat (or growing) across three
-  samples is the entire pathology, so this check is what separates "detected instability" from
-  "ordinary settling behavior," which must never trigger a fallback.
-- **A noise floor excludes near-zero values entirely** (`NOISE_FLOOR = 1e-9`): if any of the
-  three samples is smaller in magnitude than the floor, the check returns `false` immediately.
-  Without this, an unknown genuinely settling toward zero would show apparent "sign alternation"
-  purely from floating-point noise around zero, and get flagged as ringing when nothing is
-  actually wrong.
+That only ever saw an oscillation that straddled zero. A switching node ringing
+$\pm50\text{V}$ about a $400\text{V}$ rail gives three positive samples — 350, 429, 386 — and
+was invisible to it however badly it oscillated. In a converter most nodes sit on or near a
+rail, so the floating dead-time node this detector was first written against was the special
+case, not the general one; the blindness was found in #113, where a switching node rang about
+its $400\text{V}$ rail tens of volts past the clamp its body diode holds it to and the
+detector never fired.
 
-Each condition in the conjunction exists to rule out one specific false positive — dropping any
-one of the three would either miss real ringing or misfire on ordinary transient behavior that
-happens to cross zero.
+The obvious repair — the same two conditions, but on $d_1$ and $d_2$ instead of on the signs —
+does not work, and it is worth recording *why*, because it looks like it should. At a smooth
+maximum the two increments are also opposed in sign and are also nearly equal in magnitude
+(exactly equal, for samples placed symmetrically about the peak), so no magnitude ratio
+separates the two cases. A three-sample test on increments therefore falls back at every
+extremum of every oscillating quantity. `tests/ringing_about_a_rail.rs` measures what that
+costs on a lossless $LC$ tank ringing about a $400\text{V}$ rail at $\Delta t = T/33$: 69% of
+the waveform's amplitude gone over five cycles, and a measured convergence ratio of 1.0
+instead of 4.0 — the whole run reduced below first order. Those two numbers are what the
+fourth sample buys.
 
-### What this heuristic cannot see
+The cost is that the loops and `checkpoint::Checkpoint` carry a third history vector,
+`x_prev3`. A resumed run has to have it, or its first steps would decide differently from the
+uninterrupted run's and break the bit-identity contract, so `FORMAT_VERSION` went to 2 and a
+checkpoint written by an older build is refused up front by name rather than misread.
 
-The test is on the *sign* of the raw unknown, so it only detects an oscillation that straddles
-zero. A switching node ringing about a $400\text{V}$ or $800\text{V}$ rail — the ordinary case
-in a converter, as opposed to the floating dead-time node this detector was written for — never
-changes sign, and `is_ringing` is blind to it however badly it oscillates. That blindness is a
-known, deliberate limitation rather than an oversight to be fixed in passing: the offset-invariant
-signature is sign alternation of the *increments* $x_{n} - x_{n-1}$, and three samples cannot tell
-that apart from one ordinary turning point of a smooth waveform, so a detector built on it needs
-a fourth sample of history and a discriminator that is not simply a magnitude ratio. It is
-tracked as issue #116.
-
-What makes the blindness survivable is the policy below: the cooldown keeps the solver on
-backward Euler long enough after each fresh excitation that the mode is settled before
-trapezoidal is trusted again, so the detector is a backstop rather than the primary defence.
+The cooldown below is still what keeps the detector a backstop rather than the primary
+defence: it holds the solver on backward Euler long enough after each fresh excitation that
+the stiff mode is settled before trapezoidal is trusted again.
 
 ## The full per-step decision policy
 
