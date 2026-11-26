@@ -376,6 +376,25 @@ impl std::fmt::Display for CScriptError {
 
 impl std::error::Error for CScriptError {}
 
+/// A `libloading::Error` with the platform loader's own words included.
+///
+/// `libloading::Error`'s `Display` is deliberately terse -- `dlopen failed`, `dlsym failed` --
+/// and puts the text `dlerror`/`GetLastError` actually returned in its `source()`. That text is
+/// the whole diagnosis: `cannot open shared object file: No such file or directory` (the file is
+/// not there, or not on the loader's search path) and `undefined symbol: foo` (the file is
+/// there and one of *its* dependencies is not) are different problems with different fixes, and
+/// a user shown only `dlopen failed` will go and rebuild a library that is already correct.
+fn loader_message(error: &libloading::Error) -> String {
+    let mut message = error.to_string();
+    let mut source = std::error::Error::source(error);
+    while let Some(inner) = source {
+        message.push_str(": ");
+        message.push_str(&inner.to_string());
+        source = inner.source();
+    }
+    message
+}
+
 /// One loaded shared library's three FFI entry points. Kept alive for as long as any
 /// [`CScriptInstance`] built from it exists (each instance holds an `Arc` to this) — the
 /// `Library` must outlive every raw function pointer taken from it.
@@ -430,7 +449,7 @@ impl CScriptLibrary {
         // chose this path deliberately, in their own netlist.
         let library = unsafe { Library::new(path) }.map_err(|e| CScriptError::Load {
             path: path.to_path_buf(),
-            message: e.to_string(),
+            message: loader_message(&e),
         })?;
 
         let start: StartFn = unsafe {
@@ -440,7 +459,7 @@ impl CScriptLibrary {
                     .map_err(|e| CScriptError::MissingSymbol {
                         path: path.to_path_buf(),
                         symbol: "cscript_start",
-                        message: e.to_string(),
+                        message: loader_message(&e),
                     })?;
             *symbol
         };

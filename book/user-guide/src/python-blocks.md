@@ -29,12 +29,15 @@ cargo build --release -p general-simulator-cli --features python
 Built without that flag, any `kind=pyblock`/`kind=pyfunc` netlist fails at the first step with:
 
 ```text
-PythonSupportNotCompiledIn { block_name: "<name>" }
+error: PythonSupportNotCompiledIn: block `<name>` is a Python block, and this build of
+general-simulator cannot run one: it was compiled without the optional `python` feature. Build
+one that can with `cargo build --release -p general-simulator-cli --features python`, which
+needs a discoverable Python with its shared library
 ```
 
-(the CLI's raw `Debug` formatting of `dae_runtime`'s own error type — searchable verbatim). If
-you only need the C escape hatch, `kind=cscript` already covers "dynamically-loaded custom
-block" without this dependency at all.
+The variant name stays in front of every error this binary prints, so it is still searchable
+verbatim. If you only need the C escape hatch, `kind=cscript` already covers
+"dynamically-loaded custom block" without this dependency at all.
 
 No `python -m venv`/`requirements.txt` story is built in: the interpreter PyO3 embeds is
 whatever Python your build found (its own standard library included), and `import numpy`/

@@ -480,3 +480,38 @@ fn instance_call(
     let mut instance = registry.instantiate(lib_path).expect("load fixture");
     instance.call(input, 0.0, 1)
 }
+
+/// A library that is not there has to say *why* the loader refused it, not merely that it did.
+///
+/// `libloading::Error`'s own `Display` is the bare phrase `dlopen failed` -- the platform text
+/// (`cannot open shared object file`, or an undefined-symbol list when a dependency is missing)
+/// lives in its `source()`, and those are different problems with different fixes. Before this,
+/// `CScriptError::Load` carried only the `Display`, so every load failure read the same.
+#[test]
+fn a_load_failure_carries_the_loaders_own_reason() {
+    let missing = std::path::Path::new("/nonexistent/definitely-not-here.so");
+    let error = cscript_ffi::CScriptLibrary::load(missing)
+        .err()
+        .expect("loading a path that does not exist must fail");
+    let message = match &error {
+        cscript_ffi::CScriptError::Load { message, .. } => message.clone(),
+        other => panic!("expected a Load error, got {other:?}"),
+    };
+    assert!(
+        message.len() > "dlopen failed".len(),
+        "the loader's own reason was thrown away; message is only `{message}`"
+    );
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("definitely-not-here.so"),
+        "the rendered error does not name the library: {rendered}"
+    );
+    // Not a platform-specific string match: every platform's loader says *something* past
+    // "failed", and this asserts that whatever it said survives.
+    assert!(
+        rendered.to_lowercase().contains("no such file")
+            || rendered.to_lowercase().contains("cannot open")
+            || rendered.to_lowercase().contains("not found"),
+        "the rendered error does not say why the load failed: {rendered}"
+    );
+}

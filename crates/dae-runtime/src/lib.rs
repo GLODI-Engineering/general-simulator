@@ -374,6 +374,252 @@ pub enum DaeError {
     },
 }
 
+/// A `DaeError` as a sentence a user can act on.
+///
+/// Every variant has its own arm and the match has no wildcard, so adding a variant is a
+/// compile error until its sentence is written. That is the guard; `tests/
+/// errors_read_as_sentences.rs` only checks that the sentences read as sentences.
+///
+/// This exists because every front end -- the CLI, the VS Code extension's output channel,
+/// anything that reads a failed run -- starts from this string. A `Debug` derive reaching a
+/// user shows them a Rust struct literal, which cannot be read by someone who does not write
+/// Rust and cannot be parsed into a file and a line by anything that wants to put the failure
+/// next to the code it is about.
+impl std::fmt::Display for DaeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DaeError::Parse(message) => write!(f, "could not read the netlist: {message}"),
+            DaeError::Io(message) => write!(f, "writing this run's output failed: {message}"),
+            DaeError::StopRequested => {
+                write!(f, "the run was stopped on request, before `tfinal`")
+            }
+            DaeError::Build(inner) => write!(f, "{inner}"),
+            DaeError::InitialCondition(inner) => {
+                write!(
+                    f,
+                    "the netlist's `ic=` conditions could not be met: {inner}"
+                )
+            }
+            DaeError::Evaluate(inner) => write!(f, "evaluating an expression failed: {inner}"),
+            DaeError::Linear(SingularMatrix { pivot_column }) => write!(
+                f,
+                "the circuit matrix is singular at column {pivot_column}: some node or branch \
+                 is not determined by the netlist (a floating node, a shorted voltage source, \
+                 or two inductors in series with no path to ground)"
+            ),
+            DaeError::Lcp(inner) => {
+                let detail = match inner {
+                    LcpError::RayTermination => {
+                        "the switch/diode mode solver ran off to infinity instead of finding a \
+                         consistent set of conducting devices (a ray termination)"
+                    }
+                    LcpError::MaxIterationsExceeded => {
+                        "the switch/diode mode solver hit its pivot cap without settling on a \
+                         consistent set of conducting devices"
+                    }
+                    LcpError::NonFiniteInput => {
+                        "the switch/diode mode solver was handed a non-finite value, so the \
+                         state it was solving from had already diverged"
+                    }
+                };
+                write!(f, "{detail}")
+            }
+            DaeError::UnknownDiodeInput(name) => write!(
+                f,
+                "the netlist has a diode `{name}` with no piecewise-linear parameters supplied \
+                 for it"
+            ),
+            DaeError::UnknownBlockInput(name) => write!(
+                f,
+                "a block input names `{name}`, which is not a block or a signal in this netlist"
+            ),
+            DaeError::AlgebraicLoop { cycle } => write!(
+                f,
+                "these blocks depend on each other within one timestep: {}. Insert a one-sample \
+                 delay somewhere in the loop (read the upstream block's previous output instead \
+                 of its current one) to turn the algebraic loop into a sampled feedback path",
+                cycle.join(" -> ")
+            ),
+            DaeError::CScript(inner) => write!(f, "{inner}"),
+            DaeError::CScriptRequiresCloneForAdaptiveStep { block_name } => write!(
+                f,
+                "block `{block_name}` is a C-script library that does not export \
+                 `cscript_clone`, which an adaptive-step run needs in order to retry a step. \
+                 Run with a fixed step (`--dt`), or add `cscript_clone` to the library"
+            ),
+            DaeError::CScriptRequiresNextSampleHitForVariableSampleTime { block_name } => write!(
+                f,
+                "block `{block_name}` declares `ts=variable`, so its C-script library must \
+                 export `cscript_next_sample_hit` to say when it next wants to be sampled"
+            ),
+            DaeError::CScriptArityMismatch {
+                block_name,
+                declared_inputs,
+                declared_outputs,
+                netlist_inputs,
+                netlist_outputs,
+            } => {
+                fn side(declared: &Option<usize>) -> String {
+                    match declared {
+                        Some(n) => n.to_string(),
+                        None => "(not declared)".to_string(),
+                    }
+                }
+                write!(
+                    f,
+                    "block `{block_name}`'s C-script library declares {} input(s) and {} \
+                     output(s) through `cscript_arity`, but the netlist wires \
+                     {netlist_inputs} input(s) and {netlist_outputs} output(s) to it",
+                    side(declared_inputs),
+                    side(declared_outputs)
+                )
+            }
+            #[cfg(feature = "python")]
+            DaeError::PyBlockRequiresNextSampleHitForVariableSampleTime { block_name } => write!(
+                f,
+                "block `{block_name}` declares `ts=variable`, so its `.py` file must define \
+                 `next_sample_hit` to say when it next wants to be sampled"
+            ),
+            #[cfg(feature = "python")]
+            DaeError::PyBlock(inner) => write!(f, "{inner}"),
+            DaeError::PythonSupportNotCompiledIn { block_name } => write!(
+                f,
+                "block `{block_name}` is a Python block, and this build of general-simulator \
+                 cannot run one: it was compiled without the optional `python` feature. Build \
+                 one that can with `cargo build --release -p general-simulator-cli --features \
+                 python`, which needs a discoverable Python with its shared library"
+            ),
+            DaeError::Octave(inner) => write!(f, "{inner}"),
+            DaeError::OctBlockMissingRequiredFile {
+                block_name,
+                expected_path,
+            } => write!(
+                f,
+                "block `{block_name}` needs the file {}, which does not exist",
+                expected_path.display()
+            ),
+            DaeError::OctBlockRequiresNextSampleHitForVariableSampleTime { block_name } => write!(
+                f,
+                "block `{block_name}` declares `ts=variable`, so its own directory must hold a \
+                 `<function>_next_sample_hit.m` to say when it next wants to be sampled"
+            ),
+            DaeError::OctBlockDoesNotSupportAdaptiveStep { block_name } => write!(
+                f,
+                "block `{block_name}` is an Octave block, whose state lives inside the shared \
+                 octave-cli session and cannot be rolled back when an adaptive step is \
+                 rejected. Run with a fixed step (`--dt`)"
+            ),
+            DaeError::AdaptiveStepStalled {
+                steps_taken,
+                t_reached,
+                t_final,
+            } => write!(
+                f,
+                "the adaptive step size collapsed: {steps_taken} steps reached only \
+                 {t_reached:e} s of the {t_final:e} s asked for. Run with a fixed step \
+                 (`--dt`), or loosen `--reltol`/`--abstol`"
+            ),
+            DaeError::GateTargetNotSig2Voltage {
+                gate,
+                block,
+                found_kind,
+            } => write!(
+                f,
+                "a switch's `gate={gate}` names block `{block}`, which is a `{found_kind}`; a \
+                 gate must name a `sig2phys` converter in voltage mode"
+            ),
+            DaeError::SourceNotSig2PhysicalConverter {
+                source,
+                block,
+                expected_kind,
+                found_kind,
+            } => write!(
+                f,
+                "source `{source}` takes its value from block `{block}`, which is a \
+                 `{found_kind}`; a source driven by a block must name a `{expected_kind}` \
+                 converter"
+            ),
+            DaeError::Sig2PhysUsedAsCircuitNode {
+                block,
+                element,
+                node,
+            } => write!(
+                f,
+                "element '{element}' wires node '{node}', but '{block}' is a kind=sig2phys \
+                 converter, not a device with terminals -- it has no pins and stamps nothing \
+                 into the circuit, so that node would be undriven and silently solve to \
+                 V({node}) = 0. A converter is consumed by name, never by a wire: name it in \
+                 an independent source's own value field (e.g. `V1 a 0 {block}`) or in an \
+                 ideal switch's gate=/ctrl= field."
+            ),
+            DaeError::DuplicateBlockName(name) => {
+                write!(f, "two blocks in this netlist are both named `{name}`")
+            }
+            DaeError::WaveCaptureTooShort {
+                block,
+                source,
+                covered,
+                t_final,
+            } => write!(
+                f,
+                "block `{block}` reads `{source}`, which ends at {covered:e} s, but the run \
+                 goes to {t_final:e} s. Past its last sample a capture holds its final value, \
+                 so the rest of the run would be driven by a flat line -- which is what \
+                 `after=error` exists to refuse. Shorten the run to {covered:e} s, capture more \
+                 data, or choose `after=hold`/`repeat`/`zero` if a held, repeated or zero tail \
+                 is what you meant"
+            ),
+            DaeError::CheckpointFormat(message) => {
+                write!(f, "this checkpoint cannot be read: {message}")
+            }
+            DaeError::CheckpointIo { path, message } => {
+                write!(f, "checkpoint {}: {message}", path.display())
+            }
+            DaeError::CheckpointDeckMismatch {
+                unknowns_in_checkpoint,
+                unknowns_in_deck,
+            } => write!(
+                f,
+                "this checkpoint was taken from a different netlist: it holds {} unknown(s) \
+                 and this deck has {}. Resume from a checkpoint taken from this same netlist",
+                unknowns_in_checkpoint.len(),
+                unknowns_in_deck.len()
+            ),
+            DaeError::CheckpointUnsupportedBlock { block, kind } => write!(
+                f,
+                "block `{block}` is a `{kind}`, whose state this checkpoint format cannot \
+                 carry, so this run cannot be resumed"
+            ),
+            DaeError::BlockInitialConditionLength {
+                block,
+                expected,
+                got,
+            } => write!(
+                f,
+                "block `{block}` holds {expected} state(s), but its `ic=` lists {got}"
+            ),
+            DaeError::VectorSignalNotSupported { block } => write!(
+                f,
+                "block `{block}` was handed a vector signal, and it only reads scalars"
+            ),
+            DaeError::VectorSignalSizeMismatch {
+                block,
+                expected,
+                got,
+            } => write!(
+                f,
+                // `expected: N, got: M` is kept verbatim because that is how the component
+                // reference documents this error, generated from `general-mna`'s own
+                // `BlockKind` doc comments -- a read-only sibling repository here.
+                "block `{block}` was handed a vector signal of the wrong length -- \
+                 expected: {expected}, got: {got}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DaeError {}
+
 /// Solves the DC operating point of a netlist containing linear devices plus any number of
 /// `D` (diode) elements, whose piecewise-linear parameters are supplied in `diodes` (keyed by
 /// element name) rather than parsed from the netlist — SPICE's `.model` syntax has no notion

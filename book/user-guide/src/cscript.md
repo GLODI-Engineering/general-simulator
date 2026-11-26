@@ -196,7 +196,7 @@ The three are **all-or-nothing**:
   half-adopted contract cannot masquerade as a library that never opted in:
 
   ```text
-  error: CScript(MissingSymbol { path: "doc-verify/cscript/partial_state.so", symbol: "cscript_state_read", message: "the checkpoint state contract is all-or-nothing: cscript_state_size, cscript_state_write and cscript_state_read must all be exported, or none of them" })
+  error: CScript(MissingSymbol): C-script library doc-verify/cscript/partial_state.so is missing required symbol `cscript_state_read`: the checkpoint state contract is all-or-nothing: cscript_state_size, cscript_state_write and cscript_state_read must all be exported, or none of them
   ```
 
   (`doc-verify/cscript/error_partial_state_contract.cir`, against `partial_state.c`, which
@@ -224,7 +224,7 @@ With it, a netlist that disagrees is refused before the first step:
 
 ```console
 $ general-simulator circuit.cir --devices blocks.dev --mode transient --tfinal 1e-3 --dt 5e-4
-error: CScriptArityMismatch { block_name: "CG", declared_inputs: Some(2), declared_outputs: Some(1), netlist_inputs: 3, netlist_outputs: 1 }
+error: CScriptArityMismatch: block `CG`'s C-script library declares 2 input(s) and 1 output(s) through `cscript_arity`, but the netlist wires 3 input(s) and 1 output(s) to it
 ```
 
 Both counts are in the message, so it says which side to change rather than only that something
@@ -360,7 +360,7 @@ the system directories — and nothing else. So a library sitting right next to 
 G1 kind=cscript lib=gain.so in=SRC
 ```
 ```
-error: CScript(Load { path: "gain.so", message: "dlopen failed" })
+error: CScript(Load): failed to load C-script library gain.so: dlopen failed: gain.so: cannot open shared object file: No such file or directory
 ```
 
 while the same file with an explicit relative path loads:
@@ -377,21 +377,23 @@ directory.** Running the deck above from a different directory fails the same wa
 
 ```
 $ cd /tmp && general-simulator /elsewhere/deck.cir
-error: CScript(Load { path: "./gain.so", message: "dlopen failed" })
+error: CScript(Load): failed to load C-script library ./gain.so: dlopen failed: ./gain.so: cannot open shared object file: No such file or directory
 ```
 
 So either `cd` to the deck's directory before running, or make `lib=` absolute. (`kind=pyblock`'s
 `path=` behaves identically, for the same reason.)
 
-**The error does not say why.** `message: "dlopen failed"` is all that surfaces — the loader's
-own `dlerror()` text, which would distinguish "no such file" from "undefined symbol" or "wrong
-architecture", is not carried through. When the path is definitely right and the load still
-fails, reach for the loader directly:
+**The error says why.** The loader's own `dlerror()`/`GetLastError` text is carried through
+after the colon, and it is the diagnosis: `cannot open shared object file` means the file is not
+where the path says, while `undefined symbol: foo` means the file is there and one of *its*
+dependencies is not. Those have different fixes, and a user shown only `dlopen failed` would go
+and rebuild a library that is already correct. When the path is definitely right and the load
+still fails, reach for the loader directly:
 
 ```bash
 ldd ./gain.so          # unresolved dependencies
 nm -D ./gain.so | grep cscript_    # are the required symbols exported, and unmangled?
 ```
 
-A missing `cscript_output` or a C++ build that mangled the names produces exactly the same
-one-line message as a missing file.
+A C++ build that mangled the names fails at the first required symbol, naming it
+(`CScript(MissingSymbol)`), rather than at load.

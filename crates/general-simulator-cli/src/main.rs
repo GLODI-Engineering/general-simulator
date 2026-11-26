@@ -349,30 +349,56 @@ enum OutputFormat {
     Samples,
 }
 
-/// A `DaeError` as a line a user can act on.
+/// A `DaeError`'s variant path, with none of its fields: `CScriptArityMismatch`,
+/// `CScript(MissingSymbol)`, `Octave(NotFound)`.
 ///
-/// Every variant is a `{e:?}` dump by default, which keeps the variant name greppable in stderr
-/// and is the right default for an error whose fields already read as a sentence. Two do not:
-/// the one a silent failure used to look like (`Sig2PhysUsedAsCircuitNode`, spelled out at its
-/// own call site below), and this one -- a run that outlasts its capture is the ordinary mistake
-/// with a file-backed source, and `covered: 0.001999, t_final: 0.003` makes a reader work out
-/// what to do about it. The variant name is kept in front either way.
-fn dae_message(error: &DaeError) -> String {
-    match error {
-        DaeError::WaveCaptureTooShort {
-            block,
-            source,
-            covered,
-            t_final,
-        } => format!(
-            "{error:?}: '{block}' reads '{source}', which ends at {covered:e} s, but the run \
-             goes to {t_final:e} s. Past its last sample a capture holds its final value, so \
-             the rest of the run would be driven by a flat line -- which is what `after=error` \
-             exists to refuse. Shorten the run to {covered:e} s, capture more data, or choose \
-             `after=hold`/`repeat`/`zero` if a held, repeated or zero tail is what you meant."
-        ),
-        other => format!("{other:?}"),
+/// Read off the `Debug` derive rather than from a second exhaustive match, which could only
+/// drift: `Debug` opens with the variant's own name, then as many `Name(` wrappers as the error
+/// nests, and the first character that is neither an identifier character nor `(` is where the
+/// fields begin. Both levels are kept because both are documented and grepped for -- this
+/// project's own `doc-verify` scripts look for the *inner* name (`MissingSymbol`) as often as
+/// the outer one.
+///
+/// Deliberately *not* a method on `DaeError`: it exists for this binary's own stderr line, and
+/// nothing else should grow a dependency on a variant name being stable text.
+fn variant_name(error: &DaeError) -> String {
+    let debug = format!("{error:?}");
+    let mut path = String::new();
+    let mut depth = 0usize;
+    for c in debug.chars() {
+        if c.is_alphanumeric() || c == '_' {
+            path.push(c);
+        } else if c == '(' {
+            path.push(c);
+            depth += 1;
+        } else {
+            break;
+        }
     }
+    // `Parse("...")`/`Io("...")` wrap a bare string, so the scan stops immediately after their
+    // own `(` with nothing inside it; the name alone is the whole of what is worth printing.
+    while path.ends_with('(') {
+        path.pop();
+        depth -= 1;
+    }
+    for _ in 0..depth {
+        path.push(')');
+    }
+    path
+}
+
+/// A `DaeError` as a line a user can act on: its variant name, then its own sentence.
+///
+/// The sentence comes from `DaeError`'s `Display`, which has an arm per variant (see that impl
+/// -- adding a variant without a sentence is a compile error). Before this, the default arm
+/// here was `format!("{other:?}")`, so what a user actually saw was the `Debug` derive of a
+/// Rust enum -- `CScript(Load { path: "./gain.so", message: "dlopen failed" })` -- and every
+/// `Display` impl in `cscript-ffi`, `pyblock-ffi`, `octave-ffi` and `DaeError` itself was dead
+/// code. The variant name is kept in front, because this project's own doc-verify scripts and
+/// CLI tests grep stderr for it and it is genuinely useful in a bug report; everything after
+/// the colon is a sentence with no braces in it.
+fn dae_message(error: &DaeError) -> String {
+    format!("{}: {error}", variant_name(error))
 }
 
 fn main() -> ExitCode {
@@ -792,25 +818,11 @@ fn run() -> Result<u8, String> {
     let statements = general_mna::parse_and_flatten(&netlist, dialect)
         .map_err(|e| format!("parsing netlist: {e}"))?;
     if let Err(e) = dae_runtime::reject_sig2phys_wired_into_circuit(&statements, &blocks) {
-        // Spelled out rather than left as the bare `{e:?}` dump every other DaeError gets here:
-        // the whole point of this check is that the *silent* failure was indistinguishable from a
-        // legitimately-zero node, so the error has to say what to write instead. The `{e:?}`
-        // prefix is kept so the variant name is still greppable in stderr, like every other one.
-        return Err(match &e {
-            DaeError::Sig2PhysUsedAsCircuitNode {
-                block,
-                element,
-                node,
-            } => format!(
-                "{e:?}: element '{element}' wires node '{node}', but '{block}' is a \
-                 kind=sig2phys converter, not a device with terminals -- it has no pins and \
-                 stamps nothing into the circuit, so that node would be undriven and silently \
-                 solve to V({node}) = 0. A converter is consumed by name, never by a wire: name \
-                 it in an independent source's own value field (e.g. `V1 a 0 {block}`) or in an \
-                 ideal switch's gate=/ctrl= field."
-            ),
-            other => format!("{other:?}"),
-        });
+        // `dae_message` like every other DaeError on this path: the sentence this check needs
+        // -- the silent failure was indistinguishable from a legitimately-zero node, so the
+        // error has to say what to write instead -- now lives in `DaeError`'s own `Display`,
+        // where the library's other callers get it too, rather than only in this one call site.
+        return Err(dae_message(&e));
     }
     // The event-file overrides, resolved once. `None` keeps the `<netlist stem>.events.*`
     // convention a person running the binary by hand expects.

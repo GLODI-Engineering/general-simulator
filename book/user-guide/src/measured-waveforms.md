@@ -99,12 +99,11 @@ the exact failure mode [rules](rules-and-ratings.md) exist to catch. `after=erro
 run, before the first step rather than after you have waited for it:
 
 ```text
-error: WaveCaptureTooShort { block: "SCOPE", source: "capture.csv", covered: 0.001999,
-t_final: 0.003 }: 'SCOPE' reads 'capture.csv', which ends at 1.999e-3 s, but the run goes to
-3e-3 s. Past its last sample a capture holds its final value, so the rest of the run would be
-driven by a flat line -- which is what `after=error` exists to refuse. Shorten the run to
-1.999e-3 s, capture more data, or choose `after=hold`/`repeat`/`zero` if a held, repeated or
-zero tail is what you meant.
+error: WaveCaptureTooShort: block `SCOPE` reads `capture.csv`, which ends at 1.999e-3 s, but
+the run goes to 3e-3 s. Past its last sample a capture holds its final value, so the rest of
+the run would be driven by a flat line -- which is what `after=error` exists to refuse. Shorten
+the run to 1.999e-3 s, capture more data, or choose `after=hold`/`repeat`/`zero` if a held,
+repeated or zero tail is what you meant
 ```
 
 ## Grading the run: `type=error`
