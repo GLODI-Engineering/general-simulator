@@ -839,9 +839,12 @@ accepted on both the definition and the call, for decks written for tools that r
 
 Four rules, each of which can be read off the deck:
 
-- **A value is substituted into the expression segments of the body** — `{...}` and `'...'`.
-  A bare token is left alone, because a bare token in a value position can be a model name or a
-  device keyword, and the grammar already provides braces for an expression.
+- **A value is substituted into the expression segments** — `{...}` and `'...'` — of every
+  device card, block field and `.IC` value in the body. A bare token is left alone, because a
+  bare token in a value position can be a model name or a device keyword, and the grammar
+  already provides braces for an expression. A `.model` card inside a body is not substituted
+  into; a model's name is global once the hierarchy is flat, so a parameterised one would mean
+  two instances declaring the same model differently.
 - **A body sees its own parameters and whatever is global, never its caller's.** A definition
   therefore means the same thing wherever it is called from. An expression inside a definition
   that names one of *its caller's* parameters is not resolved, and fails as the undeclared
