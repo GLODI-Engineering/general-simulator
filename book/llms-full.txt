@@ -817,6 +817,54 @@ A block reference that resolves to nothing declared (not a port, not another blo
 body) still surfaces as the ordinary `UnknownBlockInput` error, just after expansion instead of
 before.
 
+### Formal parameters
+
+A `.subckt` may declare parameters with defaults after its port list, and an `X` call may give
+each instance its own value — which is what makes one definition serve as a *component* rather
+than a one-off group:
+
+```spice
+.subckt RPART p n Rv=1000
+R p n {Rv}
+.ends RPART
+
+V1 A 0 5
+X1 A MID RPART Rv=100
+X2 MID 0 RPART Rv=220
+```
+
+`X1` is 100 Ω and `X2` is 220 Ω in the same solve. An instance that names no value takes the
+definition's declared default, so `X3 A 0 RPART` is 1000 Ω. `PARAMS:` before the assignments is
+accepted on both the definition and the call, for decks written for tools that require it.
+
+Four rules, each of which can be read off the deck:
+
+- **A value is substituted into the expression segments** — `{...}` and `'...'` — of every
+  device card, block field and `.IC` value in the body. A bare token is left alone, because a
+  bare token in a value position can be a model name or a device keyword, and the grammar
+  already provides braces for an expression. A `.model` card inside a body is not substituted
+  into; a model's name is global once the hierarchy is flat, so a parameterised one would mean
+  two instances declaring the same model differently.
+- **A body sees its own parameters and whatever is global, never its caller's.** A definition
+  therefore means the same thing wherever it is called from. An expression inside a definition
+  that names one of *its caller's* parameters is not resolved, and fails as the undeclared
+  symbol it is.
+- **A value written at a call site is read in the caller's scope**, so
+  `X1 p n inner Ri={Ro}` inside a definition whose own parameter is `Ro` passes `Ro`'s value
+  down. Nesting composes the same way the dotted node path does.
+- **A `.param` inside a body may not depend on a parameter.** A `.param`'s name is global once
+  the hierarchy is flat, so two instances would both declare it and one of them would lose;
+  that case is refused. A `.param` that depends on nothing instance-specific is fine.
+
+Three things stop the run rather than being quietly repaired, because each one would otherwise
+mean solving a different circuit than the deck describes:
+
+| deck | refusal |
+|---|---|
+| `X1 A MID RPART Rw=100` — a name the definition does not declare | names the instance, the parameter, the definition, and what it does declare |
+| `X1 A MID RPART Rv=100 Rv=220` | the same parameter set twice has no defensible reading |
+| a declared parameter with neither a default nor a value | named at the instance that owes it one, rather than much later as an undeclared symbol |
+
 ## Device-card parameter checking
 
 Every trailing token on a device card — positional and `key=value` alike — is checked against

@@ -1,0 +1,12 @@
+* Two instances of one parameterised .subckt, in series across a 5 V source.
+* 100 ohm + 220 ohm = 320 ohm, so I = 5/320 = 15.625 mA and the mid-node sits
+* at 5 * 220/320 = 3.4375 V. A run that ignored the instance parameters would
+* give both resistors the declared default of 1000 ohm and read 2.5 mA.
+.subckt RPART p n Rv=1000
+R p n {Rv}
+.ends RPART
+
+V1 A 0 5
+X1 A MID RPART Rv=100
+X2 MID 0 RPART Rv=220
+.tran 1u 10u

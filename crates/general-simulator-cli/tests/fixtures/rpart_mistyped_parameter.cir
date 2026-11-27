@@ -1,0 +1,11 @@
+* The same deck with the instance parameter misspelled. `RPART` declares `Rv`,
+* not `Rw`, so honouring this call would mean solving 1000 ohm while the deck
+* says 100 -- which is why it is refused rather than ignored.
+.subckt RPART p n Rv=1000
+R p n {Rv}
+.ends RPART
+
+V1 A 0 5
+X1 A MID RPART Rw=100
+X2 MID 0 RPART Rv=220
+.tran 1u 10u
