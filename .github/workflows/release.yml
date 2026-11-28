@@ -72,6 +72,15 @@ jobs:
           repository: GLODI-Engineering/gs-waveform-measurements
           path: gs-waveform-measurements
 
+      # Four platform builds, two of them billed, are a long way to go before a cryptic
+      # resolver error. If a sibling's default branch does not yet carry the version this
+      # workspace requires -- a tag pushed before the sibling's own release commit landed --
+      # say so here, naming both versions (general-simulator#142).
+      - name: Check the sibling checkouts satisfy this workspace's requirements
+        shell: bash
+        working-directory: general-simulator
+        run: bash scripts/ci/check-sibling-versions.sh
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -131,14 +140,58 @@ jobs:
     # Only when there is a tag to attach to.
     if: startsWith(github.ref, 'refs/tags/') || inputs.tag != ''
     steps:
+      # Full history and tags, because the release body is the tag's own annotation --
+      # `git tag -l --format=%(contents)` needs the tag object itself, not just the commit.
+      - name: Check out this repository at the tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag != '' && inputs.tag || github.ref_name }}
       - uses: actions/download-artifact@v4
         with:
           pattern: general-simulator-*
           merge-multiple: true
           path: dist
       - run: ls -la dist
-      - name: Attach to the release
+      # `gh release upload` cannot create the release it uploads to, and nothing here used
+      # to create one -- so pushing a tag always failed once, with four successful platform
+      # builds in the run and `release not found` at the end, and the artifacts then had to be
+      # re-attached by hand (general-simulator#143). The sequence that worked was "push the
+      # tag, then create the release by hand before the builds finish", which is not a
+      # sequence.
+      #
+      # So: create it when it is absent, upload to it when it is present. A tag push is now
+      # sufficient on its own.
+      #
+      # The body is the tag's annotation. This project's tags are already written for a
+      # reader (`git show v0.11.0`), so there is nothing to compose and nothing to leave
+      # empty; a release created from a tag that happens to carry no annotation falls back to
+      # GitHub's generated notes rather than being published blank.
+      - name: Create the release if it does not exist, then attach the binaries
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag != '' && inputs.tag || github.ref_name }}
-        run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG exists; uploading the binaries to it."
+            gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+            exit 0
+          fi
+
+          echo "No release for $TAG yet; creating it from the tag's own annotation."
+          # Annotated-ness is asked of the object, not of `%(contents)`: for a *lightweight*
+          # tag `%(contents)` is never empty -- it falls back to the tagged commit's own
+          # message -- so an emptiness test would quietly publish a commit message as a
+          # release body and the generated-notes fallback below would never once fire.
+          kind="$(git cat-file -t "refs/tags/$TAG" 2>/dev/null || echo unknown)"
+          notes="$(git tag -l --format='%(contents)' "$TAG")"
+          if [ "$kind" = "tag" ] && [ -n "${notes//[[:space:]]/}" ]; then
+            printf '%s\n' "$notes" > release-notes.md
+            gh release create "$TAG" dist/* \
+              --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes-file release-notes.md
+          else
+            echo "Tag $TAG is a $kind, not an annotated tag; falling back to generated notes."
+            gh release create "$TAG" dist/* \
+              --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes
+          fi
