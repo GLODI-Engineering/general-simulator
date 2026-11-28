@@ -60,20 +60,30 @@ jobs:
       # already moved to 0.6.0. So when a sibling carries a branch of this one's name,
       # test against that branch rather than its default branch; otherwise the two
       # repositories deadlock and neither side can go first.
+      #
+      # The resolution is **two-way** -- general-mna's CI checks this repository out the
+      # same way -- so no push order satisfies both and the first-pushed branch of a
+      # release pair always starts a run before its sibling exists. The script reports
+      # which ref each sibling ended up on, matched or not, so that run's log says so.
       - name: Prefer sibling branches of the same name, when they exist
         shell: bash
         working-directory: ${{ github.workspace }}
-        run: |
-          ref="${{ github.head_ref || github.ref_name }}"
-          for d in spice-lsp general-mna gs-waveform-measurements; do
-            if git -C "$d" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
-              git -C "$d" fetch -q --depth 1 origin "$ref"
-              git -C "$d" checkout -q FETCH_HEAD
-              echo "$d: testing against branch $ref"
-            else
-              echo "$d: no branch $ref, using its default branch"
-            fi
-          done
+        run: >-
+          bash general-simulator/scripts/ci/prefer-sibling-branches.sh
+          "${{ github.head_ref || github.ref_name }}"
+          spice-lsp general-mna gs-waveform-measurements
+
+      # Before cargo, so that the one failure a release pair really does produce --
+      # the sibling's matching branch is not pushed yet, so its default branch was
+      # checked out and declares an older version -- fails here, naming both
+      # versions and the branch it expected, instead of in cargo's resolver naming a
+      # requirement and a directory (general-simulator#142).
+      - name: Check the sibling checkouts satisfy this workspace's requirements
+        shell: bash
+        working-directory: general-simulator
+        run: >-
+          bash scripts/ci/check-sibling-versions.sh
+          "${{ github.head_ref || github.ref_name }}"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -176,20 +186,30 @@ jobs:
       # already moved to 0.6.0. So when a sibling carries a branch of this one's name,
       # test against that branch rather than its default branch; otherwise the two
       # repositories deadlock and neither side can go first.
+      #
+      # The resolution is **two-way** -- general-mna's CI checks this repository out the
+      # same way -- so no push order satisfies both and the first-pushed branch of a
+      # release pair always starts a run before its sibling exists. The script reports
+      # which ref each sibling ended up on, matched or not, so that run's log says so.
       - name: Prefer sibling branches of the same name, when they exist
         shell: bash
         working-directory: ${{ github.workspace }}
-        run: |
-          ref="${{ github.head_ref || github.ref_name }}"
-          for d in spice-lsp general-mna gs-waveform-measurements; do
-            if git -C "$d" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
-              git -C "$d" fetch -q --depth 1 origin "$ref"
-              git -C "$d" checkout -q FETCH_HEAD
-              echo "$d: testing against branch $ref"
-            else
-              echo "$d: no branch $ref, using its default branch"
-            fi
-          done
+        run: >-
+          bash general-simulator/scripts/ci/prefer-sibling-branches.sh
+          "${{ github.head_ref || github.ref_name }}"
+          spice-lsp general-mna gs-waveform-measurements
+
+      # Before cargo, so that the one failure a release pair really does produce --
+      # the sibling's matching branch is not pushed yet, so its default branch was
+      # checked out and declares an older version -- fails here, naming both
+      # versions and the branch it expected, instead of in cargo's resolver naming a
+      # requirement and a directory (general-simulator#142).
+      - name: Check the sibling checkouts satisfy this workspace's requirements
+        shell: bash
+        working-directory: general-simulator
+        run: >-
+          bash scripts/ci/check-sibling-versions.sh
+          "${{ github.head_ref || github.ref_name }}"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -318,20 +338,30 @@ jobs:
       # already moved to 0.6.0. So when a sibling carries a branch of this one's name,
       # test against that branch rather than its default branch; otherwise the two
       # repositories deadlock and neither side can go first.
+      #
+      # The resolution is **two-way** -- general-mna's CI checks this repository out the
+      # same way -- so no push order satisfies both and the first-pushed branch of a
+      # release pair always starts a run before its sibling exists. The script reports
+      # which ref each sibling ended up on, matched or not, so that run's log says so.
       - name: Prefer sibling branches of the same name, when they exist
         shell: bash
         working-directory: ${{ github.workspace }}
-        run: |
-          ref="${{ github.head_ref || github.ref_name }}"
-          for d in spice-lsp general-mna gs-waveform-measurements; do
-            if git -C "$d" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
-              git -C "$d" fetch -q --depth 1 origin "$ref"
-              git -C "$d" checkout -q FETCH_HEAD
-              echo "$d: testing against branch $ref"
-            else
-              echo "$d: no branch $ref, using its default branch"
-            fi
-          done
+        run: >-
+          bash general-simulator/scripts/ci/prefer-sibling-branches.sh
+          "${{ github.head_ref || github.ref_name }}"
+          spice-lsp general-mna gs-waveform-measurements
+
+      # Before cargo, so that the one failure a release pair really does produce --
+      # the sibling's matching branch is not pushed yet, so its default branch was
+      # checked out and declares an older version -- fails here, naming both
+      # versions and the branch it expected, instead of in cargo's resolver naming a
+      # requirement and a directory (general-simulator#142).
+      - name: Check the sibling checkouts satisfy this workspace's requirements
+        shell: bash
+        working-directory: general-simulator
+        run: >-
+          bash scripts/ci/check-sibling-versions.sh
+          "${{ github.head_ref || github.ref_name }}"
 
       - uses: dtolnay/rust-toolchain@stable
 
